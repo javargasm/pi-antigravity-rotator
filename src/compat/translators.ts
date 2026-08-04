@@ -790,6 +790,10 @@ export function openAIToAntigravityBody(
   const contents: GeminiContent[] = [];
   // Claude requires every tool_result to immediately follow its tool_use turn.
   let pendingClaudeToolCallIds = new Set<string>();
+  // OpenAI tool messages often omit `name`; resolve the function name from the
+  // preceding assistant tool_call (matched by tool_call_id) so the upstream
+  // functionResponse never carries the placeholder "unknown".
+  const toolCallIdToFunctionName = new Map<string, string>();
   for (let i = 0; i < conversationMessages.length; i++) {
     const msg = conversationMessages[i];
     if (msg.role === "assistant" || msg.role === "model") {
@@ -860,6 +864,9 @@ export function openAIToAntigravityBody(
       if (Array.isArray(msgToolCalls) && msgToolCalls.length > 0) {
         let isFirstInMessage = true;
         for (const tc of msgToolCalls) {
+          if (typeof tc.id === "string" && typeof tc.function?.name === "string") {
+            toolCallIdToFunctionName.set(tc.id, tc.function.name);
+          }
           let args: unknown;
           try {
             args =
@@ -930,8 +937,13 @@ export function openAIToAntigravityBody(
         typeof msg.content === "string"
           ? msg.content
           : extractText(msg.content);
-      const fnName = msg.name || "unknown";
       const toolCallId = msg.tool_call_id;
+      const fnName =
+        msg.name ||
+        (typeof toolCallId === "string"
+          ? toolCallIdToFunctionName.get(toolCallId)
+          : undefined) ||
+        "unknown";
       if (
         isClaude &&
         (!toolCallId || !pendingClaudeToolCallIds.has(toolCallId))

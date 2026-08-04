@@ -6,6 +6,7 @@ import {
 	parseAntigravitySse,
 	type OpenAIChatCompletionRequest,
 } from "../src/compat.js";
+import { cacheThoughtSignature, thoughtSignatureCache } from "../src/compat/cache.js";
 
 describe("OpenAI Compat Tool Calling", () => {
 	it("converts basic messages without tools to multi-turn format", () => {
@@ -234,6 +235,35 @@ data: [DONE]
 		const result = openAIToAntigravityBody(req);
 		const request = result.request as any;
 		assert.match(JSON.stringify(request.contents), /Context: The assistant used tools/);
+	});
+
+	it("resolves tool function name from history when cached signature re-enables functionCall path", () => {
+		const callId = "call_cached_sig";
+		cacheThoughtSignature(callId, "SG_TEST_SIGNATURE");
+		try {
+			const req: OpenAIChatCompletionRequest = {
+				model: "gemini-3.5-flash-high",
+				messages: [
+					{ role: "user", content: "Find the weather" },
+					{
+						role: "assistant",
+						content: null,
+						tool_calls: [{ id: callId, type: "function", function: { name: "get_weather", arguments: "{\"location\":\"Quito\"}" } }]
+					},
+					{ role: "tool", tool_call_id: callId, content: "{\"temp\":18}" }
+				]
+			};
+
+			const result = openAIToAntigravityBody(req);
+			const request = result.request as any;
+			const serialized = JSON.stringify(request.contents);
+
+			assert.ok(serialized.includes(`"thoughtSignature":"SG_TEST_SIGNATURE"`), "cached signature must be re-injected");
+			assert.ok(serialized.includes(`"name":"get_weather"`), "functionResponse name must come from tool_call history");
+			assert.ok(!serialized.includes('"name":"unknown"'), "must not emit placeholder name unknown");
+		} finally {
+			thoughtSignatureCache.delete(callId);
+		}
 	});
 
 	it("collapses anyOf/oneOf/allOf to first variant for Claude model schemas", () => {
