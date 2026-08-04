@@ -99,7 +99,7 @@ Existing `enc:v1` records remain decryptable during migration; newly written rec
 - **Spend logging & audit inspector** — Full request/response audit trail with 6-decimal USD cost estimates (requires PostgreSQL)
 - **Web dashboard** — Real-time routing state, quota bars, latency tracking (p50/p95), savings chart, activity heatmap, and routing inspector
 - **State persistence** — Survives restarts; routing assignments, cooldowns, and flags saved to disk or PostgreSQL
-- **Tool/function calling** — Fully supported in OpenAI and Anthropic formats, including multi-turn and parallel tool calls
+- **Tool/function calling** — Fully supported in OpenAI and Anthropic formats, including multi-turn and parallel tool calls, with reliable function-name resolution for tool responses across turns
 - **Reasoning/thinking visibility** — Interleaved thinking blocks exposed as `reasoning_content` / `thinking_delta` in real time
 
 [Full feature list →](docs/how-it-works.md)

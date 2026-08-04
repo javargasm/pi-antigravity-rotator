@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.6.2] - 2026-08-04
+
+### Fixed
+- **Tool Function Names in OpenAI Compat**: When the thought-signature cache re-enables the upstream `functionCall` path, tool responses whose `name` field is missing are now resolved from the preceding assistant `tool_calls` history (matched by `tool_call_id`). Previously they fell back to `"unknown"`, which Google rejects with `400 INVALID_ARGUMENT` on `gemini-3.6-flash-high` and other cached routes.
+
+### Verified
+- **Compat Regression Coverage**: Added a translator test proving the tool-role branch emits the historical function name (`edit`) instead of `"unknown"` when the cached signature re-enables the `functionCall` path.
+
 ## [2.6.1] - 2026-08-01
 
 ### Added
