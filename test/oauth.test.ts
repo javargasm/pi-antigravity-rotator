@@ -63,7 +63,7 @@ describe("oauth project discovery", () => {
 
 		const result = await discoverProject("token");
 		assert.equal(result.projectId, "proj-fallback");
-		assert.ok(new URL(result.endpoint).hostname.endsWith("googleapis.com"));
+		assert.equal(new URL(result.endpoint).hostname, "cloudcode-pa.googleapis.com");
 	});
 
 	it("provisions a project via onboardUser when loadCodeAssist returns empty", async () => {
