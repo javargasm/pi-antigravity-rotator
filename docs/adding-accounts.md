@@ -10,10 +10,22 @@ Run `pi-antigravity-rotator login` (or `npm run login` from source) once per Goo
 4. Copy the **full URL** from the browser's address bar and paste it into the terminal
 
 The tool automatically:
-- Creates or updates `accounts.json` with the account credentials
+- Creates or updates the account store with the account credentials
 - Configures `~/.pi/agent/auth.json` with proxy-managed credentials (for the Pi agent)
 
+The account store is either `accounts.json` in the config directory or the
+PostgreSQL database, depending on whether `PI_ROTATOR_DATABASE_URL` is set.
+When the rotator is installed as a systemd service, the `login` CLI command
+auto-detects the service environment (including `PI_ROTATOR_DATABASE_URL` and
+the OAuth client from `EnvironmentFile=` drop-ins) so login always writes to the
+same backend the running service reads from.
+
 Re-running with the same email updates the existing entry.
+
+> Note: if `login` reports the account as added but it doesn't appear on the
+> dashboard / in `status`, the CLI and the service are usually pointing at
+> different backends. Install the unit (see `sudo install` / the systemd setup)
+> or set `PI_ROTATOR_DATABASE_URL` explicitly so both use PostgreSQL.
 
 ## Web-Based Login
 
@@ -25,7 +37,7 @@ Set `ANTIGRAVITY_REDIRECT_URI` to the HTTPS callback registered in your OAuth cl
 
 ## Activation Rule
 
-Some accounts do not expose a discoverable `projectId` until they have been used once in the Antigravity IDE. If login fails at project discovery:
+New accounts usually get a companion project bound automatically during login: if `loadCodeAssist` returns no project yet, the tool provisions one through the same `onboardUser` flow the Antigravity IDE uses. In rare cases Google still has no project to bind (e.g. the account was never onboarded to Code Assist at all). If login fails at project discovery:
 
 1. Open that exact Google account in Antigravity IDE
 2. Send one message to any model

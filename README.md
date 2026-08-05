@@ -92,6 +92,7 @@ Existing `enc:v1` records remain decryptable during migration; newly written rec
 
 - **OpenAI-compatible gateway** — Drop-in replacement endpoint (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`) for any agent or tool
 - **Multi-account load balancing** — Distributes traffic across a pool of Google accounts with per-model independent routing
+- **One-command account setup** — `pi-antigravity-rotator login` auto-discovers (or provisions) the Cloud Code companion project for brand-new accounts and, on systemd-backed installs, writes to the same PostgreSQL store the service reads from
 - **Smart rotation & health scoring** — Four routing policies (`timer-first`, `tier-first`, `quota-first`, `hybrid`) with composite health scores per account
 - **Real-time quota monitoring** — Polls Google's quota API every 5 minutes with per-model, per-account tracking
 - **Infringement & abuse detection** — Flags accounts on enforcement signals and triggers protective pause to preserve the rest of the pool

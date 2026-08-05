@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [2.6.3] - 2026-08-05
+
+### Fixed
+- **Login for New Accounts**: Project discovery now tries the production `daily-cloudcode-pa` / `cloudcode-pa` endpoints before the sandbox one and, when `loadCodeAssist` returns no project yet, provisions one through the `onboardUser` flow the Antigravity IDE uses. Previously brand-new accounts failed at login with "Could not discover Cloud Code companion project ID from Google" unless they were first activated manually in the IDE.
+- **CLI Login Backend Mismatch**: `pi-antigravity-rotator login` now mirrors the environment of the installed systemd service unit (`PI_ROTATOR_DATABASE_URL` and any `Environment=`/`EnvironmentFile=` drop-ins, plus `ANTIGRAVITY_*`) so the CLI writes to the same account store the running service reads from. Previously, on PostgreSQL-backed installs, login wrote to the on-disk `accounts.json` while the service read from the database, so newly added accounts never appeared on the dashboard.
+
 ## [2.6.2] - 2026-08-04
 
 ### Fixed

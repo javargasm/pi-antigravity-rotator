@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { CLIENT_ID, CLIENT_SECRET, TOKEN_URL } from "./types.js";
+import { ANTIGRAVITY_VERSION, CLIENT_ID, CLIENT_SECRET, REQUEST_USER_AGENT, TOKEN_URL } from "./types.js";
 import { fetchWithRetry } from "./fetch-with-retry.js";
 
 export const DEFAULT_REDIRECT_URI = "http://localhost:51121/oauth-callback";
@@ -151,49 +151,147 @@ export interface ProjectDiscoveryResult {
 	endpoint: string;
 }
 
+// Discovery order mirrors what third-party Antigravity proxies observe:
+// production endpoints first, sandbox last.
+const LOAD_CODE_ASSIST_ENDPOINTS = [
+	"https://daily-cloudcode-pa.googleapis.com",
+	"https://cloudcode-pa.googleapis.com",
+	"https://daily-cloudcode-pa.sandbox.googleapis.com",
+] as const;
+
+const ONBOARD_USER_ENDPOINT =
+	"https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser";
+
+const ONBOARD_MAX_POLLS = 5;
+const ONBOARD_POLL_INTERVAL_MS = 2_000;
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function extractProjectId(data: Record<string, unknown> | null): string | null {
+	if (!data || typeof data !== "object") return null;
+	for (const key of ["cloudaicompanionProject", "projectId", "project"]) {
+		const value = data[key];
+		if (typeof value === "string" && value.trim()) return value.trim();
+		if (
+			value &&
+			typeof value === "object" &&
+			typeof (value as { id?: unknown }).id === "string" &&
+			((value as { id: string }).id as string).trim()
+		) {
+			return ((value as { id: string }).id as string).trim();
+		}
+	}
+	return null;
+}
+
+// Mirrors the reference clients: the default tier is the allowedTiers entry
+// marked isDefault, then currentTier.id, then "free-tier".
+function extractDefaultTierId(data: Record<string, unknown> | null): string {
+	if (!data || typeof data !== "object") return "free-tier";
+	const allowedTiers = Array.isArray(data.allowedTiers) ? data.allowedTiers : [];
+	for (const rawTier of allowedTiers) {
+		const tier = rawTier && typeof rawTier === "object" ? (rawTier as Record<string, unknown>) : null;
+		if (tier && tier.isDefault === true && typeof tier.id === "string" && tier.id.trim()) {
+			return tier.id.trim();
+		}
+	}
+	const currentTier =
+		data.currentTier && typeof data.currentTier === "object"
+			? (data.currentTier as Record<string, unknown>)
+			: null;
+	if (currentTier && typeof currentTier.id === "string" && currentTier.id.trim()) {
+		return currentTier.id.trim();
+	}
+	return "free-tier";
+}
+
+/**
+ * Provision a Cloud Code companion project for an account that has none yet.
+ * New accounts normally only get one bound after first use in the Antigravity
+ * IDE; calling the same `onboardUser` endpoint the IDE uses lets login
+ * complete without requiring a manual IDE activation step.
+ */
+async function onboardUser(accessToken: string, tierId: string): Promise<string | null> {
+	const headers: Record<string, string> = {
+		Authorization: `Bearer ${accessToken}`,
+		"Content-Type": "application/json",
+		"User-Agent": `${REQUEST_USER_AGENT} google-api-nodejs-client/10.3.0`,
+		"X-Goog-Api-Client": "gl-node/22.21.1",
+	};
+
+	const body = JSON.stringify({
+		tier_id: tierId,
+		metadata: {
+			ide_type: "ANTIGRAVITY",
+			ide_version: ANTIGRAVITY_VERSION,
+			ide_name: "antigravity",
+		},
+	});
+
+	for (let attempt = 0; attempt < ONBOARD_MAX_POLLS; attempt++) {
+		if (attempt > 0) await sleep(ONBOARD_POLL_INTERVAL_MS);
+		try {
+			const response = await fetchWithRetry(ONBOARD_USER_ENDPOINT, {
+				method: "POST",
+				headers,
+				body,
+			});
+			if (!response.ok) return null;
+			const data = (await response.json()) as Record<string, unknown> | null;
+			if (data && data.done === true) {
+				const inner =
+					data.response && typeof data.response === "object"
+						? (data.response as Record<string, unknown>)
+						: data;
+				return extractProjectId(inner);
+			}
+			// done:false — provisioning still running; poll again.
+		} catch {
+			return null;
+		}
+	}
+	return null;
+}
+
 export async function discoverProject(accessToken: string): Promise<ProjectDiscoveryResult> {
 	const headers: Record<string, string> = {
 		Authorization: `Bearer ${accessToken}`,
 		"Content-Type": "application/json",
-		"User-Agent": "google-api-nodejs-client/9.15.1",
+		"User-Agent": REQUEST_USER_AGENT,
 	};
 
-	const endpoints = [
-		// "https://cloudcode-pa.googleapis.com",
-		"https://daily-cloudcode-pa.sandbox.googleapis.com",
-	];
+	let lastLoadData: Record<string, unknown> | null = null;
 
-	for (const endpoint of endpoints) {
+	for (const endpoint of LOAD_CODE_ASSIST_ENDPOINTS) {
 		try {
 			const response = await fetchWithRetry(`${endpoint}/v1internal:loadCodeAssist`, {
 				method: "POST",
 				headers,
 				body: JSON.stringify({
-					metadata: {
-						ideType: "IDE_UNSPECIFIED",
-						platform: "PLATFORM_UNSPECIFIED",
-						pluginType: "GEMINI",
-					},
+					metadata: { ideType: "ANTIGRAVITY" },
 				}),
 			});
 
 			if (response.ok) {
-				const data = (await response.json()) as {
-					cloudaicompanionProject?: string | { id?: string };
-				};
-				if (typeof data.cloudaicompanionProject === "string" && data.cloudaicompanionProject) {
-					return { projectId: data.cloudaicompanionProject, source: "google", endpoint };
-				}
-				if (
-					data.cloudaicompanionProject &&
-					typeof data.cloudaicompanionProject === "object" &&
-					data.cloudaicompanionProject.id
-				) {
-					return { projectId: data.cloudaicompanionProject.id, source: "google", endpoint };
+				const data = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+				lastLoadData = data;
+				const projectId = extractProjectId(data);
+				if (projectId) {
+					return { projectId, source: "google", endpoint };
 				}
 			}
 		} catch {
 			// Try next endpoint
+		}
+	}
+
+	// No project bound yet — provision one the same way the IDE does.
+	if (lastLoadData) {
+		const onboarded = await onboardUser(accessToken, extractDefaultTierId(lastLoadData));
+		if (onboarded) {
+			return { projectId: onboarded, source: "google", endpoint: ONBOARD_USER_ENDPOINT };
 		}
 	}
 

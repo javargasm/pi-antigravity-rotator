@@ -31,8 +31,64 @@ describe("oauth project discovery", () => {
 		assert.equal(calls, 1);
 	});
 
+	it("accepts plain string or projectId/project keys", async () => {
+		const cases = [
+			{ payload: { cloudaicompanionProject: "proj-string" }, expected: "proj-string" },
+			{ payload: { project: "proj-key" }, expected: "proj-key" },
+			{ payload: { projectId: "proj-id" }, expected: "proj-id" },
+			{ payload: { project: { id: "proj-obj" } }, expected: "proj-obj" },
+		];
+		for (const { payload, expected } of cases) {
+			globalThis.fetch = (async () =>
+				new Response(JSON.stringify(payload), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				})) as typeof fetch;
+			const result = await discoverProject("token");
+			assert.equal(result.projectId, expected);
+		}
+	});
+
+	it("falls over to the next loadCodeAssist endpoint when one fails", async () => {
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes("daily-cloudcode-pa.googleapis.com")) {
+				return new Response("nope", { status: 404 });
+			}
+			return new Response(JSON.stringify({ cloudaicompanionProject: "proj-fallback" }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as typeof fetch;
+
+		const result = await discoverProject("token");
+		assert.equal(result.projectId, "proj-fallback");
+		assert.ok(result.endpoint.includes("cloudcode-pa"));
+	});
+
+	it("provisions a project via onboardUser when loadCodeAssist returns empty", async () => {
+		globalThis.fetch = (async (input: RequestInfo | URL, _init?: RequestInit) => {
+			const url = String(input);
+			if (url.includes("onboardUser")) {
+				return new Response(
+					JSON.stringify({ done: true, response: { projectId: "onboarded-proj" } }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			// loadCodeAssist returns 200 but no project (new account)
+			return new Response(JSON.stringify({ allowedTiers: [{ id: "free-tier", isDefault: true }] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as typeof fetch;
+
+		const result = await discoverProject("token");
+		assert.equal(result.projectId, "onboarded-proj");
+		assert.ok(result.endpoint.includes("onboardUser"));
+	});
+
 	it("fails instead of falling back to a shared project id", async () => {
-		globalThis.fetch = (async () => new Response("nope", { status: 500 })) as typeof fetch;
+		globalThis.fetch = (async () => new Response("nope", { status: 404 })) as typeof fetch;
 
 		await assert.rejects(
 			discoverProject("token"),

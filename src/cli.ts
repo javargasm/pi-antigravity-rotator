@@ -28,6 +28,13 @@ switch (command) {
     break;
   }
   case "login": {
+    // Mirror the environment of the installed systemd service unit
+    // (PI_ROTATOR_*, ANTIGRAVITY_*, DATABASE_URL) into this CLI process so
+    // login talks to the same backend store the running service uses. Without
+    // this, login would write to the on-disk accounts.json while the service
+    // (configured with PI_ROTATOR_DATABASE_URL) reads from PostgreSQL.
+    const { loadSystemdEnvironment } = await import("./systemd-env.js");
+    loadSystemdEnvironment();
     const { initDb } = await import("./db-store.js");
     await initDb();
     const { runLogin } = await import("./login.js");

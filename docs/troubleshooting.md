@@ -47,7 +47,7 @@ After upgrading to v2.3.0+, the auto-generated admin token is regenerated. Check
 
 ## Login fails at project discovery
 
-Some accounts do not expose a `projectId` until they have been used in the Antigravity IDE:
+Login now auto-provisions a Cloud Code companion project for new accounts via the same `onboardUser` flow the Antigravity IDE uses, and it tries the production endpoints before the sandbox one. If it still fails, the account has no project to bind at all:
 
 1. Open that exact Google account in Antigravity IDE
 2. Send one message to any model
