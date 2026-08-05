@@ -27,7 +27,7 @@ describe("oauth project discovery", () => {
 		const result = await discoverProject("token");
 		assert.equal(result.projectId, "proj-123");
 		assert.equal(result.source, "google");
-		assert.ok(result.endpoint.includes("cloudcode-pa"));
+		assert.ok(new URL(result.endpoint).hostname.includes("cloudcode-pa"));
 		assert.equal(calls, 1);
 	});
 
@@ -52,7 +52,7 @@ describe("oauth project discovery", () => {
 	it("falls over to the next loadCodeAssist endpoint when one fails", async () => {
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
 			const url = String(input);
-			if (url.includes("daily-cloudcode-pa.googleapis.com")) {
+			if (new URL(url).hostname === "daily-cloudcode-pa.googleapis.com") {
 				return new Response("nope", { status: 404 });
 			}
 			return new Response(JSON.stringify({ cloudaicompanionProject: "proj-fallback" }), {
@@ -63,7 +63,7 @@ describe("oauth project discovery", () => {
 
 		const result = await discoverProject("token");
 		assert.equal(result.projectId, "proj-fallback");
-		assert.ok(result.endpoint.includes("cloudcode-pa"));
+		assert.ok(new URL(result.endpoint).hostname.endsWith("googleapis.com"));
 	});
 
 	it("provisions a project via onboardUser when loadCodeAssist returns empty", async () => {
