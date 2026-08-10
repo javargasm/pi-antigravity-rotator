@@ -81,15 +81,20 @@ import type { FlagEventData } from "./telemetry.js";
 
 /**
  * Provider adapter for a request on a (possibly multi-provider) account.
- * Heuristics are derived from the account's credentials and the destination
- * model name (Ollama models always include a tag like `gemma4:31b`). This
- * avoids a hard dependency on rotator internals so per-process stubs keep
- * working. Pool selection in the rotator already guarantees the chosen
- * account holds a credential for the destination provider.
+ * The destination model decides the adapter: if the model is in the
+ * Ollama catalog (tracked on the rotator), it goes through the Ollama
+ * adapter; otherwise the account's primary provider is used. This avoids
+ * the broken heuristic of relying on `:` in the model name (some Ollama
+ * models like `minimax-m3`, `kimi-k3`, `glm-5.1` have no tag, and some
+ * Google model aliases do).
+ *
+ * The rotator is required only when it exposes `getOllamaModels()`; test
+ * stubs that omit it fall back to the credentials-only dispatch.
  */
 function providerAdapterForModel(
   account: AccountRuntime,
   model: string | undefined,
+  rotator?: { getOllamaModels?: () => string[] },
 ): ProviderAdapter {
   const creds = account.config.credentials ?? [];
   if (creds.length > 0) {
@@ -98,7 +103,16 @@ function providerAdapterForModel(
     if (onlyOllama) return getProviderAdapter("ollama");
     if (onlyGoogle) return getProviderAdapter(DEFAULT_PROVIDER);
   }
-  if (model && model.includes(":")) {
+  let isOllamaModel = false;
+  try {
+    const ollamaList = rotator?.getOllamaModels?.() ?? [];
+    if (ollamaList.length > 0 && model) {
+      isOllamaModel = ollamaList.includes(model);
+    }
+  } catch {
+    // ignore — fall through to primary dispatch
+  }
+  if (isOllamaModel) {
     return getProviderAdapter("ollama");
   }
   return getProviderForAccount(account.config);
@@ -876,6 +890,7 @@ export async function benchmarkAccount(
     const forwarded = await providerAdapterForModel(
       account,
       benchmarkSpec.body.model,
+      rotator,
     ).forwardRequest(account, benchmarkSpec.body, {}, signal);
     ttfbMs = Date.now() - startedAt;
     const raw = await forwarded.response.text();
@@ -1124,6 +1139,7 @@ export async function withRotation<T>(
       const forwarded = await providerAdapterForModel(
         account,
         model,
+        rotator,
       ).forwardRequest(account, { ...body }, originalHeaders);
       const { response, endpoint } = forwarded;
       const context: RotationAttemptContext = {
@@ -1523,6 +1539,7 @@ async function handleProxyRequest(
       const forwarded = await providerAdapterForModel(
         account,
         body.model,
+        rotator,
       ).forwardRequest(account, { ...body }, flattenHeaders(req.headers));
       const { response, endpoint } = forwarded;
       const context: RotationAttemptContext = {
@@ -1596,7 +1613,7 @@ async function handleProxyRequest(
           proxyLog,
           response.status,
           responseHeaders,
-          providerAdapterForModel(account, body.model)
+          providerAdapterForModel(account, body.model, rotator)
             .createStreamAccumulator(),
         );
         const totalMs = Date.now() - requestStartMs;

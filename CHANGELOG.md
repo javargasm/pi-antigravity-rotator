@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.8.3] - 2026-08-10
+
+### Fixed
+- **Provider dispatch for Ollama models without a `:` tag**: the proxy's `providerAdapterForModel` helper relied on `body.model.includes(":")` to recognize Ollama models. This misrouted models like `minimax-m3`, `kimi-k3`, `glm-5.1`, `glm-5.2`, `nemotron-3-super`, `nemotron-3-ultra`, and `deepseek-v4-pro` to the Antigravity adapter (no `:` in the name), where the Antigravity API rejected the OpenAI-style payload with `HTTP 400: Unknown name "messages" at 'request'`. The helper now consults `rotator.getOllamaModels()` (the source of truth populated from `/api/tags`) and only falls back to the credentials-only dispatch when that method is absent (e.g. test stubs).
+
 ## [2.8.2] - 2026-08-10
 
 ### Added
