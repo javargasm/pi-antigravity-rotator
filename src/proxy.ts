@@ -17,9 +17,9 @@ import {
 } from "./types.js";
 import type { AccountRuntime } from "./types.js";
 import type { AccountRotator } from "./rotator.js";
-import { getProviderForAccount } from "./providers/registry.js";
+import { DEFAULT_PROVIDER, getProviderAdapter, getProviderForAccount } from "./providers/registry.js";
 import { isRecord } from "./compat/schema-sanitizer.js";
-import type { StreamAccumulator } from "./providers/adapter.js";
+import type { ProviderAdapter, StreamAccumulator } from "./providers/adapter.js";
 import {
   forwardRequest,
   SseEventAccumulator,
@@ -78,6 +78,31 @@ import {
   type FlagPattern,
 } from "./telemetry.js";
 import type { FlagEventData } from "./telemetry.js";
+
+/**
+ * Provider adapter for a request on a (possibly multi-provider) account.
+ * Heuristics are derived from the account's credentials and the destination
+ * model name (Ollama models always include a tag like `gemma4:31b`). This
+ * avoids a hard dependency on rotator internals so per-process stubs keep
+ * working. Pool selection in the rotator already guarantees the chosen
+ * account holds a credential for the destination provider.
+ */
+function providerAdapterForModel(
+  account: AccountRuntime,
+  model: string | undefined,
+): ProviderAdapter {
+  const creds = account.config.credentials ?? [];
+  if (creds.length > 0) {
+    const onlyOllama = creds.every((c) => c.provider === "ollama");
+    const onlyGoogle = creds.every((c) => c.provider !== "ollama");
+    if (onlyOllama) return getProviderAdapter("ollama");
+    if (onlyGoogle) return getProviderAdapter(DEFAULT_PROVIDER);
+  }
+  if (model && model.includes(":")) {
+    return getProviderAdapter("ollama");
+  }
+  return getProviderForAccount(account.config);
+}
 import { startVersionChecker, performSelfUpdate } from "./version-check.js";
 import { startNotificationPoller } from "./notification-poller.js";
 import {
@@ -848,12 +873,10 @@ export async function benchmarkAccount(
 
   try {
     await rotator.ensureValidToken(account);
-    const forwarded = await getProviderForAccount(account.config).forwardRequest(
+    const forwarded = await providerAdapterForModel(
       account,
-      benchmarkSpec.body,
-      {},
-      signal,
-    );
+      benchmarkSpec.body.model,
+    ).forwardRequest(account, benchmarkSpec.body, {}, signal);
     ttfbMs = Date.now() - startedAt;
     const raw = await forwarded.response.text();
     const latencyMs = Date.now() - startedAt;
@@ -1098,11 +1121,10 @@ export async function withRotation<T>(
       }
 
       rotator.recordUpstreamAttempt(account);
-      const forwarded = await getProviderForAccount(account.config).forwardRequest(
+      const forwarded = await providerAdapterForModel(
         account,
-        { ...body },
-        originalHeaders,
-      );
+        model,
+      ).forwardRequest(account, { ...body }, originalHeaders);
       const { response, endpoint } = forwarded;
       const context: RotationAttemptContext = {
         account,
@@ -1498,11 +1520,10 @@ async function handleProxyRequest(
         await sleep(totalDelayMs);
       }
       rotator.recordUpstreamAttempt(account);
-      const forwarded = await getProviderForAccount(account.config).forwardRequest(
+      const forwarded = await providerAdapterForModel(
         account,
-        { ...body },
-        flattenHeaders(req.headers),
-      );
+        body.model,
+      ).forwardRequest(account, { ...body }, flattenHeaders(req.headers));
       const { response, endpoint } = forwarded;
       const context: RotationAttemptContext = {
         account,
@@ -1575,7 +1596,8 @@ async function handleProxyRequest(
           proxyLog,
           response.status,
           responseHeaders,
-          getProviderForAccount(account.config).createStreamAccumulator(),
+          providerAdapterForModel(account, body.model)
+            .createStreamAccumulator(),
         );
         const totalMs = Date.now() - requestStartMs;
         const ttfbMs = usage?.firstByteMs ?? totalMs;

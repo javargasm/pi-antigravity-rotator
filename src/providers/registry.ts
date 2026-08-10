@@ -10,8 +10,23 @@ import type { ProviderAdapter } from "./adapter.js";
 import { googleAntigravityAdapter } from "./google-antigravity/index.js";
 import { ollamaAdapter } from "./ollama/index.js";
 import { logger } from "../logger.js";
+import {
+  DEFAULT_PROVIDER,
+  primaryProviderId,
+  hasCredential,
+  getCredential,
+  type CredentialEntry,
+  type AccountLike as ProviderCredentialLike,
+} from "./credential-helpers.js";
 
-export const DEFAULT_PROVIDER = "google-antigravity";
+export {
+  DEFAULT_PROVIDER,
+  primaryProviderId,
+  hasCredential,
+  getCredential,
+  type CredentialEntry,
+  type AccountLike as ProviderCredentialLike,
+} from "./credential-helpers.js";
 
 const PROVIDERS: Record<string, ProviderAdapter> = {
   "google-antigravity": googleAntigravityAdapter,
@@ -37,9 +52,10 @@ export function isKnownProvider(providerId: string): boolean {
 }
 
 export function getProviderForAccount(
-  account: { provider?: string },
+  account: { credentials?: Array<{ provider: string }>; provider?: string },
+  providerId?: string,
 ): ProviderAdapter {
-  const id = account.provider ?? DEFAULT_PROVIDER;
+  const id = providerId ?? primaryProviderId(account);
   try {
     return getProviderAdapter(id);
   } catch {
@@ -51,3 +67,4 @@ export function getProviderForAccount(
     return getProviderAdapter(DEFAULT_PROVIDER);
   }
 }
+

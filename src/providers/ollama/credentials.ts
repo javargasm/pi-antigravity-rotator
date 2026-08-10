@@ -4,11 +4,20 @@
 
 import type { AccountConfig } from "../../types.js";
 import type { CredentialValidationResult } from "../adapter.js";
+import { getCredential } from "../registry.js";
+
+/**
+ * Ollama API key for an account: the `ollama` credential in the
+ * parent-account model, falling back to the legacy flat `apiKey` field.
+ */
+export function getOllamaApiKey(config: AccountConfig): string | undefined {
+  return getCredential(config, "ollama")?.apiKey;
+}
 
 export async function validateCredentials(
   config: AccountConfig,
 ): Promise<CredentialValidationResult> {
-  if (typeof config.apiKey !== "string" || config.apiKey.trim() === "") {
+  if (typeof getOllamaApiKey(config) !== "string" || getOllamaApiKey(config)!.trim() === "") {
     return {
       ok: false,
       status: 0,

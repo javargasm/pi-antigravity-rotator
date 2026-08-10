@@ -15,7 +15,7 @@ import {
   getBenchmarkSpec,
 } from "./forward.js";
 import { runLogin } from "./login.js";
-import { validateCredentials } from "./credentials.js";
+import { getOllamaApiKey, validateCredentials } from "./credentials.js";
 import { UsagePredictor, type ExhaustionPrediction } from "./prediction.js";
 import type { AccountRuntime } from "../../types.js";
 
@@ -44,8 +44,8 @@ export const ollamaAdapter: ProviderAdapter = {
   validateCredentials,
 
   hasValidCredentials(account: AccountRuntime): boolean {
-    return typeof account.config.apiKey === "string" &&
-      account.config.apiKey.length > 0;
+    return typeof getOllamaApiKey(account.config) === "string" &&
+      (getOllamaApiKey(account.config) ?? "").length > 0;
   },
 
   // Ollama API keys never expire: there is no refresh flow. 401/403
@@ -53,7 +53,7 @@ export const ollamaAdapter: ProviderAdapter = {
   async ensureValidToken(): Promise<void> {},
 
   getAuthHeader(account: AccountRuntime): string {
-    return `Bearer ${account.config.apiKey}`;
+    return `Bearer ${getOllamaApiKey(account.config) ?? ""}`;
   },
 
   async fetchQuota(

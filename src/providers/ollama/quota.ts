@@ -5,6 +5,7 @@
 
 import { fetchWithRetry } from "../../fetch-with-retry.js";
 import { OLLAMA_USAGE_URL, OLLAMA_USER_AGENT } from "../../types.js";
+import { getOllamaApiKey } from "./credentials.js";
 import type { AccountRuntime, ModelQuota } from "../../types.js";
 import type { QuotaFetchContext } from "../adapter.js";
 import { recordUsagePoll } from "./quota-poll-store.js";
@@ -28,7 +29,7 @@ export async function fetchProviderUsage(
     const response = await fetchWithRetry(OLLAMA_USAGE_URL, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${account.config.apiKey}`,
+        Authorization: `Bearer ${getOllamaApiKey(account.config) ?? ""}`,
         "User-Agent": OLLAMA_USER_AGENT,
       },
       timeoutMs: 8000,

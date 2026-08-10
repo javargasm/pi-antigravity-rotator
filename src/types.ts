@@ -32,21 +32,50 @@ export type RoutingRejectionReason =
   | "daily-project-stop"
   | "token-bucket-empty";
 
-export interface AccountConfig {
-  email: string;
-  /**
-   * Provider id: "google-antigravity" (default when absent, legacy configs)
-   * or "ollama". Determines which credential fields are required.
-   */
-  provider?: string;
+/**
+ * One set of credentials for a single provider, owned by an account.
+ * The account (email) is the parent entity; it may hold credentials for
+ * multiple providers (e.g. the same human with a Google Antigravity token
+ * and an Ollama Cloud API key).
+ */
+export interface ProviderCredential {
+  /** Provider id: "google-antigravity" or "ollama". */
+  provider: string;
+  /** Ollama Cloud: static API key (never expires). */
+  apiKey?: string;
   /** Google Antigravity: OAuth refresh token. */
   refreshToken?: string;
   /** Google Antigravity: Cloud project id. */
   projectId?: string;
   // How the projectId was obtained.
   projectSource?: "google" | "manual";
-  /** Ollama Cloud: static API key (never expires). */
+}
+
+export interface AccountConfig {
+  email: string;
+  /**
+   * Per-provider credentials. The account (email) is the parent entity and
+   * may hold credentials for several providers.
+   *
+   * Legacy configs (pre-2.8) used flat fields instead: `provider`,
+   * `apiKey` (Ollama) and `refreshToken`/`projectId` (Google). Those shapes
+   * are still accepted on read and normalized into `credentials` by
+   * normalizeAccountConfig().
+   */
+  credentials?: ProviderCredential[];
+  /**
+   * @deprecated legacy flat provider id ("google-antigravity" default).
+   * Migrated into `credentials` on read; kept for back-compat.
+   */
+  provider?: string;
+  /** @deprecated legacy Ollama Cloud API key, migrated into credentials. */
   apiKey?: string;
+  /** @deprecated legacy Google Antigravity OAuth refresh token. */
+  refreshToken?: string;
+  /** @deprecated legacy Google Antigravity Cloud project id. */
+  projectId?: string;
+  /** @deprecated migrated into credentials. */
+  projectSource?: "google" | "manual";
   label?: string;
   // Optional - pro/free is detected dynamically from quota API reset times
   type?: AccountType;

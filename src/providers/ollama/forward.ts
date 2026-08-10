@@ -11,6 +11,7 @@ import {
 import type { AccountRuntime } from "../../types.js";
 import type { ForwardedResponse, RequestBody } from "../../proxy.js";
 import { isRecord } from "../../compat/schema-sanitizer.js";
+import { getOllamaApiKey } from "./credentials.js";
 import {
   extractTextFromUnknownContent,
   normalizeContentBlocks,
@@ -135,7 +136,7 @@ export async function forwardRequest(
       delete forwardHeaders[key];
     }
   }
-  forwardHeaders["Authorization"] = `Bearer ${account.config.apiKey}`;
+  forwardHeaders["Authorization"] = `Bearer ${getOllamaApiKey(account.config) ?? ""}`;
   forwardHeaders["User-Agent"] = OLLAMA_USER_AGENT;
   delete forwardHeaders["host"];
   delete forwardHeaders["connection"];

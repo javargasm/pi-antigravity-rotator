@@ -36,7 +36,12 @@ export async function runLogin(providerId?: string): Promise<void> {
   console.log();
   console.log(`Done. ${config.accounts.length} account(s) configured:`);
   for (const a of config.accounts) {
-    console.log(`  ${a.label || a.email} (${a.email}) [${a.provider ?? DEFAULT_PROVIDER}]`);
+    const providers =
+      (a.credentials ?? [])
+        .map((c) => c.provider)
+        .join("+") || a.provider ||
+      DEFAULT_PROVIDER;
+    console.log(`  ${a.label || a.email} (${a.email}) [${providers}]`);
   }
   console.log();
   console.log("Run 'npm start' to start the proxy.");

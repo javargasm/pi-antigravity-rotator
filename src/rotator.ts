@@ -46,7 +46,13 @@ import { isHostedOAuthConfigured } from "./providers/google-antigravity/oauth.js
 import type { RequestBody } from "./proxy.js";
 import { UsagePredictor, type ExhaustionPrediction } from "./providers/ollama/prediction.js";
 import { fetchWithRetry } from "./fetch-with-retry.js";
-import { getProviderForAccount } from "./providers/registry.js";
+import { getOllamaApiKey } from "./providers/ollama/credentials.js";
+import {
+  getProviderAdapter,
+  getProviderForAccount,
+  hasCredential,
+  primaryProviderId,
+} from "./providers/registry.js";
 import type { QuotaFetchContext } from "./providers/adapter.js";
 import { logger } from "./logger.js";
 import { getUpdateInfo } from "./version-check.js";
@@ -130,11 +136,11 @@ export class AccountRotator {
     if (now - this.lastOllamaCatalogFetch < TAGS_CACHE_TTL_MS) return;
     const ollamaAccount = this.accounts.find(
       (a) =>
-        getProviderForAccount(a.config).id === "ollama" &&
+        hasCredential(a.config, "ollama") &&
         !a.disabled &&
         !a.flagged,
     );
-    if (!ollamaAccount || typeof ollamaAccount.config.apiKey !== "string") {
+    if (!ollamaAccount || typeof getOllamaApiKey(ollamaAccount.config) !== "string") {
       return;
     }
     this.lastOllamaCatalogFetch = now;
@@ -142,7 +148,7 @@ export class AccountRotator {
       const response = await fetchWithRetry(OLLAMA_TAGS_URL, {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${ollamaAccount.config.apiKey}`,
+          Authorization: `Bearer ${getOllamaApiKey(ollamaAccount.config) ?? ""}`,
           "User-Agent": OLLAMA_USER_AGENT,
         },
         timeoutMs: 8000,
@@ -564,7 +570,6 @@ export class AccountRotator {
     for (const account of available) {
       try {
         await this.ensureValidToken(account);
-        const adapter = getProviderForAccount(account.config);
         const quotaCtx: QuotaFetchContext = {
           log: (message) => this.log(message),
           markFlagged: (acc, reason, options) =>
@@ -572,7 +577,15 @@ export class AccountRotator {
           reportQuotaPollFlag: (acc, statusCode, errorText) =>
             this.reportQuotaPollFlag(acc, statusCode, errorText),
         };
-        await adapter.fetchQuota(account, quotaCtx);
+        // Parent-account model: poll quota for every provider credential
+        // the account holds (Google OAuth pools + Ollama usage pools).
+        const providerIds = new Set<string>(
+          (account.config.credentials ?? []).map((c) => c.provider),
+        );
+        if (providerIds.size === 0) providerIds.add(primaryProviderId(account.config));
+        for (const pid of providerIds) {
+          await getProviderAdapter(pid).fetchQuota(account, quotaCtx);
+        }
       } catch {
         // Token refresh or quota fetch failed, skip this account
       }
@@ -587,10 +600,14 @@ export class AccountRotator {
         if (idlePools.length > 0) {
           const alreadySent =
             this.warmupSentThisCycle.get(account.config.email) ?? new Set<string>();
-          // Build deduplicated upstream model list
           const upstreamToQuotaKey = new Map<string, string>();
-          const warmupAdapter = getProviderForAccount(account.config);
           for (const q of idlePools) {
+            // Dispatch warmup by pool owner: the session pool belongs to
+            // Ollama; every other pool key is a Google OAuth pool.
+            const warmupAdapter =
+              q.modelKey === "session"
+                ? getProviderAdapter("ollama")
+                : getProviderForAccount(account.config);
             const upstream =
               warmupAdapter.getKickstartModelForPool(q.modelKey) ?? q.modelKey;
             if (!upstreamToQuotaKey.has(upstream)) {
@@ -1724,7 +1741,7 @@ export class AccountRotator {
   }): void {
     const ollamaAccount = this.accounts.find(
       (a) =>
-        getProviderForAccount(a.config).id === "ollama" &&
+        hasCredential(a.config, "ollama") &&
         (a.config.email === entry.account ||
           a.config.label === entry.account),
     );
@@ -1749,7 +1766,7 @@ export class AccountRotator {
     const result: Record<string, ExhaustionPrediction> = {};
     const now = Date.now();
     for (const account of this.accounts) {
-      if (getProviderForAccount(account.config).id !== "ollama") continue;
+      if (!hasCredential(account.config, "ollama")) continue;
       const session = account.quota.find((q) => q.modelKey === "session");
       const weekly = account.quota.find((q) => q.modelKey === "weekly");
       if (
@@ -2497,7 +2514,7 @@ export class AccountRotator {
     account: AccountRuntime,
     modelKey: string,
   ): boolean {
-    const isOllama = getProviderForAccount(account.config).id === "ollama";
+    const isOllama = hasCredential(account.config, "ollama");
     return modelKey === "session" ? isOllama : !isOllama;
   }
 
@@ -2514,7 +2531,7 @@ export class AccountRotator {
   /** Map a candidate key (model name or pool key) to the account's pool key. */
   private resolvePoolKey(account: AccountRuntime, key: string): string {
     if (
-      getProviderForAccount(account.config).id === "ollama" &&
+      hasCredential(account.config, "ollama") &&
       key !== "session" &&
       this.ollamaModels.has(key)
     ) {
@@ -2609,7 +2626,10 @@ export class AccountRotator {
 
       return {
         email: a.config.email,
-        provider: getProviderForAccount(a.config).id,
+        provider:
+          (a.config.credentials ?? []).map((c) => c.provider).join("+") ||
+          a.config.provider ||
+          "google-antigravity",
         label: a.config.label || a.config.email,
         status,
         activeForModels,
@@ -3219,7 +3239,10 @@ export class AccountRotator {
       };
     }
 
-    const kickstartAdapter = getProviderForAccount(account.config);
+    const kickstartAdapter =
+      quotaModelKey === "session"
+        ? getProviderAdapter("ollama")
+        : getProviderForAccount(account.config);
     const isOllamaAccount = kickstartAdapter.id === "ollama";
     if (!account.accessToken && !isOllamaAccount) {
       return { ok: false, status: 401, upstreamModel: "", error: "no access token" };

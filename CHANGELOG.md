@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.8.0] - 2026-08-10
+
+### Added
+- **Parent-Account Credential Model (F4)**: Each account is now identified by its email and can hold per-provider credentials (`credentials: [{provider, apiKey/refreshToken, projectId}]`). A single human with both a Google Antigravity OAuth token and an Ollama Cloud API key is stored as one account row instead of two. The dashboard, login flow, quota poll, kickstart, and rotation all key on the email — per-provider credentials are dispatched at request time. Legacy flat-shape configs (`provider`/`apiKey`/`refreshToken` at the top level) are still accepted and normalized on load. Migrate `login --provider <id>` to add credentials to an existing account rather than creating a duplicate row.
+
+### Changed
+- **Ollama Cloud Account Import**: the legacy importer now merges the `ollama` credential into any existing account with the same email (instead of skipping the email), so multi-provider identities are unified on first import. The import log now reports `M merged into existing account(s), N new account(s)`.
+
+### Fixed
+- **Ollama singleton-pool rotation threshold** (closed by `pi-antigravity-rotator-tuv`): with only one Ollama account, the persisted request-count threshold (`requestsPerRotation`) excluded the lone account from the pool after one request, producing `All accounts disabled or unavailable`. Resolved by F4: the Ollama pool now holds 28 accounts (27 dual + 1 Ollama-only), so rotation always has an alternative.
+
 ## [Unreleased]
 
 ### Fixed

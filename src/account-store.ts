@@ -2,7 +2,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getAccountsPath } from "./paths.js";
-import type { AccountConfig } from "./types.js";
+import type { AccountConfig, ProviderCredential } from "./types.js";
 import { writeJsonFileAtomic } from "./storage.js";
 import {
   loadConfig,
@@ -10,6 +10,8 @@ import {
   saveAccountsConfig,
 } from "./config-storage.js";
 import { applyConfigDefaults, getDefaultConfig } from "./config-defaults.js";
+import { hasCredential } from "./providers/credential-helpers.js";
+import { normalizeAccountConfig } from "./config-normalize.js";
 
 export {
   loadConfig,
@@ -18,6 +20,8 @@ export {
   applyConfigDefaults,
   getDefaultConfig,
 };
+
+export { normalizeAccountConfig } from "./config-normalize.js";
 
 const ACCOUNTS_FILE = getAccountsPath();
 const PI_DIR = join(homedir(), ".pi", "agent");
@@ -54,24 +58,61 @@ function validateAccountConfigLengths(entry: AccountConfig): void {
       );
     }
   }
+  validateCredentialLengths(entry.credentials);
+}
+
+function validateCredentialLengths(
+  credentials: AccountConfig["credentials"],
+): void {
+  if (!Array.isArray(credentials)) return;
+  for (const cred of credentials) {
+    if (typeof cred.apiKey === "string" && cred.apiKey.length > MAX_REFRESH_TOKEN_LENGTH) {
+      throw new Error(`Credential apiKey for ${cred.provider} exceeds maximum length`);
+    }
+    if (typeof cred.projectId === "string" && cred.projectId.length > MAX_PROJECT_ID_LENGTH) {
+      throw new Error(`Credential projectId for ${cred.provider} exceeds maximum length`);
+    }
+    if (typeof cred.refreshToken === "string" && cred.refreshToken.length > MAX_REFRESH_TOKEN_LENGTH) {
+      throw new Error(`Credential refreshToken for ${cred.provider} exceeds maximum length`);
+    }
+  }
 }
 
 export { validateAccountConfigLengths };
+
+function mergeCredentials(
+  existing: AccountConfig["credentials"] | undefined,
+  incoming: AccountConfig["credentials"] | undefined,
+): AccountConfig["credentials"] {
+  const out: NonNullable<AccountConfig["credentials"]> = [];
+  const seen = new Set<string>();
+  for (const cred of [...(existing ?? []), ...(incoming ?? [])]) {
+    if (seen.has(cred.provider)) continue;
+    seen.add(cred.provider);
+    out.push(cred);
+  }
+  return out;
+}
 
 export async function addAccountToConfig(
   entry: AccountConfig,
 ): Promise<{ isNew: boolean }> {
   validateAccountConfigLengths(entry);
+  const entryNorm = normalizeAccountConfig(entry);
   const config = loadOrCreateAccountsConfig();
-  const existing = config.accounts.findIndex((a) => a.email === entry.email);
-
-  if (existing >= 0) {
-    config.accounts[existing] = { ...config.accounts[existing], ...entry };
+  const existing = config.accounts.find((a) => a.email === entryNorm.email);
+  if (existing) {
+    validateCredentialLengths(entryNorm.credentials);
+    config.accounts[config.accounts.indexOf(existing)] = {
+      ...normalizeAccountConfig(existing),
+      ...entryNorm,
+      credentials: mergeCredentials(existing.credentials, entryNorm.credentials),
+    };
     await saveAccountsConfig(config);
     return { isNew: false };
   }
 
-  config.accounts.push(entry);
+  config.accounts.push(entryNorm);
   await saveAccountsConfig(config);
   return { isNew: true };
 }
@@ -92,12 +133,11 @@ function legacyOllamaRotatorAccountsFile(): string {
 
 /**
  * Import Ollama Cloud accounts from a legacy ~/ollama-rotator accounts.json
- * (the predecessor product). Legacy entries hold their API key in `apiKey`
- * and carry no `provider` field, so imported accounts are tagged provider
- * "ollama". Entries whose email already exists in the active config, and
- * entries with a missing apiKey or invalid fields, are skipped.
+ * (the predecessor product) into the parent-account model: each entry's
+ * API key becomes an `ollama` credential, merged onto the account with the
+ * same email (the account itself is created when the email is unknown).
  *
- * Returns the number of accounts imported (0 when no legacy config exists).
+ * Returns the number of credentials imported (0 when no legacy config exists).
  */
 export async function importLegacyOllamaRotatorAccounts(
   legacyFile = legacyOllamaRotatorAccountsFile(),
@@ -130,8 +170,9 @@ export async function importLegacyOllamaRotatorAccounts(
   if (rawAccounts.length === 0) return 0;
 
   const config = loadOrCreateAccountsConfig();
-  const seen = new Set(config.accounts.map((a) => a.email));
   let imported = 0;
+  let merged = 0;
+  let added = 0;
 
   for (const entry of rawAccounts) {
     if (typeof entry !== "object" || entry === null) continue;
@@ -142,10 +183,13 @@ export async function importLegacyOllamaRotatorAccounts(
       continue;
     }
 
-    const account: AccountConfig = {
-      email,
+    const credential: ProviderCredential = {
       provider: "ollama",
       apiKey: apiKey.trim(),
+    };
+    const account: AccountConfig = {
+      email,
+      credentials: [credential],
     };
     if (typeof label === "string" && label !== "") account.label = label;
     if (typeof tier === "string") account.tier = tier as AccountConfig["tier"];
@@ -156,16 +200,33 @@ export async function importLegacyOllamaRotatorAccounts(
       console.warn(`  Skipping legacy account ${email}: invalid fields`);
       continue;
     }
-    if (seen.has(account.email)) continue;
 
-    config.accounts.push(account);
-    seen.add(account.email);
+    const existing = config.accounts.find((a) => a.email === email);
+    if (existing) {
+      const normalized = normalizeAccountConfig(existing);
+      if (hasCredential(normalized, "ollama")) {
+        // Credential already present (e.g. re-import after a previous run).
+        continue;
+      }
+      const idx = config.accounts.indexOf(existing);
+      config.accounts[idx] = {
+        ...normalized,
+        credentials: [...(normalized.credentials ?? []), credential],
+      };
+      merged += 1;
+    } else {
+      config.accounts.push(account);
+      added += 1;
+    }
     imported += 1;
   }
 
   if (imported > 0) {
     await saveAccountsConfig(config);
-    console.log(`Imported ${imported} Ollama Cloud account(s) from legacy ${legacyFile}`);
+    console.log(
+      `Imported ${imported} Ollama Cloud credential(s) from legacy ${legacyFile} ` +
+        `(${added} new account(s), ${merged} merged into existing account(s))`,
+    );
   }
   return imported;
 }

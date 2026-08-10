@@ -1,4 +1,5 @@
 import { rotatorEnv } from "./env.js";
+import { normalizeAccountConfig } from "./config-normalize.js";
 import {
 	DEFAULT_QUOTA_POLL_INTERVAL_MS,
 	MAX_QUOTA_POLL_INTERVAL_MS,
@@ -54,8 +55,8 @@ export function applyConfigDefaults(config: Config): Config {
 		idempotencyWindowMs: config.idempotencyWindowMs ?? 2000,
 		streamRecoveryMaxRetries: safeStreamRecoveryMaxRetries(config.streamRecoveryMaxRetries),
 		compressionMode: config.compressionMode ?? "off",
-		accounts: config.accounts ? config.accounts.map((account) => ({
-			...account,
+accounts: config.accounts ? config.accounts.map((account) => ({
+			...normalizeAccountConfig(account),
 			tier: account.tier || "unknown",
 		})) : [],
 	};

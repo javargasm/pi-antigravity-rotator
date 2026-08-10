@@ -44,17 +44,40 @@ export function validateAccountConfig(value: unknown, path = "account"): Validat
 	const errors: string[] = [];
 
 	if (!isNonEmptyString(value.email)) errors.push(`${path}.email must be a non-empty string`);
-	// Provider-aware credentials: Ollama accounts require an apiKey;
-	// Google Antigravity accounts require refreshToken + projectId.
-	// Legacy configs without a provider field default to Google.
-	const provider = typeof value.provider === "string" ? value.provider : "google-antigravity";
-	if (provider === "ollama") {
-		if (!isNonEmptyString(value.apiKey)) errors.push(`${path}.apiKey must be a non-empty string`);
+	// Parent-account model: email owns per-provider credentials.
+	// Legacy flat shape (provider/apiKey/refreshToken at top level) is
+	// still accepted and normalized on load.
+	const hasCredentials =
+		Array.isArray((value as { credentials?: unknown }).credentials) &&
+		((value as { credentials: unknown[] }).credentials).length > 0;
+	if (hasCredentials) {
+		const credentials = (value as { credentials: Array<Record<string, unknown>> }).credentials;
+		if (credentials.length === 0) errors.push(`${path}.credentials must not be empty`);
+		for (let i = 0; i < credentials.length; i++) {
+			const cred = credentials[i];
+			const cpath = `${path}.credentials[${i}]`;
+			if (!isRecord(cred)) {
+				errors.push(`${cpath} must be an object`);
+				continue;
+			}
+			if (!isNonEmptyString(cred.provider)) errors.push(`${cpath}.provider must be a non-empty string`);
+			if (cred.provider === "ollama") {
+				if (!isNonEmptyString(cred.apiKey)) errors.push(`${cpath}.apiKey must be a non-empty string`);
+			} else {
+				if (!isNonEmptyString(cred.refreshToken)) errors.push(`${cpath}.refreshToken must be a non-empty string`);
+				if (!isNonEmptyString(cred.projectId)) errors.push(`${cpath}.projectId must be a non-empty string`);
+			}
+		}
 	} else {
-		if (!isNonEmptyString(value.refreshToken)) errors.push(`${path}.refreshToken must be a non-empty string`);
-		if (!isNonEmptyString(value.projectId)) errors.push(`${path}.projectId must be a non-empty string`);
+		const provider = typeof value.provider === "string" ? value.provider : "google-antigravity";
+		if (provider === "ollama") {
+			if (!isNonEmptyString(value.apiKey)) errors.push(`${path}.apiKey must be a non-empty string`);
+		} else {
+			if (!isNonEmptyString(value.refreshToken)) errors.push(`${path}.refreshToken must be a non-empty string`);
+			if (!isNonEmptyString(value.projectId)) errors.push(`${path}.projectId must be a non-empty string`);
+		}
+		if (value.provider !== undefined && typeof value.provider !== "string") errors.push(`${path}.provider must be a string`);
 	}
-	if (value.provider !== undefined && typeof value.provider !== "string") errors.push(`${path}.provider must be a string`);
 	if (value.label !== undefined && typeof value.label !== "string") errors.push(`${path}.label must be a string`);
 	if (value.type !== undefined && value.type !== "pro" && value.type !== "free") errors.push(`${path}.type must be "pro" or "free"`);
 	if (value.tier !== undefined && !["ultra", "pro", "plus", "free", "unknown", "max", "team"].includes(String(value.tier))) {
