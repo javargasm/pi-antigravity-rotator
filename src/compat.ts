@@ -59,6 +59,8 @@ import {
   validateAnthropicMessagesRequest,
   buildResponsesResponse,
   saveResponsesEntry,
+  toolArgumentsToObject,
+  toolArgumentsToString,
 } from "./providers/google-antigravity/translators.js";
 import {
   openAIToOllamaBody,
@@ -796,7 +798,7 @@ async function streamCompatSse(
                   type: "tool_use",
                   id: tc.id,
                   name: tc.function.name,
-                  input: JSON.parse(tc.function.arguments || "{}"),
+                  input: toolArgumentsToObject(tc.function.arguments),
                 }))
               : []),
           ],
@@ -2312,12 +2314,7 @@ export async function handleAnthropicMessages(
   }
   if (result.completion.toolCalls && result.completion.toolCalls.length > 0) {
     for (const tc of result.completion.toolCalls) {
-      let parsedInput: unknown;
-      try {
-        parsedInput = JSON.parse(tc.function.arguments || "{}");
-      } catch {
-        parsedInput = {};
-      }
+      const parsedInput = toolArgumentsToObject(tc.function.arguments);
       contentBlocks.push({
         type: "tool_use",
         id: tc.id,

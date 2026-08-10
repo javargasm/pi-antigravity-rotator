@@ -71,9 +71,10 @@ describe("openAIToOllamaBody", () => {
     assert.equal(messages[0].role, "assistant");
     const toolCalls = messages[0].tool_calls as Array<Record<string, unknown>>;
     assert.equal(toolCalls[0].id, "call_1");
-    assert.equal(
+    // Ollama expects arguments as an object (OpenAI sends a JSON string).
+    assert.deepEqual(
       (toolCalls[0].function as Record<string, unknown>).arguments,
-      '{"q":"x"}',
+      { q: "x" },
     );
     assert.equal(messages[1].role, "tool");
     assert.equal(messages[1].tool_call_id, "call_1");
@@ -180,7 +181,10 @@ describe("anthropicToOllamaBody", () => {
     assert.equal(messages[0].role, "assistant");
     const toolCalls = messages[0].tool_calls as Array<Record<string, unknown>>;
     assert.equal((toolCalls[0].function as Record<string, unknown>).name, "lookup");
-    assert.equal((toolCalls[0].function as Record<string, unknown>).arguments, '{"q":"x"}');
+    assert.deepEqual(
+      (toolCalls[0].function as Record<string, unknown>).arguments,
+      { q: "x" },
+    );
     assert.equal(messages[1].role, "tool");
     assert.equal(messages[1].tool_call_id, "tu_1");
   });

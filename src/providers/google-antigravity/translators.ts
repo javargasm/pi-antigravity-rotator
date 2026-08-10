@@ -50,7 +50,8 @@ export interface ResponseFunctionCallOutputItem {
   type: "function_call";
   call_id: string;
   name: string;
-  arguments: string;
+  /** JSON-encoded function arguments (OpenAI Responses API format). */
+  arguments: unknown;
   status: "completed";
 }
 
@@ -83,7 +84,12 @@ export interface OpenAIToolCall {
   type: "function";
   function: {
     name: string;
-    arguments: string;
+    /**
+     * Function arguments: the OpenAI standard encodes this as a
+     * JSON-stringified string, while Ollama expects an object. Callers
+     * (rotator/forward) deal with the right shape for each provider.
+     */
+    arguments: unknown;
   };
 }
 
@@ -179,6 +185,41 @@ export type ResponsesConversionResult = {
 
 export function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * Normalize a tool-call `arguments` field into the JSON-encoded string
+ * shape that OpenAI-compat responses expect. The Ollama adapter feeds us
+ * a parsed object, while OpenAI/Antigravity already gives us a string.
+ */
+export function toolArgumentsToString(args: unknown): string {
+  if (typeof args === "string") return args;
+  try {
+    return JSON.stringify(args ?? {});
+  } catch {
+    return "{}";
+  }
+}
+
+/**
+ * Normalize a tool-call `arguments` field into a parsed object, falling
+ * back to an empty object when the payload is malformed. Used when
+ * forwarding an OpenAI-style request (where `arguments` is a string)
+ * into Ollama (which expects an object).
+ */
+export function toolArgumentsToObject(args: unknown): Record<string, unknown> {
+  if (args && typeof args === "object") return args as Record<string, unknown>;
+  if (typeof args === "string") {
+    try {
+      const parsed = JSON.parse(args);
+      if (parsed && typeof parsed === "object") {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return {};
 }
 
 function cleanCacheControl<T>(content: T): T {
@@ -1520,7 +1561,7 @@ export function buildResponsesOutput(completion: CompatCompletion): {
       type: "function_call",
       call_id: toolCall.id,
       name: toolCall.function.name,
-      arguments: toolCall.function.arguments,
+      arguments: toolArgumentsToString(toolCall.function.arguments),
       status: "completed",
     });
   }

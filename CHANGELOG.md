@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.8.4] - 2026-08-10
+
+### Fixed
+- **Ollama tool-call `arguments` shape**: OpenAI-compat clients send `messages[].tool_calls[].function.arguments` as a JSON-encoded **string** (e.g. `"{\"q\":\"x\"}"`), while Ollama's native API expects a parsed **object**. The translator was passing the string through verbatim, so Ollama rejected every multi-turn request that included an `assistant` message with `tool_calls` (or a `tool` response) with `HTTP 400: Value looks like object, but can't find closing '}' symbol`. `openAIToOllamaBody` now parses `arguments` into an object via the new `toolArgumentsToObject` helper before forwarding, and the Responses-API output path serializes them back to a string via `toolArgumentsToString` so OpenAI-compat clients receive the canonical shape. `OpenAIToolCall.arguments` and `ResponseFunctionCallOutputItem.arguments` were widened from `string` to `unknown` to reflect both providers' shapes.
+
 ## [2.8.3] - 2026-08-10
 
 ### Fixed

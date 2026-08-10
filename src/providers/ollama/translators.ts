@@ -18,6 +18,8 @@ import {
   convertAnthropicToolsToOpenAI,
   convertAnthropicToolChoice,
   convertAnthropicMessagesToOpenAI,
+  toolArgumentsToObject,
+  toolArgumentsToString,
 } from "../google-antigravity/translators.js";
 
 /**
@@ -68,21 +70,23 @@ export function openAIToOllamaBody(
           )
         : [];
       if (toolCalls.length > 0) {
-        entry.tool_calls = toolCalls.map((tc) => ({
-          id:
-            (tc.id as string) || `call_${Date.now().toString(36)}`,
-          type: "function" as const,
-          function: {
-            name: (tc.function as { name: string }).name,
-            arguments:
-              typeof (tc.function as { arguments?: unknown }).arguments ===
-              "string"
-                ? ((tc.function as { arguments: unknown }).arguments as string)
-                : JSON.stringify(
-                    (tc.function as { arguments?: unknown }).arguments ?? {},
-                  ),
-          },
-        }));
+        entry.tool_calls = toolCalls.map((tc) => {
+          // Ollama expects `function.arguments` as a parsed object, but
+          // OpenAI sends it as a JSON-encoded string. Parse it back so
+          // the Go upstream doesn't reject the body.
+          const parsedArgs = toolArgumentsToObject(
+            (tc.function as { arguments?: unknown }).arguments,
+          );
+          return {
+            id:
+              (tc.id as string) || `call_${Date.now().toString(36)}`,
+            type: "function" as const,
+            function: {
+              name: (tc.function as { name: string }).name,
+              arguments: parsedArgs,
+            },
+          };
+        });
       }
       messages.push(entry);
       continue;
@@ -233,10 +237,7 @@ export function parseOllamaNdjson(raw: string): CompatCompletion {
                   typeof tc.function.name === "string"
                     ? tc.function.name
                     : "unknown",
-                arguments:
-                  typeof tc.function.arguments === "string"
-                    ? tc.function.arguments
-                    : JSON.stringify(tc.function.arguments ?? {}),
+                arguments: toolArgumentsToString(tc.function.arguments),
               },
             });
           }
