@@ -4,7 +4,7 @@ import {
   collapseWhitespace,
   compressLite,
 } from "../src/compression/lite.js";
-import type { ChatMessage } from "../src/compat/translators.js";
+import type { ChatMessage } from "../src/providers/google-antigravity/translators.js";
 
 describe("Lite Compression Engine", () => {
   describe("collapseWhitespace", () => {

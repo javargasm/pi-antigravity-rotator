@@ -46,6 +46,7 @@ export function validateAccountConfig(value: unknown, path = "account"): Validat
 	if (!isNonEmptyString(value.email)) errors.push(`${path}.email must be a non-empty string`);
 	if (!isNonEmptyString(value.refreshToken)) errors.push(`${path}.refreshToken must be a non-empty string`);
 	if (!isNonEmptyString(value.projectId)) errors.push(`${path}.projectId must be a non-empty string`);
+	if (value.provider !== undefined && typeof value.provider !== "string") errors.push(`${path}.provider must be a string`);
 	if (value.label !== undefined && typeof value.label !== "string") errors.push(`${path}.label must be a string`);
 	if (value.type !== undefined && value.type !== "pro" && value.type !== "free") errors.push(`${path}.type must be "pro" or "free"`);
 	if (value.tier !== undefined && !["ultra", "pro", "plus", "free", "unknown"].includes(String(value.tier))) {

@@ -1,22 +1,22 @@
-import { logger, redactSensitive } from "../logger.js";
-import { applyModelAlias } from "../types.js";
-import type { RequestBody } from "../proxy.js";
+import { logger, redactSensitive } from "../../logger.js";
+import { applyModelAlias } from "../../types.js";
+import type { RequestBody } from "../../proxy.js";
 import {
   isRecord,
   sanitizeGeminiSchema,
   sanitizeClaudeViaGeminiSchema,
-} from "./schema-sanitizer.js";
+} from "../../compat/schema-sanitizer.js";
 import {
   getModelFamily,
   getModelSpec,
   isThinkingModel,
-} from "./model-specs.js";
+} from "../../compat/model-specs.js";
 import {
   thoughtSignatureCache,
   getStoredResponse,
   setStoredResponse,
   makeCompatId,
-} from "./cache.js";
+} from "../../compat/cache.js";
 
 const compatLogger = logger.child("compat");
 
@@ -186,7 +186,6 @@ function cleanCacheControl<T>(content: T): T {
   return content.map((block: Record<string, unknown>) => {
     if (!block || typeof block !== "object") return block;
     if ("cache_control" in block) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { cache_control: _cc, ...rest } = block;
       return rest;
     }

@@ -12,7 +12,7 @@ import {
   getConfiguredAdminToken,
   setPersistedAdminToken,
 } from "./admin-auth.js";
-import { warnIfUsingFallbackOAuthCreds } from "./oauth.js";
+import { warnIfUsingFallbackOAuthCreds } from "./providers/google-antigravity/oauth.js";
 import { warnIfInsecureTelemetryEndpoint } from "./telemetry.js";
 import {
   setModelSpecsOverride,

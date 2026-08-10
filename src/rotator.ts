@@ -6,7 +6,6 @@ import {
   type AccountStatus,
   type AccountTier,
   type Config,
-  type GoogleQuotaResponse,
   type HealthScoreBreakdown,
   type ModelQuota,
   type ModelRotationState,
@@ -19,13 +18,11 @@ import {
   type TokenUsageData,
   type TokenUsageTiered,
   MODEL_PRICING,
-  TOKEN_URL,
-  QUOTA_API_URL,
   QUOTA_USER_AGENT,
   REQUEST_GOOG_API_CLIENT,
   REQUEST_CLIENT_METADATA,
   ANTIGRAVITY_ENDPOINTS,
-  QUOTA_MODEL_KEYS,
+  KICKSTART_MODEL_FOR_QUOTA_POOL,
   DEFAULT_QUOTA_POLL_INTERVAL_MS,
   MAX_QUOTA_POLL_INTERVAL_MS,
   MIN_QUOTA_POLL_INTERVAL_MS,
@@ -42,8 +39,9 @@ import {
   saveAccountsConfig,
   removeAccountFromConfig,
 } from "./account-store.js";
-import { getOAuthClientConfig, isHostedOAuthConfigured } from "./oauth.js";
-import { fetchWithRetry } from "./fetch-with-retry.js";
+import { isHostedOAuthConfigured } from "./providers/google-antigravity/oauth.js";
+import { getProviderForAccount } from "./providers/registry.js";
+import type { QuotaFetchContext } from "./providers/adapter.js";
 import { logger } from "./logger.js";
 import { getUpdateInfo } from "./version-check.js";
 import { getNotifications } from "./notification-poller.js";
@@ -74,15 +72,6 @@ function nextUtcDayStartMs(now = Date.now()): number {
 function projectModelKey(projectId: string, modelKey: string): string {
   return `${projectId}::${modelKey}`;
 }
-
-// Maps each quota pool key to the cheapest upstream model to use for kickstart warmup requests.
-// Gemini 3.6/3.5 Flash and Gemini 3.1 Pro share the same upstream pool, so all map to gemini-3-flash.
-const KICKSTART_MODEL_FOR_QUOTA_POOL: Record<string, string> = {
-  "claude-opus-4-6-thinking": "gpt-oss-120b-medium",
-  "gemini-3.5-flash": "gemini-3-flash",
-  "gemini-3.6-flash": "gemini-3-flash",
-  "gemini-3.1-pro": "gemini-3-flash",
-};
 
 // Reverse map: upstream model → the quota pool key it primarily represents (for deduplication).
 const QUOTA_POOL_FOR_KICKSTART_MODEL: Record<string, string> = {
@@ -516,7 +505,15 @@ export class AccountRotator {
     for (const account of available) {
       try {
         await this.ensureValidToken(account);
-        await this.fetchQuota(account);
+        const adapter = getProviderForAccount(account.config);
+        const quotaCtx: QuotaFetchContext = {
+          log: (message) => this.log(message),
+          markFlagged: (acc, reason, options) =>
+            this.markFlagged(acc, reason, options),
+          reportQuotaPollFlag: (acc, statusCode, errorText) =>
+            this.reportQuotaPollFlag(acc, statusCode, errorText),
+        };
+        await adapter.fetchQuota(account, quotaCtx);
       } catch {
         // Token refresh or quota fetch failed, skip this account
       }
@@ -624,118 +621,6 @@ export class AccountRotator {
       uptimeSeconds: ctx.uptimeSeconds,
       timeSinceLastFlagSeconds: -1,
     });
-  }
-
-  private async fetchQuota(account: AccountRuntime): Promise<void> {
-    if (!account.accessToken) return;
-
-    try {
-      const response = await fetchWithRetry(QUOTA_API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${account.accessToken}`,
-          "User-Agent": QUOTA_USER_AGENT,
-        },
-        body: JSON.stringify({ project: account.config.projectId }),
-        timeoutMs: 8000,
-      });
-
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-          const errorText = await response.text();
-          this.log(
-            `${account.config.email}: quota API returned ${response.status}, flagging account`,
-          );
-          this.reportQuotaPollFlag(account, response.status, errorText);
-          this.markFlagged(
-            account,
-            `Quota API ${response.status}: ${errorText}`,
-            { triggerProtectivePause: false },
-          );
-        }
-        return;
-      }
-
-      const data = (await response.json()) as GoogleQuotaResponse;
-      const oldQuota = account.quota || [];
-      account.quota = this.extractQuotas(data, oldQuota);
-      account.lastQuotaPoll = Date.now();
-
-      // --- RAW QUOTA LOGGING FOR DEBUGGING ---
-      const rawLog = account.quota
-        .map((q) => {
-          const remain = q.resetTime
-            ? Math.round(
-                (new Date(q.resetTime).getTime() - Date.now()) / 60000,
-              ) + "m"
-            : "no_reset";
-          return `[${q.modelKey}: ${q.timerType} ${q.percentRemaining}% in ${remain}]`;
-        })
-        .join(" | ");
-      this.log(`RAW POLL ${account.config.email} -> ${rawLog}`);
-      // ---------------------------------------
-    } catch {
-      // Network error, skip
-    }
-  }
-
-  private extractQuotas(
-    data: GoogleQuotaResponse,
-    oldQuota: ModelQuota[],
-  ): ModelQuota[] {
-    const quotas: ModelQuota[] = [];
-    const now = Date.now();
-
-    for (const [, config] of Object.entries(QUOTA_MODEL_KEYS)) {
-      let modelInfo = data.models[config.key];
-
-      if (!modelInfo) {
-        for (const altKey of config.altKeys) {
-          modelInfo = data.models[altKey];
-          if (modelInfo) break;
-        }
-      }
-
-      if (modelInfo?.quotaInfo) {
-        const resetTime = modelInfo.quotaInfo.resetTime ?? null;
-        let timerType: ModelQuota["timerType"] = "fresh";
-
-        if (resetTime) {
-          const oldQ = oldQuota.find((q) => q.modelKey === config.key);
-          // If the resetTime is exactly the same as the previous poll, preserve the old timerType.
-          // A timer doesn't change its nature just because it gets closer to zero.
-          if (
-            oldQ &&
-            oldQ.resetTime === resetTime &&
-            oldQ.timerType !== "fresh"
-          ) {
-            timerType = oldQ.timerType;
-          } else {
-            // It's a BRAND NEW timer (or we restarted the service).
-            // Since it just started, we can measure the distance to determine its type.
-            const resetMs = new Date(resetTime).getTime();
-            if (resetMs > now) {
-              const durationMs = resetMs - now;
-              // If the new timer is < 6 hours away, it's a 5h timer. Otherwise 7d.
-              timerType = durationMs < 6 * 60 * 60 * 1000 ? "5h" : "7d";
-            }
-          }
-        }
-
-        quotas.push({
-          modelKey: config.key,
-          displayName: config.display,
-          percentRemaining: Math.round(
-            (modelInfo.quotaInfo.remainingFraction ?? 0) * 100,
-          ),
-          resetTime,
-          timerType,
-        });
-      }
-    }
-
-    return quotas;
   }
 
   // Get quota % for a specific model on an account. Returns -1 if no data.
@@ -2412,55 +2297,18 @@ export class AccountRotator {
   }
 
   async ensureValidToken(account: AccountRuntime): Promise<void> {
-    const now = Date.now();
-    if (account.accessToken && account.tokenExpires > now) {
-      return;
-    }
-
-    this.log(
-      `Refreshing token for ${account.config.label || account.config.email}...`,
-    );
+    const adapter = getProviderForAccount(account.config);
     try {
-      const oauth = getOAuthClientConfig();
-      const response = await fetchWithRetry(TOKEN_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          client_id: oauth.clientId,
-          client_secret: oauth.clientSecret,
-          refresh_token: account.config.refreshToken,
-          grant_type: "refresh_token",
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        const msg = `Token refresh failed (${response.status}): ${errorText}`;
-        this.markError(account, msg);
-        throw new Error(msg);
-      }
-
-      const data = (await response.json()) as {
-        access_token: string;
-        expires_in: number;
-      };
-
-      account.accessToken = data.access_token;
-      account.tokenExpires = now + data.expires_in * 1000 - 5 * 60 * 1000;
-      account.consecutiveErrors = 0;
-      this.log(
-        `Token refreshed for ${account.config.label || account.config.email}`,
-      );
+      await adapter.ensureValidToken(account);
     } catch (err) {
-      if (
-        err instanceof Error &&
-        err.message.startsWith("Token refresh failed")
-      ) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith("Token refresh failed")) {
+        this.markError(account, msg);
         throw err;
       }
-      const msg = `Token refresh error: ${err instanceof Error ? err.message : String(err)}`;
-      this.markError(account, msg);
-      throw new Error(msg, { cause: err });
+      const wrapped = `Token refresh error: ${msg}`;
+      this.markError(account, wrapped);
+      throw new Error(wrapped, { cause: err });
     }
   }
 

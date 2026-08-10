@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import { ANTIGRAVITY_VERSION, CLIENT_ID, CLIENT_SECRET, REQUEST_USER_AGENT, TOKEN_URL } from "./types.js";
-import { fetchWithRetry } from "./fetch-with-retry.js";
+import { ANTIGRAVITY_VERSION, CLIENT_ID, CLIENT_SECRET, REQUEST_USER_AGENT, TOKEN_URL } from "../../types.js";
+import { fetchWithRetry } from "../../fetch-with-retry.js";
 
 export const DEFAULT_REDIRECT_URI = "http://localhost:51121/oauth-callback";
 export const SCOPES = [

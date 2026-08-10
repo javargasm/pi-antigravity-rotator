@@ -59,7 +59,7 @@ import {
   validateAnthropicMessagesRequest,
   buildResponsesResponse,
   saveResponsesEntry,
-} from "./compat/translators.js";
+} from "./providers/google-antigravity/translators.js";
 import type {
   ChatMessage,
   OpenAITool,
@@ -70,7 +70,7 @@ import type {
   AnthropicMessagesRequest,
   CompatCompletion,
   ResponsesConversionResult,
-} from "./compat/translators.js";
+} from "./providers/google-antigravity/translators.js";
 
 export {
   isRecord,
@@ -119,13 +119,13 @@ export function logValidationFailure(scope: string, payload: unknown): void {
   compatLogger.warn(`${scope}: ${clipped}`);
 }
 
-// Interfaces and types have been moved to src/compat/translators.ts
+// Interfaces and types have been moved to src/providers/google-antigravity/translators.ts
 
 // Response Output types
 
 // Cache and stores have been moved to src/compat/cache.ts
 
-// Helper and translation functions have been moved to src/compat/translators.ts
+// Helper and translation functions have been moved to src/providers/google-antigravity/translators.ts
 
 export function parseAntigravitySse(raw: string): CompatCompletion {
   let text = "";

@@ -24,7 +24,7 @@ export type RoutingRejectionReason =
   | "daily-project-stop"
   | "token-bucket-empty";
 
-export interface AccountConfig {
+export interface GoogleAccountConfig {
   email: string;
   refreshToken: string;
   projectId: string;
@@ -35,7 +35,15 @@ export interface AccountConfig {
   type?: AccountType;
   tier?: AccountTier;
   familyManager?: boolean;
+  // Provider id; defaults to "google-antigravity" when absent (legacy configs).
+  provider?: string;
 }
+
+/**
+ * Discriminated union of provider account configs. Legacy configs without a
+ * `provider` field are treated as Google Antigravity accounts.
+ */
+export type AccountConfig = GoogleAccountConfig;
 
 export interface Config {
   accounts: AccountConfig[];
@@ -703,6 +711,16 @@ export const CLIENT_SECRET = atob(
 export const ANTIGRAVITY_ENDPOINTS = [
   "https://daily-cloudcode-pa.googleapis.com",
 ] as const;
+
+// Maps each quota pool key (Google quota API) to the cheapest upstream model
+// used for kickstart warmup requests. Gemini 3.6/3.5 Flash and Gemini 3.1 Pro
+// share the same upstream pool, so all map to gemini-3-flash.
+export const KICKSTART_MODEL_FOR_QUOTA_POOL: Record<string, string> = {
+  "claude-opus-4-6-thinking": "gpt-oss-120b-medium",
+  "gemini-3.5-flash": "gemini-3-flash",
+  "gemini-3.6-flash": "gemini-3-flash",
+  "gemini-3.1-pro": "gemini-3-flash",
+};
 
 export const QUOTA_API_URL =
   "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";

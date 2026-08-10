@@ -10,7 +10,7 @@ import {
   getOAuthClientConfig,
   getUserEmail,
   isHostedOAuthConfigured,
-} from "./oauth.js";
+} from "./providers/google-antigravity/oauth.js";
 import type { AccountRotator } from "./rotator.js";
 
 interface PendingSession {
