@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.8.2] - 2026-08-10
+
+### Added
+- **Ollama Cloud model pricing in `MODEL_PRICING`**: `calculateCost()` previously returned `0` for every Ollama model because only the Antigravity models had price entries (claude + gemini variants). 18 entries were ported from `~/ollama-rotator/src/types.ts` (`gpt-oss:20b`, `gpt-oss:120b`, `deepseek-v4-flash:preview`, `deepseek-v4-flash:0731`, `deepseek-v4-pro`, `qwen3.5:397b`, `glm-5.1`, `glm-5.2`, `gemma4:31b`, `kimi-k2.6`, `kimi-k2.7-code`, `kimi-k3`, `minimax-m2.7`, `minimax-m3`, `mistral-large-3:675b`, `nemotron-3-nano:30b`, `nemotron-3-super`, `nemotron-3-ultra`). The dashboard spend summary now reports non-zero USD for Ollama traffic.
+
 ## [2.8.1] - 2026-08-10
 
 ### Changed

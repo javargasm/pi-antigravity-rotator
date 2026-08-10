@@ -710,6 +710,27 @@ export const MODEL_PRICING: Record<
     cachingStoragePer1MPerHour: 1.0,
   },
   "gpt-oss-120b-medium": { inputPer1M: 2.0, outputPer1M: 10.0 },
+
+  // Ollama Cloud model pricing (USD per 1M tokens). Sourced from the
+  // ~/ollama-rotator project (verified 2026-08-09).
+  "gpt-oss:20b":                 { inputPer1M: 0.075,  outputPer1M: 0.30 },
+  "gpt-oss:120b":                { inputPer1M: 0.15,   outputPer1M: 0.60 },
+  "deepseek-v4-flash:preview":   { inputPer1M: 0.14,   outputPer1M: 0.28,  cachingPer1M: 0.0028 },
+  "deepseek-v4-flash:0731":      { inputPer1M: 0.14,   outputPer1M: 0.28,  cachingPer1M: 0.0028 },
+  "deepseek-v4-pro":             { inputPer1M: 0.435,  outputPer1M: 0.87,  cachingPer1M: 0.0036 },
+  "qwen3.5:397b":                { inputPer1M: 0.60,   outputPer1M: 3.60 },
+  "glm-5.1":                     { inputPer1M: 0.80,   outputPer1M: 2.56 },
+  "glm-5.2":                     { inputPer1M: 0.80,   outputPer1M: 2.56 },
+  "gemma4:31b":                  { inputPer1M: 0.38,   outputPer1M: 1.15 },
+  "kimi-k2.6":                   { inputPer1M: 0.95,   outputPer1M: 4.00 },
+  "kimi-k2.7-code":              { inputPer1M: 0.95,   outputPer1M: 4.00 },
+  "kimi-k3":                     { inputPer1M: 0.95,   outputPer1M: 4.00 },
+  "minimax-m2.7":                { inputPer1M: 0.30,   outputPer1M: 1.20 },
+  "minimax-m3":                  { inputPer1M: 0.30,   outputPer1M: 1.20 },
+  "mistral-large-3:675b":        { inputPer1M: 0.50,   outputPer1M: 1.50 },
+  "nemotron-3-nano:30b":         { inputPer1M: 0.50,   outputPer1M: 1.50 },
+  "nemotron-3-super":            { inputPer1M: 0.60,   outputPer1M: 1.80 },
+  "nemotron-3-ultra":            { inputPer1M: 0.60,   outputPer1M: 1.80 },
 };
 
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";
