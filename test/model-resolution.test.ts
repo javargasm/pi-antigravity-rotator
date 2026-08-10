@@ -8,34 +8,34 @@ import {
 } from "../src/types.js";
 
 describe("model resolution", () => {
-	it("maps Gemini Pro variants to the shared Pro quota pool", () => {
-		assert.equal(resolveQuotaModelKey("gemini-3.1-pro-low"), "gemini-3.1-pro");
-		assert.equal(resolveQuotaModelKey("gemini-3.1-pro-high"), "gemini-3.1-pro");
-		assert.equal(resolveQuotaModelKey("some-gemini-pro-model"), "gemini-3.1-pro");
+	it("maps Gemini variants to the shared Gemini quota pool", () => {
+		assert.equal(resolveQuotaModelKey("gemini-3.1-pro-low"), "gemini");
+		assert.equal(resolveQuotaModelKey("gemini-3.1-pro-high"), "gemini");
+		assert.equal(resolveQuotaModelKey("some-gemini-pro-model"), "gemini");
 	});
 
-	it("maps Flash requests to the Flash quota pool", () => {
-		assert.equal(resolveQuotaModelKey("gemini-3-flash"), "gemini-3.5-flash");
-		assert.equal(resolveQuotaModelKey("google/gemini-flash-latest"), "gemini-3.5-flash");
-		assert.equal(resolveQuotaModelKey("gemini-3-flash-agent"), "gemini-3.5-flash");
-		assert.equal(resolveQuotaModelKey("gemini-3.5-flash-medium"), "gemini-3.5-flash");
+	it("maps Flash requests to the Gemini quota pool", () => {
+		assert.equal(resolveQuotaModelKey("gemini-3-flash"), "gemini");
+		assert.equal(resolveQuotaModelKey("google/gemini-flash-latest"), "gemini");
+		assert.equal(resolveQuotaModelKey("gemini-3-flash-agent"), "gemini");
+		assert.equal(resolveQuotaModelKey("gemini-3.5-flash-medium"), "gemini");
 		for (const variant of ["high", "medium", "low", "tiered"]) {
 			assert.equal(
 				resolveQuotaModelKey(`gemini-3.6-flash-${variant}`),
-				"gemini-3.6-flash",
+				"gemini",
 			);
 		}
 	});
 
 	it("maps GPT-OSS requests to the Claude quota pool", () => {
-		assert.equal(resolveQuotaModelKey("gpt-oss-120b-medium"), "claude-opus-4-6-thinking");
-		assert.equal(resolveQuotaModelKey("gpt-oss-120b"), "claude-opus-4-6-thinking");
+		assert.equal(resolveQuotaModelKey("gpt-oss-120b-medium"), "claude");
+		assert.equal(resolveQuotaModelKey("gpt-oss-120b"), "claude");
 	});
 
 	it("maps Claude variants to the Claude quota pool", () => {
-		assert.equal(resolveQuotaModelKey("claude-opus-4-6-thinking"), "claude-opus-4-6-thinking");
-		assert.equal(resolveQuotaModelKey("claude-sonnet-4-6"), "claude-opus-4-6-thinking");
-		assert.equal(resolveQuotaModelKey("vendor/claude-custom"), "claude-opus-4-6-thinking");
+		assert.equal(resolveQuotaModelKey("claude-opus-4-6-thinking"), "claude");
+		assert.equal(resolveQuotaModelKey("claude-sonnet-4-6"), "claude");
+		assert.equal(resolveQuotaModelKey("vendor/claude-custom"), "claude");
 	});
 
 	it("returns null for unknown quota models", () => {
@@ -94,8 +94,8 @@ describe("model resolution", () => {
 		assert.equal(new Set(keys).size, keys.length);
 	});
 
-	it("orders quota model keys: claude, gemini-3.1-pro, gemini-3.5-flash, gemini-3.6-flash", () => {
+it("orders quota model keys: claude, gemini", () => {
 		const orderedKeys = Object.keys(QUOTA_MODEL_KEYS);
-		assert.deepEqual(orderedKeys, ["claude", "gemini-3.1-pro", "gemini-3.5-flash", "gemini-3.6-flash"]);
+		assert.deepEqual(orderedKeys, ["claude", "gemini"]);
 	});
 });

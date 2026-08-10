@@ -561,6 +561,23 @@ export class AccountRotator {
     }
   }
 
+  /**
+   * Emit one consolidated RAW POLL line per quota cycle, with Antigravity
+   * pools first and Ollama (usage) pools last. Per-provider strings are
+   * collected into `account.lastPollByProvider` by each adapter.
+   */
+  private logConsolidatedPoll(account: AccountRuntime): void {
+    const stash = account.lastPollByProvider;
+    if (!stash) return;
+    const ordered = ["google-antigravity", "ollama"]
+      .filter((pid) => stash[pid])
+      .map((pid) => `${pid}: ${stash[pid]}`);
+    if (ordered.length > 0) {
+      this.log(`RAW POLL ${account.config.email} -> ${ordered.join(" | ")}`);
+    }
+    account.lastPollByProvider = {};
+  }
+
   private async pollAllQuotas(): Promise<void> {
     // Reset per-cycle warmup tracking so each poll cycle allows at most one warmup per upstream model per account.
     this.warmupSentThisCycle.clear();
@@ -589,6 +606,10 @@ export class AccountRotator {
       } catch {
         // Token refresh or quota fetch failed, skip this account
       }
+
+      // Consolidated RAW POLL across all providers on this account:
+      // google first (Antigravity OAuth pools), then ollama (usage pools).
+      this.logConsolidatedPoll(account);
 
       // Auto-warmup: send minimal kickstart requests for idle pools on accounts that have opted
       // in via allowFreshWindowStartsOverride, but only if the operator has enabled the global

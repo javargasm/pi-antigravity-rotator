@@ -112,11 +112,31 @@ export async function fetchProviderQuota(
 
     const data = (await response.json()) as GoogleQuotaResponse;
     const oldQuota = account.quota || [];
-    account.quota = extractQuotas(data, oldQuota);
+    const fresh = extractQuotas(data, oldQuota);
+    // Merge by modelKey: preserve entries from other providers already on
+    // the account so multi-provider accounts accumulate quotas across
+    // credentials without overwriting one another.
+    const previousForProvider = (oldQuota || []).filter(
+      (q) => (q as { providerId?: string }).providerId,
+    );
+    const incomingProviderId = (fresh as { providerId?: string }[]).map(
+      () => "google-antigravity",
+    );
+    fresh.forEach(
+      (q, i) =>
+        ((q as { providerId?: string }).providerId = incomingProviderId[i]),
+    );
+    account.quota = [...previousForProvider, ...fresh];
     account.lastQuotaPoll = Date.now();
 
-    // --- RAW QUOTA LOGGING FOR DEBUGGING ---
-    const rawLog = account.quota
+    // Stash the provider-local poll log for the rotator to emit as a
+    // single consolidated line per cycle.
+    account.lastPollByProvider ??= {};
+    account.lastPollByProvider["google-antigravity"] = account.quota
+      .filter(
+        (q) =>
+          (q as { providerId?: string }).providerId === "google-antigravity",
+      )
       .map((q) => {
         const remain = q.resetTime
           ? Math.round(
@@ -126,8 +146,6 @@ export async function fetchProviderQuota(
         return `[${q.modelKey}: ${q.timerType} ${q.percentRemaining}% in ${remain}]`;
       })
       .join(" | ");
-    ctx.log(`RAW POLL ${account.config.email} -> ${rawLog}`);
-    // ---------------------------------------
   } catch {
     // Network error, skip
   }

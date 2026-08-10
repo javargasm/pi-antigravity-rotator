@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.8.1] - 2026-08-10
+
+### Changed
+- **Antigravity quota pools consolidated by family**: `QUOTA_MODEL_KEYS` is now `claude` (every Claude variant + gpt-oss) and `gemini` (every Gemini variant). `account.quota` carries at most one Antigravity entry per family instead of one per model, matching how Antigravity itself reports the shared bucket. `resolveQuotaModelKey` returns `"claude"` or `"gemini"` for any member of those families; `MODEL_CATALOG` `quotaPool` values follow suit. `resolveDisplayModelKey` and `MODEL_PRICING` are unchanged, so telemetry and pricing still distinguish variants.
+- **Consolidated RAW POLL log**: per quota cycle, each provider's adapter stashes its formatted pools into `account.lastPollByProvider` and the rotator emits a single `RAW POLL email -> google-antigravity: [...] | ollama: [...]` line, with Antigravity pools first and Ollama (session/weekly) last. Multi-provider accounts no longer log a separate line per provider.
+
 ## [2.8.0] - 2026-08-10
 
 ### Added

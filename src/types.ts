@@ -222,14 +222,16 @@ export interface ModelQuota {
   timerType: "fresh" | "5h" | "7d";
 }
 
-// Model key mapping for the quota API
+// Model key mapping for the quota API. One entry per family: all Claude
+// variants (and gpt-oss) share one bucket, all Gemini variants share one.
 export const QUOTA_MODEL_KEYS: Record<
   string,
   { key: string; altKeys: string[]; display: string }
 > = {
   claude: {
-    key: "claude-opus-4-6-thinking",
+    key: "claude",
     altKeys: [
+      "claude-opus-4-6-thinking",
       "claude-opus-4-5-thinking",
       "claude-opus-4-5",
       "claude-sonnet-4-6-thinking",
@@ -241,72 +243,44 @@ export const QUOTA_MODEL_KEYS: Record<
     ],
     display: "Claude",
   },
-  "gemini-3.1-pro": {
-    key: "gemini-3.1-pro",
+  gemini: {
+    key: "gemini",
     altKeys: [
-      "gemini-3.1-pro-high",
+      "gemini-3.1-pro",
       "gemini-3.1-pro-low",
+      "gemini-3.1-pro-high",
       "gemini-3-pro-high",
       "gemini-3-pro-low",
-    ],
-    display: "G3.1Pro",
-  },
-  "gemini-3.5-flash": {
-    key: "gemini-3.5-flash",
-    altKeys: [
+      "gemini-3.5-flash",
       "gemini-3.5-flash-low",
       "gemini-3.5-flash-medium",
       "gemini-3.5-flash-high",
       "gemini-3-flash-agent",
       "gemini-3-flash",
-    ],
-    display: "G3.5Flash",
-  },
-  "gemini-3.6-flash": {
-    key: "gemini-3.6-flash",
-    altKeys: [
+      "gemini-3.6-flash",
       "gemini-3.6-flash-high",
       "gemini-3.6-flash-medium",
       "gemini-3.6-flash-low",
       "gemini-3.6-flash-tiered",
     ],
-    display: "G3.6Flash",
+    display: "Gemini",
   },
 };
 
-// Map request model names to quota model keys
+// Map request model names to quota model keys (family buckets).
 export function resolveQuotaModelKey(requestModel: string): string | null {
   const lower = requestModel.toLowerCase();
-  // Explicit mappings to avoid substring collisions
-  if (lower.includes("gemini-3-flash-agent")) return "gemini-3.5-flash";
-  if (lower.includes("gpt-oss")) return "claude-opus-4-6-thinking";
-
-  for (const [, config] of Object.entries(QUOTA_MODEL_KEYS)) {
-    if (
-      lower.includes(config.key) ||
-      config.altKeys.some((alt) => lower.includes(alt))
-    ) {
-      return config.key;
-    }
+  // Claude family: every Claude variant and gpt-oss share one bucket.
+  if (
+    lower.includes("claude") ||
+    lower.includes("gpt-oss")
+  ) {
+    return "claude";
   }
-  // Broad fallback matching
-  if (
-    lower.includes("gemini") &&
-    lower.includes("3.6") &&
-    lower.includes("flash")
-  )
-    return "gemini-3.6-flash";
-  if (
-    lower.includes("gemini") &&
-    lower.includes("3.5") &&
-    lower.includes("flash")
-  )
-    return "gemini-3.5-flash";
-  if (lower.includes("gemini") && lower.includes("pro"))
-    return "gemini-3.1-pro";
-  if (lower.includes("gemini") && lower.includes("flash"))
-    return "gemini-3.5-flash";
-  if (lower.includes("claude")) return "claude-opus-4-6-thinking";
+  // Gemini family: every Gemini variant shares one bucket.
+  if (lower.includes("gemini")) {
+    return "gemini";
+  }
   return null;
 }
 
@@ -378,6 +352,10 @@ export interface AccountRuntime {
   // Quota tracking (from API) - per-model data
   quota: ModelQuota[];
   lastQuotaPoll: number;
+  // Per-provider RAW POLL strings, accumulated by each adapter during a
+  // quota cycle. The rotator emits one consolidated log per account/cycle
+  // and resets the map.
+  lastPollByProvider?: Record<string, string>;
   // Status
   lastUsed: number;
   lastError: string | null;

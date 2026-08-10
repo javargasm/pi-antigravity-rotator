@@ -53,11 +53,27 @@ export async function fetchProviderUsage(
 
     const data = (await response.json()) as OllamaUsageResponse;
     const oldQuota = account.quota || [];
-    account.quota = extractUsagePools(data, oldQuota);
+    const fresh = extractUsagePools(data, oldQuota);
+    // Merge by modelKey: preserve entries from other providers already on
+    // the account so multi-provider accounts accumulate quotas across
+    // credentials without overwriting one another.
+    const previousForProvider = (oldQuota || []).filter(
+      (q) => (q as { providerId?: string }).providerId,
+    );
+    fresh.forEach(
+      (q) => ((q as { providerId?: string }).providerId = "ollama"),
+    );
+    account.quota = [...previousForProvider, ...fresh];
     account.lastQuotaPoll = Date.now();
     void recordUsagePoll(account.config.email, new Date().toISOString(), data);
 
-    const rawLog = account.quota
+    // Stash the provider-local poll log for the rotator to emit as a
+    // single consolidated line per cycle.
+    account.lastPollByProvider ??= {};
+    account.lastPollByProvider["ollama"] = account.quota
+      .filter(
+        (q) => (q as { providerId?: string }).providerId === "ollama",
+      )
       .map((q) => {
         const remain = q.resetTime
           ? Math.round(
@@ -69,7 +85,6 @@ export async function fetchProviderUsage(
         return `[${q.modelKey}: ${q.timerType} ${q.percentRemaining}%${fraction} in ${remain}]`;
       })
       .join(" | ");
-    ctx.log(`RAW POLL ${account.config.email} -> ${rawLog}`);
   } catch {
     // Network error, skip
   }
