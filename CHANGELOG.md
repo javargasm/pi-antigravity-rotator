@@ -4,6 +4,8 @@
 
 ### Fixed
 - **Ollama Content Array Normalization**: message `content` arrays (OpenAI-style blocks, e.g. from multimodal requests) are flattened to plain strings and `image_url` blocks are moved to the native `images` field before forwarding to Ollama Cloud, whose Go API rejects `messages[].content` arrays with `cannot unmarshal array` errors. Ported from ollama-rotator `ec5fa5a`; applies to the native `/api/chat` route and all v1 compat adapters.
+- **Native `/api/chat` Payload Parsing**: the native route now parses the Ollama payload shape (`{model, messages, stream, options}`) before internal validation, which previously rejected every native request with `400 body.request is required`. Requires `model` and a non-empty `messages` array.
+- **Ollama Catalog at Startup**: the Ollama Cloud model catalog is fetched once at boot (previously only inside quota poll cycles, every ~5 min), so provider-aware routing and `GET /v1/models` see Ollama models immediately.
 
 ## [2.7.0] - 2026-08-10
 
