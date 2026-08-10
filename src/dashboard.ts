@@ -115,7 +115,7 @@ export function serveConfigExportApi(
   res.writeHead(200, {
     "Content-Type": "application/json",
     "Content-Disposition":
-      'attachment; filename="pi-antigravity-rotator-config.json"',
+      'attachment; filename="tuxevil-rotator-config.json"',
   });
   res.end(JSON.stringify(rotator.getConfig(), null, 2));
 }
@@ -473,7 +473,7 @@ function renderAppShell(opts: {
   contentHtml: string;
   scriptSrc: string;
 }): string {
-  const pageTitle = opts.title === "Pi Antigravity Rotator" ? opts.title : (opts.title + " — Pi Antigravity Rotator");
+  const pageTitle = opts.title === "Tuxevil Rotator" ? opts.title : (opts.title + " — Tuxevil Rotator");
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -496,7 +496,7 @@ function renderAppShell(opts: {
   <div class="header-main">
     <div class="header-title-row">
       <div class="header-brand-group">
-        <h1>Pi Antigravity Rotator</h1>
+        <h1>Tuxevil Rotator</h1>
         <span class="header-version" id="headerVersion">v--</span>
         <button id="maskBtn" class="mask-btn" onclick="toggleMask()">PII: Visible</button>
       </div>
@@ -598,7 +598,7 @@ ${opts.contentHtml}
             <li style="margin-bottom:0;">Send it to Sebastián via Email (<a href="mailto:tuxevil@dragont.ec" style="color:var(--accent);text-decoration:underline;">tuxevil@dragont.ec</a>) or Discord.</li>
           </ol>
           <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-            <a href="https://github.com/tuxevil/pi-antigravity-rotator#donate-account-quota" target="_blank" class="btn-update-link" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:0.8rem;text-decoration:none;padding:6px 14px;flex:1;min-width:120px;text-align:center;">📖 Read Full Guide</a>
+            <a href="https://github.com/tuxevil/tuxevil-rotator#donate-account-quota" target="_blank" class="btn-update-link" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:0.8rem;text-decoration:none;padding:6px 14px;flex:1;min-width:120px;text-align:center;">📖 Read Full Guide</a>
             <a href="https://discord.gg/GgwVqTaKgK" target="_blank" class="btn-update-link" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:0.8rem;text-decoration:none;padding:6px 14px;border-color:rgba(88,101,242,0.4);color:#5865F2;flex:1;min-width:120px;text-align:center;">💬 Join Discord</a>
           </div>
         </div>
@@ -616,7 +616,7 @@ ${opts.contentHtml}
 }
 
 const DASHBOARD_HTML = renderAppShell({
-  title: "Pi Antigravity Rotator",
+  title: "Tuxevil Rotator",
   activeTab: "accounts",
   scriptSrc: "/static/dashboard.js",
 contentHtml: `

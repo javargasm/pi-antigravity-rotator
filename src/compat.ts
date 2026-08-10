@@ -1453,7 +1453,7 @@ export function serveOpenAIModels(res: ServerResponse): void {
         id,
         object: "model",
         created: 0,
-        owned_by: "pi-antigravity-rotator",
+        owned_by: "tuxevil-rotator",
         context_window: ctx,
         max_model_len: ctx,
         meta: {
@@ -1476,7 +1476,7 @@ export function serveGeminiModels(res: ServerResponse): void {
         baseModelId: family,
         version: "v2.0",
         displayName: id,
-        description: `Pi Antigravity Rotator Gemini-compatible model entry for ${id}`,
+        description: `Tuxevil Rotator Gemini-compatible model entry for ${id}`,
         inputTokenLimit: ctx,
         outputTokenLimit: ctx,
         supportedGenerationMethods: [

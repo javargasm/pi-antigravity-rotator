@@ -8,7 +8,7 @@ services:
     ports:
       - "127.0.0.1:51200:51200"
     environment:
-      PI_ROTATOR_DIR: /data
+      TUXEVIL_ROTATOR_DIR: /data
       PI_ROTATOR_TELEMETRY: "on"
       PI_ROTATOR_ADMIN_TOKEN: "${PI_ROTATOR_ADMIN_TOKEN:-}"
       ANTIGRAVITY_CLIENT_ID: "${ANTIGRAVITY_CLIENT_ID:-}"

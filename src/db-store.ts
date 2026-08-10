@@ -8,6 +8,7 @@
 import type { Config, PersistedState, TokenUsageTiered } from "./types.js";
 import type { PersistedResponsesStore } from "./responses-store.js";
 import { validateConfig } from "./validators.js";
+import { rotatorEnv } from "./env.js";
 import { applyConfigDefaults } from "./config-defaults.js";
 import {
   decryptAccountsInConfig,
@@ -24,7 +25,7 @@ export type { PersistedResponsesStore } from "./responses-store.js";
 // ----- Repository strategy -----
 
 function createRepository(): ISettingsRepository {
-  if (process.env.PI_ROTATOR_DATABASE_URL || process.env.DATABASE_URL) {
+  if (rotatorEnv("DATABASE_URL") || process.env.DATABASE_URL) {
     return new PostgresSettingsRepository();
   }
   return new FileSettingsRepository();
@@ -51,7 +52,7 @@ function assertInitialized(): void {
  * on this — both repositories handle their own I/O.
  */
 export function isDbConfigured(): boolean {
-  return !!(process.env.PI_ROTATOR_DATABASE_URL || process.env.DATABASE_URL);
+  return !!(rotatorEnv("DATABASE_URL") || process.env.DATABASE_URL);
 }
 
 export async function initDb(): Promise<void> {

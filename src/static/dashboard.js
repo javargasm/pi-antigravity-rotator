@@ -2275,7 +2275,7 @@ async function exportConfig() {
   var url = URL.createObjectURL(blob);
   var a = document.createElement("a");
   a.href = url;
-  a.download = "pi-antigravity-rotator-config.json";
+  a.download = "tuxevil-rotator-config.json";
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -2970,7 +2970,7 @@ function renderUpdateBanner(updateInfo) {
     escapeHtml(updateInfo.currentVersion) +
     ")</span>";
   actions.innerHTML =
-    '<a class="btn-update-link" href="https://github.com/tuxevil/pi-antigravity-rotator/releases" target="_blank">Changelog</a>' +
+    '<a class="btn-update-link" href="https://github.com/tuxevil/tuxevil-rotator/releases" target="_blank">Changelog</a>' +
     '<button class="btn-update" id="btnDoUpdate" onclick="doSelfUpdate()">Update Now</button>' +
     '<button class="btn-update-dismiss" onclick="dismissUpdate(\'' +
     escapeHtml(updateInfo.latestVersion) +

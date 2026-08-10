@@ -16,7 +16,7 @@ RUN mkdir -p /data && chown -R node:node /app /data
 
 USER node
 
-ENV PI_ROTATOR_DIR=/data
+ENV TUXEVIL_ROTATOR_DIR=/data
 EXPOSE 51200
 VOLUME ["/data"]
 

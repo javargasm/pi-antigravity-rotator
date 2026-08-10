@@ -34,7 +34,7 @@ export async function runDoctor(
 
   if (!getConfiguredAdminToken(env)) {
     warnings.push(
-      "PI_ROTATOR_ADMIN_TOKEN is not configured; dashboard and /api/* remain open on the bound interface.",
+      "TUXEVIL_ROTATOR_ADMIN_TOKEN is not configured; dashboard and /api/* remain open on the bound interface.",
     );
   }
 
@@ -59,7 +59,7 @@ export async function runDoctor(
   const cfg = getCachedConfig();
   if (!cfg) {
     warnings.push(
-      "No accounts config found. Run 'pi-antigravity-rotator login' to add your first account.",
+      "No accounts config found. Run 'tuxevil-rotator login' to add your first account.",
     );
   }
 
@@ -86,14 +86,14 @@ export async function runDoctor(
       backupCount: backups.length,
       firstBackup: backups[0] ?? null,
       adminTokenConfigured: !!getConfiguredAdminToken(env),
-      bindHost: env.PI_ROTATOR_BIND_HOST ?? null,
+      bindHost: env.TUXEVIL_ROTATOR_BIND_HOST ?? env.TUXEVIL_ROTATOR_BIND_HOST ?? null,
       storageBackend: dbConfigured ? "postgresql" : "file",
     },
   };
 }
 
 export function printDoctorReport(result: DoctorResult): void {
-  console.log("Pi Antigravity Rotator Doctor");
+  console.log("Tuxevil Rotator Doctor");
   console.log();
   console.log(`Status: ${result.ok ? "OK" : "ERROR"}`);
   console.log();

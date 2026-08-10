@@ -8,6 +8,7 @@ import pg from "pg";
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { getConfigDir } from "./paths.js";
+import { rotatorEnv } from "./env.js";
 import {
   backupFile,
   readTextFile,
@@ -90,7 +91,7 @@ export class PostgresSettingsRepository implements ISettingsRepository {
     if (this.initialized) return;
 
     const connectionString =
-      process.env.PI_ROTATOR_DATABASE_URL || process.env.DATABASE_URL;
+      rotatorEnv("DATABASE_URL") || process.env.DATABASE_URL;
     this.pool = new Pool({
       connectionString,
       ssl:

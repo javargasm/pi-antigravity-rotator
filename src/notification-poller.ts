@@ -1,7 +1,7 @@
 // Notification poller — fetches admin broadcast notifications from the telemetry server
 //
 // Polls GET /v1/notifications?version=x.y.z every 30 minutes.
-// Respects PI_ROTATOR_TELEMETRY=off — if telemetry is disabled, no polling.
+// Respects TUXEVIL_ROTATOR_TELEMETRY=off — if telemetry is disabled, no polling.
 // Fire-and-forget: never throws, never blocks, never affects core rotator flow.
 
 import { readFileSync } from "node:fs";
@@ -9,6 +9,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { logger } from "./logger.js";
 import { isTelemetryEnabled } from "./telemetry.js";
+import { rotatorEnv } from "./env.js";
 
 const notifLogger = logger.child("notifications");
 
@@ -25,13 +26,13 @@ export function resolveTelemetryBase(raw: string | undefined): string {
 	} catch {
 		notifLogger.log(
 			"warn",
-			"Ignoring invalid PI_ROTATOR_TELEMETRY_URL for notifications; using the default HTTPS endpoint.",
+			"Ignoring invalid TUXEVIL_ROTATOR_TELEMETRY_URL for notifications; using the default HTTPS endpoint.",
 		);
 		return DEFAULT_TELEMETRY_BASE;
 	}
 }
 
-const TELEMETRY_BASE = resolveTelemetryBase(process.env.PI_ROTATOR_TELEMETRY_URL);
+const TELEMETRY_BASE = resolveTelemetryBase(rotatorEnv("TELEMETRY_URL"));
 const NOTIFICATIONS_URL = `${TELEMETRY_BASE}/v1/notifications`;
 
 const POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes

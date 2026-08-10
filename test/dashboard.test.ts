@@ -53,7 +53,7 @@ describe("dashboard", () => {
   it("serves a complete HTML document", () => {
     const html = renderDashboard();
     assert.match(html, /^<!DOCTYPE html>/);
-    assert.match(html, /<title>Pi Antigravity Rotator<\/title>/);
+    assert.match(html, /<title>Tuxevil Rotator<\/title>/);
     assert.match(html, /<script src="\/static\/dashboard\.js"><\/script>/);
   });
 

@@ -1,9 +1,9 @@
-// CLI entry point for pi-antigravity-rotator
+// CLI entry point for tuxevil-rotator
 // Usage:
-//   pi-antigravity-rotator start     Start the proxy
-//   pi-antigravity-rotator login     Add a new account
-//   pi-antigravity-rotator status    Show account status
-//   pi-antigravity-rotator keys      Manage virtual API keys
+//   tuxevil-rotator start     Start the proxy
+//   tuxevil-rotator login     Add a new account
+//   tuxevil-rotator status    Show account status
+//   tuxevil-rotator keys      Manage virtual API keys
 
 import { getConfigDir } from "./paths.js";
 
@@ -29,10 +29,10 @@ switch (command) {
   }
   case "login": {
     // Mirror the environment of the installed systemd service unit
-    // (PI_ROTATOR_*, ANTIGRAVITY_*, DATABASE_URL) into this CLI process so
+    // (TUXEVIL_ROTATOR_*, ANTIGRAVITY_*, DATABASE_URL) into this CLI process so
     // login talks to the same backend store the running service uses. Without
     // this, login would write to the on-disk accounts.json while the service
-    // (configured with PI_ROTATOR_DATABASE_URL) reads from PostgreSQL.
+    // (configured with TUXEVIL_ROTATOR_DATABASE_URL) reads from PostgreSQL.
     const { loadSystemdEnvironment } = await import("./systemd-env.js");
     loadSystemdEnvironment();
     const { initDb } = await import("./db-store.js");
@@ -91,7 +91,7 @@ switch (command) {
     const initDb = (await import("./db-store.js")).initDb;
     const { isDbConfigured } = await import("./db-store.js");
     if (!isDbConfigured()) {
-      console.error("Virtual keys require PostgreSQL. Set PI_ROTATOR_DATABASE_URL.");
+      console.error("Virtual keys require PostgreSQL. Set TUXEVIL_ROTATOR_DATABASE_URL.");
       process.exit(1);
     }
     await initDb();
@@ -109,7 +109,7 @@ switch (command) {
     if (subAction === "list") {
       const keys = await listVirtualKeys();
       if (keys.length === 0) {
-        console.log("No virtual keys found. Use 'pi-antigravity-rotator keys generate' to create one.");
+        console.log("No virtual keys found. Use 'tuxevil-rotator keys generate' to create one.");
       } else {
         console.log(`${keys.length} virtual key(s):`);
         console.log("─".repeat(70));
@@ -163,7 +163,7 @@ switch (command) {
     if (subAction === "delete") {
       const hash = args[2];
       if (!hash) {
-        console.error("Usage: pi-antigravity-rotator keys delete <hash>");
+        console.error("Usage: tuxevil-rotator keys delete <hash>");
         process.exit(1);
       }
       const deleted = await deleteVirtualKey(hash);
@@ -177,23 +177,23 @@ switch (command) {
     }
 
     console.error(`Unknown subcommand: ${subAction}`);
-    console.log("Usage: pi-antigravity-rotator keys [list|generate|delete]");
+    console.log("Usage: tuxevil-rotator keys [list|generate|delete]");
     process.exit(1);
   }
   break;
   default:
-    console.log("Pi Antigravity Rotator");
+    console.log("Tuxevil Rotator");
     console.log();
     console.log("Usage:");
-    console.log("  pi-antigravity-rotator start     Start the proxy (default)");
-    console.log("  pi-antigravity-rotator login     Add a new Google account");
+    console.log("  tuxevil-rotator start     Start the proxy (default)");
+    console.log("  tuxevil-rotator login     Add a new Google account");
     console.log(
-      "  pi-antigravity-rotator status    Show account status (JSON)",
+      "  tuxevil-rotator status    Show account status (JSON)",
     );
     console.log(
-      "  pi-antigravity-rotator doctor    Validate config and local state",
+      "  tuxevil-rotator doctor    Validate config and local state",
     );
-    console.log("  pi-antigravity-rotator keys     Manage virtual API keys");
+    console.log("  tuxevil-rotator keys     Manage virtual API keys");
     console.log(
       "                                 list   - List all virtual keys",
     );
@@ -206,10 +206,10 @@ switch (command) {
     console.log();
     console.log("Options:");
     console.log(
-      "  --config-dir <path>    Config directory (default: ~/.pi-antigravity-rotator/)",
+      "  --config-dir <path>    Config directory (default: ~/.tuxevil-rotator/)",
     );
     console.log();
     console.log("Environment:");
-    console.log("  PI_ROTATOR_DIR         Config directory override");
+    console.log("  TUXEVIL_ROTATOR_DIR         Config directory override");
     process.exit(command === "help" || command === "--help" ? 0 : 1);
 }

@@ -8,9 +8,9 @@ import type { Config } from "../src/types.js";
 // Keep direct execution of this file from persisting its fixture accounts in
 // the operator's real config directory. `npm test` already sets this env var,
 // but `node --test test/v2-routing.test.ts` does not.
-if (!process.env.PI_ROTATOR_DIR) {
-  process.env.PI_ROTATOR_DIR = mkdtempSync(
-    join(tmpdir(), "pi-antigravity-v2-routing-"),
+if (!process.env.TUXEVIL_ROTATOR_DIR) {
+  process.env.TUXEVIL_ROTATOR_DIR = mkdtempSync(
+    join(tmpdir(), "tuxevil-v2-routing-"),
   );
 }
 
@@ -117,7 +117,7 @@ describe("v2 routing and status", () => {
     rotator.stopQuotaPolling();
     const status = rotator.getStatus();
     assert.equal(status.security.adminTokenConfigured, false);
-    assert.match(status.security.warning || "", /PI_ROTATOR_ADMIN_TOKEN/);
+    assert.match(status.security.warning || "", /TUXEVIL_ROTATOR_ADMIN_TOKEN/);
   });
 
   it("surfaces proxy exposure warnings even when admin auth is configured", () => {
@@ -129,7 +129,7 @@ describe("v2 routing and status", () => {
     assert.match(status.security.warning || "", /proxy routes are unauthenticated/);
     assert.doesNotMatch(
       status.security.warning || "",
-      /PI_ROTATOR_ADMIN_TOKEN is not configured/,
+      /TUXEVIL_ROTATOR_ADMIN_TOKEN is not configured/,
     );
   });
 

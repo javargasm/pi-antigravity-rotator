@@ -5,6 +5,11 @@ import { isDbConfigured, queryDb } from "./db-store.js";
 const KEY_PREFIX = "rk-";
 const CACHE_TTL_MS = 60_000; // 1 minute in-memory cache
 
+// PBKDF2 salts for virtual-key hashing. New keys use the current salt;
+// the legacy salt is kept so pre-rebrand keys continue to verify.
+const VK_SALT_CURRENT = "tuxevil-rotator-vk-salt";
+const VK_SALT_LEGACY = "pi-antigravity-rotator-vk-salt";
+
 interface CachedKey {
   key: VirtualKey | null;
   fetchedAt: number;
@@ -17,14 +22,16 @@ let hasKeysCache: { value: boolean; fetchedAt: number } | null = null;
 const pendingLastActive = new Set<string>();
 let lastActiveFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
+export function hashKeyWithSalt(rawKey: string, salt: string): string {
+  return pbkdf2Sync(rawKey.trim(), salt, 10_000, 32, "sha256").toString("hex");
+}
+
 export function hashKey(rawKey: string): string {
-  return pbkdf2Sync(
-    rawKey.trim(),
-    "pi-antigravity-rotator-vk-salt",
-    10_000,
-    32,
-    "sha256",
-  ).toString("hex");
+  return hashKeyWithSalt(rawKey, VK_SALT_CURRENT);
+}
+
+export function legacyHashKey(rawKey: string): string {
+  return hashKeyWithSalt(rawKey, VK_SALT_LEGACY);
 }
 
 export function maskKey(rawKey: string): string {
@@ -97,7 +104,7 @@ export async function generateVirtualKey(params: {
 }): Promise<{ rawKey: string; key: VirtualKey }> {
   if (!isDbConfigured()) {
     throw new Error(
-      "Virtual keys require PostgreSQL database (PI_ROTATOR_DATABASE_URL)",
+      "Virtual keys require PostgreSQL database (TUXEVIL_ROTATOR_DATABASE_URL)",
     );
   }
 
@@ -149,8 +156,8 @@ export async function lookupVirtualKey(
 
   try {
     const res = await queryDb(
-      "SELECT * FROM rotator_virtual_keys WHERE token_hash = $1",
-      [tokenHash],
+      "SELECT * FROM rotator_virtual_keys WHERE token_hash = $1 OR token_hash = $2 LIMIT 1",
+      [tokenHash, legacyHashKey(rawKey)],
     );
 
     if (res.rows.length === 0) {

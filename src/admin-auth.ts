@@ -21,7 +21,9 @@ export function setPersistedAdminToken(token: string | null): void {
 export function getConfiguredAdminToken(
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
-  const token = env.PI_ROTATOR_ADMIN_TOKEN?.trim();
+  const token =
+    env.TUXEVIL_ROTATOR_ADMIN_TOKEN?.trim() ||
+    env.PI_ROTATOR_ADMIN_TOKEN?.trim();
   if (token) return token;
   return persistedToken;
 }
@@ -50,7 +52,7 @@ export interface ResolvedAdminToken {
 
 /**
  * Resolve the effective admin token, generating and persisting one if needed.
- * Priority: PI_ROTATOR_ADMIN_TOKEN env var > repository > generate new.
+ * Priority: TUXEVIL_ROTATOR_ADMIN_TOKEN env var > repository > generate new.
  *
  * When a token is generated, it is persisted to the repository and returned.
  * The caller is responsible for printing it to the operator.
@@ -58,7 +60,9 @@ export interface ResolvedAdminToken {
 export async function ensureAdminToken(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedAdminToken> {
-  const envToken = env.PI_ROTATOR_ADMIN_TOKEN?.trim();
+  const envToken =
+    env.TUXEVIL_ROTATOR_ADMIN_TOKEN?.trim() ||
+    env.PI_ROTATOR_ADMIN_TOKEN?.trim();
   if (envToken) {
     return { token: envToken, source: "env", generated: false };
   }

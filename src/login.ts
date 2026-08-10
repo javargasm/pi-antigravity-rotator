@@ -37,7 +37,7 @@ function askQuestion(prompt: string): Promise<string> {
 }
 
 export async function runLogin(): Promise<void> {
-	console.log("=== Pi Antigravity Rotator - Add Account ===");
+	console.log("=== Tuxevil Rotator - Add Account ===");
 	console.log();
 
 	const { verifier, challenge } = generatePkce();

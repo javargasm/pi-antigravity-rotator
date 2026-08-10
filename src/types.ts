@@ -1,5 +1,7 @@
 // Account types and configuration
 
+import { rotatorEnv } from "./env.js";
+
 export type AccountType = "pro" | "free";
 export type AccountTier = "ultra" | "pro" | "plus" | "free" | "unknown";
 export type RoutingPolicy =
@@ -707,15 +709,15 @@ export const QUOTA_API_URL =
 export const ANTIGRAVITY_VERSION =
 	process.env.PI_AI_ANTIGRAVITY_VERSION || "1.107.0";
 export const QUOTA_USER_AGENT =
-	process.env.PI_ROTATOR_QUOTA_USER_AGENT ||
+	rotatorEnv("QUOTA_USER_AGENT") ||
 	`antigravity/${ANTIGRAVITY_VERSION} darwin/arm64`;
 export const REQUEST_USER_AGENT =
-  process.env.PI_ROTATOR_REQUEST_USER_AGENT || QUOTA_USER_AGENT;
+  rotatorEnv("REQUEST_USER_AGENT") || QUOTA_USER_AGENT;
 export const REQUEST_GOOG_API_CLIENT =
-  process.env.PI_ROTATOR_X_GOOG_API_CLIENT ||
+  rotatorEnv("X_GOOG_API_CLIENT") ||
   "google-cloud-sdk vscode_cloudshelleditor/0.1";
 export const REQUEST_CLIENT_METADATA =
-  process.env.PI_ROTATOR_CLIENT_METADATA ||
+  rotatorEnv("CLIENT_METADATA") ||
   JSON.stringify({
     ideType: "ANTIGRAVITY",
     platform: "MACOS",

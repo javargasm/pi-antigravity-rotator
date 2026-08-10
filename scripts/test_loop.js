@@ -4,7 +4,7 @@ async function main() {
     const CLIENT_ID = process.env.ANTIGRAVITY_CLIENT_ID;
     const CLIENT_SECRET = process.env.ANTIGRAVITY_CLIENT_SECRET;
     if (!CLIENT_ID || !CLIENT_SECRET) throw new Error("Set ANTIGRAVITY_CLIENT_ID and ANTIGRAVITY_CLIENT_SECRET before running this script.");
-    const accounts = JSON.parse(fs.readFileSync("/root/.pi-antigravity-rotator/accounts.json", "utf8")).accounts;
+    const accounts = JSON.parse(fs.readFileSync("/root/.tuxevil-rotator/accounts.json", "utf8")).accounts;
 
     for (let i = 0; i < accounts.length; i++) {
         const account = accounts[i];

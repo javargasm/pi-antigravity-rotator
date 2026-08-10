@@ -2,10 +2,10 @@
 
 ## Config File Location
 
-Config files are stored in `~/.pi-antigravity-rotator/` by default. Override with:
+Config files are stored in `~/.tuxevil-rotator/` by default. Override with:
 
 ```bash
-export PI_ROTATOR_DIR=/path/to/config
+export TUXEVIL_ROTATOR_DIR=/path/to/config
 
 # Or CLI flag
 pi-antigravity-rotator start --config-dir /path/to/config
@@ -15,7 +15,7 @@ pi-antigravity-rotator start --config-dir /path/to/config
 
 | Variable | Description |
 |----------|-------------|
-| `PI_ROTATOR_DIR` | Config directory path (default: `~/.pi-antigravity-rotator/`) |
+| `TUXEVIL_ROTATOR_DIR` | Config directory path (default: `~/.tuxevil-rotator/`) |
 | `PI_ROTATOR_DATABASE_URL` | PostgreSQL connection string for Virtual Keys and Spend Logging |
 | `DATABASE_URL` | Fallback PostgreSQL connection string |
 | `PI_ROTATOR_ENCRYPTION_KEY` | Secret used to encrypt OAuth refresh tokens at rest. A 64-character hexadecimal key is recommended. `ENCRYPTION_KEY` is accepted as a fallback. |

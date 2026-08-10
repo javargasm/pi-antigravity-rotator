@@ -2698,7 +2698,7 @@ export class AccountRotator {
 
     const adminWarning = getConfiguredAdminToken()
       ? null
-      : `Admin routes are exposed on ${this.config.bindHost}:${this.config.proxyPort} because PI_ROTATOR_ADMIN_TOKEN is not configured.`;
+      : `Admin routes are exposed on ${this.config.bindHost}:${this.config.proxyPort} because TUXEVIL_ROTATOR_ADMIN_TOKEN is not configured.`;
     const proxyWarning = getProxyExposureWarning(this.config);
 
     return {
