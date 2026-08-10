@@ -45,6 +45,20 @@ Multi-account load balancing, per-model quota routing, account health scoring, a
 
 ---
 
+## v2.8 Highlights
+
+- **Parent-Account Credential Model**: Each account (email) is now the parent entity and may hold per-provider credentials — a single human with both a Google Antigravity OAuth token and an Ollama Cloud API key lives in one account row. Login (`login --provider <id>`) and the legacy importer merge credentials onto existing accounts instead of duplicating by email.
+- **Antigravity quota pools consolidated by family**: One quota bucket per family — `claude` (every Claude variant + gpt-oss) and `gemini` (every Gemini variant) — instead of one per model. The Antigravity quota API reports the same bucket for all of them, and the dashboard's consolidated RAW POLL line now shows both providers at once, with Antigravity pools first and Ollama last.
+- **Ollama model pricing in `MODEL_PRICING`**: Spend summaries now report real USD for Ollama traffic (18 entries ported from the predecessor project's catalog of paid prices). Unknown models still return 0.
+- **Routing robustness**: Dispatch for Ollama models now keys on the live catalog (`rotator.getOllamaModels()`), so models without `:` in the name (`minimax-m3`, `kimi-k3`, `glm-5.1`, `nemotron-3-super`, `deepseek-v4-pro`) no longer leak to the Antigravity adapter. Multi-turn tool-call requests now parse `function.arguments` to a real object before forwarding, since Ollama's Go API rejects OpenAI-style JSON-encoded strings.
+
+## v2.7 Highlights
+
+- **Multi-Provider Support**: The rotator now routes through two provider families. Google Antigravity accounts (OAuth, default) and Ollama Cloud accounts (static API keys, `login --provider ollama`) coexist in one account store, with per-provider model catalog resolution.
+- **Ollama Cloud Compatibility (B2)**: `POST /v1/chat/completions`, `/v1/responses`, and `/v1/messages` translate requests to Ollama's native `api/chat` NDJSON protocol for Ollama models; streaming deltas (including `tool_calls` and `usage`) are converted to SSE in both OpenAI and Anthropic formats. `GET /v1/models` lists the Ollama catalog (`owned_by: "ollama"`), and the native `POST /api/chat` endpoint routes Ollama models to Ollama accounts.
+- **Legacy Account Migration**: On startup, Ollama Cloud accounts from `~/.ollama-rotator/accounts.json` (the predecessor product, overridable via `OLLAMA_ROTATOR_DIR`) are imported automatically and merged onto the matching email — `provider: "ollama"`, preserving `label`/`tier`/`type`. Re-import is idempotent.
+- **Flat-shape compatibility**: Existing configs with the legacy flat field layout (`apiKey`/`refreshToken` at the top level) are still accepted and normalized on load to the parent-account credential model.
+
 ## v2.6 Highlights
 
 - **Lossless Prompt Compression**: Optional Lite and RTK compression modes preserve code-critical content while reducing prompt size. Enable `compressionMode` in `accounts.json` or override a request with `X-Rotator-Compression: lite`, `rtk`, or `rtk+lite`.
@@ -64,6 +78,8 @@ Multi-account load balancing, per-model quota routing, account health scoring, a
 - **Spend Logging & Audit Inspector**: PostgreSQL audit trail of all requests, token metrics, TTFB/Total duration, Base64 media sanitization, 6-decimal USD cost breakdown, and Request/Response payload viewer.
 - **Multi-page Web Dashboard**: Unified header navigation connecting Accounts, Virtual Keys, and Spend Logs, featuring customizable column visibility, search/filtering, and instant PII masking.
 - **PostgreSQL Persistence Backend**: Enable `PI_ROTATOR_DATABASE_URL` for high-concurrency key validation, persistent spend logging, and retention policies.
+
+---
 
 ### Compression and token encryption
 
@@ -90,17 +106,21 @@ Existing `enc:v1` records remain decryptable during migration; newly written rec
 
 ## Features
 
-- **OpenAI-compatible gateway** — Drop-in replacement endpoint (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`) for any agent or tool
-- **Multi-account load balancing** — Distributes traffic across a pool of Google accounts with per-model independent routing
-- **One-command account setup** — `pi-antigravity-rotator login` auto-discovers (or provisions) the Cloud Code companion project for brand-new accounts and, on systemd-backed installs, writes to the same PostgreSQL store the service reads from
+- **Multi-provider gateway** — OpenAI-compatible endpoint (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`) plus native Ollama (`/api/chat`) routes; any agent or tool can use either
+- **Google Antigravity accounts** — OAuth load balancing across a pool, with per-model independent routing
+- **Ollama Cloud accounts** — Static-API-key accounts (`login --provider ollama`) for the Ollama Cloud catalog (`gpt-oss`, `gemma4`, `kimi-k3`, `minimax-m3`, `qwen3.5`, `glm-5`, `mistral-large-3`, `nemotron-3`, `deepseek-v4`)
+- **Parent-account credentials** — One email, many providers; the same human with Google OAuth and an Ollama key is one row in `accounts.json`, with `credentials: [{provider, apiKey|refreshToken, projectId}]` instead of duplicate rows by email
+- **Multi-account load balancing** — Distributes traffic across a pool of accounts with per-model independent routing
+- **One-command account setup** — `pi-antigravity-rotator login` auto-discovers (or provisions) the Cloud Code companion project for brand-new Google accounts; `login --provider ollama` adds an Ollama Cloud API key to an existing email or creates a new one
 - **Smart rotation & health scoring** — Four routing policies (`timer-first`, `tier-first`, `quota-first`, `hybrid`) with composite health scores per account
-- **Real-time quota monitoring** — Polls Google's quota API every 5 minutes with per-model, per-account tracking
+- **Real-time quota monitoring** — Polls each provider's quota API on its own cadence; Antigravity quota pools are consolidated by family (`claude`, `gemini`) and Ollama reports session/weekly usage
 - **Infringement & abuse detection** — Flags accounts on enforcement signals and triggers protective pause to preserve the rest of the pool
 - **Virtual Keys & access control** — Issue scoped `rk-...` keys for teams, agents, or CI pipelines with per-key model restrictions
-- **Spend logging & audit inspector** — Full request/response audit trail with 6-decimal USD cost estimates (requires PostgreSQL)
+- **Spend logging & audit inspector** — Full request/response audit trail with 6-decimal USD cost estimates for both Antigravity and Ollama traffic (requires PostgreSQL)
+- **Legacy importer** — On startup, automatically merges Ollama Cloud accounts from `~/.ollama-rotator/accounts.json` (the predecessor product) onto existing accounts, idempotently
 - **Web dashboard** — Real-time routing state, quota bars, latency tracking (p50/p95), savings chart, activity heatmap, and routing inspector
 - **State persistence** — Survives restarts; routing assignments, cooldowns, and flags saved to disk or PostgreSQL
-- **Tool/function calling** — Fully supported in OpenAI and Anthropic formats, including multi-turn and parallel tool calls, with reliable function-name resolution for tool responses across turns
+- **Tool/function calling** — Fully supported in OpenAI and Anthropic formats, including multi-turn and parallel tool calls, with reliable function-name resolution for tool responses across turns. Ollama forwards `function.arguments` as a parsed object (OpenAI sends it as a JSON string and Ollama's Go API rejects that).
 - **Reasoning/thinking visibility** — Interleaved thinking blocks exposed as `reasoning_content` / `thinking_delta` in real time
 
 [Full feature list →](docs/how-it-works.md)
@@ -115,9 +135,12 @@ Existing `enc:v1` records remain decryptable during migration; newly written rec
 
 ```bash
 npm install -g pi-antigravity-rotator
-pi-antigravity-rotator login
+pi-antigravity-rotator login                  # Google Antigravity (default)
+pi-antigravity-rotator login --provider ollama  # Ollama Cloud (static API key)
 pi-antigravity-rotator start
 ```
+
+Ollama Cloud accounts from a previous `~/ollama-rotator` install are imported automatically at startup — no manual step required.
 
 ### Option B: Docker
 
@@ -131,7 +154,10 @@ docker compose up -d
 ```bash
 git clone https://github.com/tuxevil/pi-antigravity-rotator.git
 cd pi-antigravity-rotator
-npm install && npm run login && npm start
+npm install
+npm run login                       # Google Antigravity
+npm run login -- --provider ollama  # Ollama Cloud
+npm start
 ```
 
 Dashboard opens at `http://localhost:51200/dashboard`
@@ -168,13 +194,25 @@ graph LR
     A[Your Agent] -->|OpenAI / Anthropic API| B["pi-antigravity-rotator<br/>localhost:51200"]
     B -->|Smart Routing| C[Google Account 1]
     B -->|Smart Routing| D[Google Account 2]
-    B -->|Smart Routing| E[Google Account N]
-    C --> F[Google Antigravity]
-    D --> F
-    E --> F
+    B -->|Smart Routing| E[Ollama Cloud Account 1]
+    B -->|Smart Routing| F[Ollama Cloud Account 2]
+    B -->|Smart Routing| G[... up to N]
+    C --> H[Google Antigravity]
+    D --> H
+    E --> I[Ollama Cloud]
+    F --> I
+    G --> I
+
+    H -.Quota API<br/>every 5 min.-> B
+    I -.Usage API<br/>every 5 min.-> B
 ```
 
-Each model routes to its own best available account independently. Multiple agents using different models never interfere with each other's rotation.
+Each model routes to its own best available account independently. The same email can hold both a Google OAuth credential and an Ollama Cloud API key (parent-account model) — the rotator picks the right credential at request time based on the destination model.
+
+How model routing works:
+- **Antigravity pool** — Claude variants (`claude-opus-4-6-thinking`, `claude-sonnet-4-6`, `gpt-oss-120b`) share the `claude` quota bucket; Gemini variants share the `gemini` bucket.
+- **Ollama pool** — Any model returned by `https://ollama.com/api/tags` (e.g. `gemma4:31b`, `gpt-oss:20b`, `minimax-m3`, `kimi-k3`) routes to an Ollama credential.
+- The pool is selected by the destination model's provider; a single account with both credentials participates in both pools.
 
 [How it works in detail →](docs/how-it-works.md)
 
@@ -186,8 +224,8 @@ After starting the proxy, open `http://localhost:51200/dashboard`.
 
 The dashboard shows:
 - **Routing state** — real-time status, uptime, requests, protective pause timers
-- **Account cards** — quota bars, per-model timers, health scores, flagged alerts
-- **Token usage & savings** — interactive chart with time ranges and CSV/JSON export
+- **Account cards** — quota bars (Antigravity family buckets `claude` / `gemini`; Ollama session/weekly usage), per-model timers, health scores, flagged alerts
+- **Token usage & savings** — interactive chart with time ranges and CSV/JSON export (real USD for both providers)
 - **Latency (p50/p95)** — per-model TTFB and total duration
 - **Activity heatmap** — 60-day GitHub-style request intensity grid
 - **Quota forecast** — tier-weighted depletion predictions
