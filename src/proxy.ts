@@ -2092,7 +2092,7 @@ export function startProxy(
 
     // OpenAI-compatible adapter route (additive; does not affect native v1internal route)
     if (method === "GET" && pathname === "/v1/models") {
-      serveOpenAIModels(res);
+      serveOpenAIModels(res, rotator);
       return;
     }
 

@@ -745,7 +745,9 @@ export const OLLAMA_API_BASE = "https://ollama.com/api";
 export const OLLAMA_OPENAI_BASE = "https://ollama.com/v1";
 export const OLLAMA_USAGE_URL = "https://ollama.com/api/usage";
 export const OLLAMA_TAGS_URL = "https://ollama.com/api/tags";
-export const OLLAMA_CHAT_URL = "https://ollama.com/api/chat";
+// Mutable so tests can redirect to a local stub (same pattern as ANTIGRAVITY_ENDPOINTS).
+export const OLLAMA_CHAT_ENDPOINTS = ["https://ollama.com/api/chat"];
+export const OLLAMA_CHAT_URL = OLLAMA_CHAT_ENDPOINTS[0];
 
 // User-Agent sent to ollama.com (defaults are spoofed per docs examples).
 export const OLLAMA_USER_AGENT =

@@ -5,7 +5,7 @@
 
 import {
   applyModelAlias,
-  OLLAMA_CHAT_URL,
+  OLLAMA_CHAT_ENDPOINTS,
   OLLAMA_USER_AGENT,
 } from "../../types.js";
 import type { AccountRuntime } from "../../types.js";
@@ -82,14 +82,15 @@ export async function forwardRequest(
   delete forwardHeaders["transfer-encoding"];
   delete forwardHeaders["content-length"];
 
-  const response = await fetch(OLLAMA_CHAT_URL, {
+  const endpoint = OLLAMA_CHAT_ENDPOINTS[0] || "https://ollama.com/api/chat";
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: forwardHeaders,
     body: requestBody,
     signal,
   });
 
-  return { response, endpoint: OLLAMA_CHAT_URL };
+  return { response, endpoint };
 }
 
 /** Max bytes kept in the NDJSON buffer. */
