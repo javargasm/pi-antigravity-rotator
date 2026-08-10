@@ -1,6 +1,18 @@
 # Changelog
 
-## [Unreleased]
+## [2.7.0] - 2026-08-10
+
+### Added
+- **Multi-Provider Support**: The rotator now routes through two provider families. Google Antigravity accounts (OAuth, default) and Ollama Cloud accounts (static API keys, `login --provider ollama`) coexist in one account store, with per-provider model catalog resolution.
+- **Ollama Cloud Compatibility (B2)**: `POST /v1/chat/completions`, `/v1/responses`, and `/v1/messages` translate requests to Ollama's native `api/chat` NDJSON protocol for Ollama models; streaming deltas (including `tool_calls` and usage) are converted to SSE in both OpenAI and Anthropic formats. `GET /v1/models` lists the Ollama catalog (`owned_by: "ollama"`), and the native `/api/chat` endpoint routes Ollama models to Ollama accounts.
+- **Legacy Account Migration**: On startup, Ollama Cloud accounts from `~/.ollama-rotator/accounts.json` (the predecessor product, overridable via `OLLAMA_ROTATOR_DIR`) are imported automatically — tagged `provider: "ollama"`, preserving `label`/`tier`/`type`. Duplicate emails and entries without an API key are skipped.
+
+### Changed
+- `GET /v1/models` and the v1 translation layer are now provider-aware: Ollama models are no longer rejected with a `400` error; they are handled by the Ollama adapter.
+
+### Documentation
+- `docs/configuration.md`: new Providers section, provider-aware account fields table, and legacy migration notes.
+- `docs/adding-accounts.md`: Ollama Cloud login section and manual migration steps.
 
 ## [2.6.3] - 2026-08-05
 

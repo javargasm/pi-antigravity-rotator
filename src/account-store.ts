@@ -85,6 +85,81 @@ export async function removeAccountFromConfig(email: string): Promise<boolean> {
   return true;
 }
 
+function legacyOllamaRotatorAccountsFile(): string {
+  const envDir = process.env.OLLAMA_ROTATOR_DIR;
+  return join(envDir ?? homedir(), envDir ? "" : ".ollama-rotator", "accounts.json");
+}
+
+/**
+ * Import Ollama Cloud accounts from a legacy ~/ollama-rotator accounts.json
+ * (the predecessor product). Legacy entries hold their API key in `apiKey`
+ * and carry no `provider` field, so imported accounts are tagged provider
+ * "ollama". Entries whose email already exists in the active config, and
+ * entries with a missing apiKey or invalid fields, are skipped.
+ *
+ * Returns the number of accounts imported (0 when no legacy config exists).
+ */
+export async function importLegacyOllamaRotatorAccounts(
+  legacyFile = legacyOllamaRotatorAccountsFile(),
+): Promise<number> {
+  let raw: string;
+  try {
+    raw = await readFile(legacyFile, "utf-8");
+  } catch {
+    // No legacy config — nothing to do.
+    return 0;
+  }
+
+  let entries: unknown;
+  try {
+    entries = JSON.parse(raw);
+  } catch {
+    console.warn(`Skipping legacy ${legacyFile}: not valid JSON`);
+    return 0;
+  }
+  if (!Array.isArray(entries)) return 0;
+
+  const config = loadOrCreateAccountsConfig();
+  const seen = new Set(config.accounts.map((a) => a.email));
+  let imported = 0;
+
+  for (const entry of entries) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { email, apiKey, label, tier, type } = entry as Record<string, unknown>;
+    if (typeof email !== "string" || email.length === 0) continue;
+    if (typeof apiKey !== "string" || apiKey.trim() === "") {
+      console.warn(`  Skipping legacy account ${email}: missing apiKey`);
+      continue;
+    }
+
+    const account: AccountConfig = {
+      email,
+      provider: "ollama",
+      apiKey: apiKey.trim(),
+    };
+    if (typeof label === "string" && label !== "") account.label = label;
+    if (typeof tier === "string") account.tier = tier as AccountConfig["tier"];
+    if (typeof type === "string") account.type = type as AccountConfig["type"];
+    try {
+      validateAccountConfigLengths(account);
+    } catch {
+      console.warn(`  Skipping legacy account ${email}: invalid fields`);
+      continue;
+    }
+    if (seen.has(account.email)) continue;
+
+    config.accounts.push(account);
+    seen.add(account.email);
+    imported += 1;
+  }
+
+  if (imported > 0) {
+    await saveAccountsConfig(config);
+    console.log(`Imported ${imported} Ollama Cloud account(s) from legacy ${legacyFile}`);
+  }
+  return imported;
+}
+
 export async function ensurePiModelsConfig(): Promise<void> {
   await mkdir(PI_DIR, { recursive: true });
 

@@ -27,6 +27,32 @@ Re-running with the same email updates the existing entry.
 > different backends. Install the unit (see `sudo install` / the systemd setup)
 > or set `PI_ROTATOR_DATABASE_URL` explicitly so both use PostgreSQL.
 
+## Ollama Cloud Accounts
+
+Ollama Cloud uses a static API key that never expires (`ollama.com/settings/keys`):
+
+```bash
+tuxevil-rotator login --provider ollama
+```
+
+The command prompts for a label and pastes the API key. The account is stored with
+`provider: "ollama"` and is immediately usable for any model in the Ollama cloud
+catalog. No OAuth, no project binding, no key refresh needed.
+
+## Migrating from the Legacy Ollama Rotator
+
+If you previously ran the standalone `ollama-rotator` (config dir
+`~/.ollama-rotator/`, keyed by `OLLAMA_ROTATOR_DIR`), its Ollama Cloud accounts
+are picked up automatically on the first startup of this rotator: each entry is
+imported tagged `provider: "ollama"`, duplicates by email are skipped, and
+entries without an API key are ignored. Once the log shows
+`Imported N Ollama Cloud account(s) from legacy ...`, you can retire
+`~/.ollama-rotator/`.
+
+To migrate manually into a fresh install without starting the service, copy each
+entry from `~/.ollama-rotator/accounts.json` into the active `accounts.json` as
+`{ "email", "provider": "ollama", "apiKey", "label?" }`.
+
 ## Web-Based Login
 
 The dashboard includes a web-based OAuth login flow at `/login`. This is useful for:

@@ -43,6 +43,28 @@ export ANTIGRAVITY_CLIENT_SECRET="your-client-secret"
 
 If either variable is missing, the rotator falls back to the legacy client and emits a one-time deprecation warning. Keep secrets in an environment manager or deployment secret store; do not commit them to the repository.
 
+## Providers
+
+The rotator routes through two provider families. Each account in `accounts.json`
+carries a `provider` field selecting its family (default when absent: `google-antigravity`,
+i.e. legacy configs).
+
+| Provider | ID | Credential | Add accounts |
+|----------|-----|------------|--------------|
+| Google Antigravity | `google-antigravity` | OAuth refresh token (auto-discovered project) | `tuxevil-rotator login` |
+| Ollama Cloud | `ollama` | Static API key from `ollama.com/settings/keys` (never expires) | `tuxevil-rotator login --provider ollama` |
+
+Ollama Cloud models are exposed on the standard OpenAI/Anthropic-compatible routes:
+
+- `POST /v1/chat/completions`, `/v1/responses`, and `/v1/messages` translate requests to
+  the Ollama native `api/chat` endpoint and stream NDJSON deltas back as SSE (including
+  `tool_calls` and usage in the final `[DONE]` chunk).
+- `GET /v1/models` lists the Ollama catalog (`owned_by: "ollama"`).
+- When the `ollama` provider is enabled, the native `POST /api/chat` endpoint routes to it.
+
+Model names are matched per provider: models in Ollama's cloud catalog go to Ollama
+accounts, everything else routes to Google Antigravity.
+
 ## accounts.json
 
 The main configuration file. Created automatically by the `login` command, and editable by hand or via the dashboard UI.
@@ -121,12 +143,33 @@ The main configuration file. Created automatically by the `login` command, and e
 
 | Field | Description |
 |-------|-------------|
-| `email` | Google account email (auto-filled by login) |
-| `refreshToken` | OAuth refresh token (auto-filled by login) |
-| `projectId` | Cloud project ID discovered from Google during login |
+| `email` | Account email (auto-filled by login) |
+| `provider` | `google-antigravity` (default/legacy) or `ollama` — selects the credential fields required and the upstream routing |
+| `refreshToken` | Google OAuth refresh token (auto-filled by `login`, Google accounts only) |
+| `projectId` | Google Cloud project ID discovered during login (Google accounts only) |
 | `projectSource` | Optional metadata: `google` when discovered from Google, `manual` if edited by hand |
+| `apiKey` | Ollama Cloud API key (Ollama accounts only; never expires, see `ollama.com/settings/keys`) |
 | `label` | Display name on the dashboard (auto-filled, defaults to email username) |
 | `tier` | Optional: `ultra`, `pro`, `plus`, `free`, or `unknown` — used by `tier-first` and `hybrid` routing policies |
+
+```json
+{
+  "email": "my-ollama-user@example.com",
+  "provider": "ollama",
+  "apiKey": "ok-...",
+  "label": "ollama-cloud"
+}
+```
+
+## Automatic Migration from the Legacy Rotator
+
+On startup, the rotator checks for the predecessor product's account store
+(`~/.ollama-rotator/accounts.json`, or the `OLLAMA_ROTATOR_DIR` override) and
+imports any Ollama Cloud accounts found there into the active account store —
+tagged `provider: "ollama"`, preserving `label`/`tier`/`type`. Accounts whose
+email already exists are skipped (never overwritten), and entries without an
+API key are ignored with a warning. The import runs before the account list is
+loaded, so migrated accounts are usable on the very first boot.
 
 ## Model Configuration Overrides
 

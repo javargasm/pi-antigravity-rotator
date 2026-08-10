@@ -6,7 +6,7 @@ import { AccountRotator } from "./rotator.js";
 import { startProxy } from "./proxy.js";
 import { getConfigDir } from "./paths.js";
 import { TelemetryReporter, setActiveReporter } from "./telemetry.js";
-import { loadConfig as loadConfigFromStore } from "./account-store.js";
+import { loadConfig as loadConfigFromStore, importLegacyOllamaRotatorAccounts } from "./account-store.js";
 import {
   ensureAdminToken,
   getConfiguredAdminToken,
@@ -169,6 +169,7 @@ export async function main(): Promise<void> {
 
   await initDb();
   await runKeyMigrations();
+  await importLegacyOllamaRotatorAccounts();
   startRetentionCleanup();
 
   const config = loadConfig();

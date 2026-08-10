@@ -191,7 +191,7 @@ switch (command) {
     console.log();
     console.log("Usage:");
     console.log("  tuxevil-rotator start     Start the proxy (default)");
-    console.log("  tuxevil-rotator login     Add a new Google account");
+    console.log("  tuxevil-rotator login     Add a Google account (login --provider ollama for Ollama Cloud)");
     console.log(
       "  tuxevil-rotator status    Show account status (JSON)",
     );
