@@ -76,6 +76,33 @@ describe("importLegacyOllamaRotatorAccounts (F3)", () => {
 		assert.equal(b.tier, "pro");
 	});
 
+	it("imports accounts from a full legacy Config object", async () => {
+		writeFileSync(
+			legacyFile,
+			JSON.stringify({
+				proxyPort: 51201,
+				routingPolicy: "timer-first",
+				requestsPerRotation: 5,
+				accounts: [
+					{ email: "config-shape@example.com", apiKey: "ok-config-a" },
+					{ email: "config-shape-b@example.com", apiKey: "ok-config-b" },
+				],
+			}),
+		);
+
+		const n = await importLegacyOllamaRotatorAccounts(legacyFile);
+		assert.equal(n, 2);
+
+		const accounts = loadConfig().accounts as Array<{
+			email: string;
+			provider?: string;
+			apiKey?: string;
+		}>;
+		const a = accounts.find((c) => c.email === "config-shape@example.com")!;
+		assert.equal(a.provider, "ollama");
+		assert.equal(a.apiKey, "ok-config-a");
+	});
+
 	it("skips accounts whose email already exists", async () => {
 		await addAccountToConfig({
 			email: "legacy-a@example.com",
@@ -90,7 +117,10 @@ describe("importLegacyOllamaRotatorAccounts (F3)", () => {
 			email: string;
 			apiKey?: string;
 		}>;
-		assert.equal(accounts.length, 2);
+		const count = accounts.filter(
+			(c) => c.email === "legacy-a@example.com",
+		).length;
+		assert.equal(count, 1, "duplicate must not create a second entry");
 		const a = accounts.find((c) => c.email === "legacy-a@example.com")!;
 		assert.equal(a.apiKey, "ok-keep-me", "existing apiKey must not be overwritten");
 	});

@@ -117,13 +117,23 @@ export async function importLegacyOllamaRotatorAccounts(
     console.warn(`Skipping legacy ${legacyFile}: not valid JSON`);
     return 0;
   }
-  if (!Array.isArray(entries)) return 0;
+  // The predecessor's accounts.json is the full Config object
+  // ({proxyPort, routingPolicy, ..., accounts: [...]}); a bare array of
+  // accounts is accepted too for simplicity.
+  const rawAccounts = Array.isArray(entries)
+    ? entries
+    : typeof entries === "object" &&
+        entries !== null &&
+        Array.isArray((entries as { accounts?: unknown }).accounts)
+      ? (entries as { accounts: unknown[] }).accounts
+      : [];
+  if (rawAccounts.length === 0) return 0;
 
   const config = loadOrCreateAccountsConfig();
   const seen = new Set(config.accounts.map((a) => a.email));
   let imported = 0;
 
-  for (const entry of entries) {
+  for (const entry of rawAccounts) {
     if (typeof entry !== "object" || entry === null) continue;
     const { email, apiKey, label, tier, type } = entry as Record<string, unknown>;
     if (typeof email !== "string" || email.length === 0) continue;
