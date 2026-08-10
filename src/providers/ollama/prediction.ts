@@ -167,7 +167,7 @@ export class UsagePredictor {
     return { key, model, budgetsFrom: from, session, weekly, soonest };
   }
 
-  private burnRate(key: string, nowMs: number): number {
+  private burnRate(key: string, _nowMs: number): number {
     const meter = this.meters.get(key);
     if (!meter || meter.minutes.size === 0) return 0;
     const keys = [...meter.minutes.keys()];

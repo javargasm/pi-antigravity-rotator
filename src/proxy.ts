@@ -17,11 +17,13 @@ import {
 } from "./types.js";
 import type { AccountRuntime } from "./types.js";
 import type { AccountRotator } from "./rotator.js";
+import { getProviderForAccount } from "./providers/registry.js";
+import { isRecord } from "./compat/schema-sanitizer.js";
+import type { StreamAccumulator } from "./providers/adapter.js";
 import {
   forwardRequest,
   SseEventAccumulator,
   extractUsageFromSseEvent,
-  getBenchmarkSpec,
   GOOGLE_BENCHMARK_CONSTANTS,
 } from "./providers/google-antigravity/forward.js";
 export { forwardRequest, SseEventAccumulator, extractUsageFromSseEvent };
@@ -629,6 +631,7 @@ async function streamResponseBody(
   proxyLog: (msg: string, level?: "info" | "warn" | "error") => void,
   responseStatus: number,
   responseHeaders: Record<string, string>,
+  accumulator: StreamAccumulator = new SseEventAccumulator(),
 ): Promise<{
   inputTokens: number;
   outputTokens: number;
@@ -646,7 +649,7 @@ async function streamResponseBody(
   const nodeStream = Readable.fromWeb(
     body as import("node:stream/web").ReadableStream,
   );
-  const eventAccumulator = new SseEventAccumulator();
+  const eventAccumulator = accumulator;
   let firstUsage: { inputTokens: number; outputTokens: number } | null = null;
   let streamError: string | undefined;
   const streamStartMs = Date.now();
@@ -831,8 +834,8 @@ export async function benchmarkAccount(
     };
   }
 
-  const benchmarkSpec = getBenchmarkSpec(account);
-  rotator.startRequest(account, GOOGLE_BENCHMARK_CONSTANTS.model);
+  const benchmarkSpec = getProviderForAccount(account.config).getBenchmark(account);
+  rotator.startRequest(account, benchmarkSpec.body.model);
   const timeoutController = new AbortController();
   const timeout = setTimeout(
     () => timeoutController.abort(new Error("Benchmark timeout")),
@@ -845,7 +848,7 @@ export async function benchmarkAccount(
 
   try {
     await rotator.ensureValidToken(account);
-    const forwarded = await forwardRequest(
+    const forwarded = await getProviderForAccount(account.config).forwardRequest(
       account,
       benchmarkSpec.body,
       {},
@@ -877,7 +880,7 @@ export async function benchmarkAccount(
     return benchmarkFailure(account, startedAt, formatError(err), ttfbMs);
   } finally {
     clearTimeout(timeout);
-    rotator.finishRequest(account, GOOGLE_BENCHMARK_CONSTANTS.model);
+    rotator.finishRequest(account, benchmarkSpec.body.model);
   }
 }
 
@@ -1095,7 +1098,7 @@ export async function withRotation<T>(
       }
 
       rotator.recordUpstreamAttempt(account);
-      const forwarded = await forwardRequest(
+      const forwarded = await getProviderForAccount(account.config).forwardRequest(
         account,
         { ...body },
         originalHeaders,
@@ -1239,6 +1242,7 @@ async function handleProxyRequest(
   res: ServerResponse,
   rotator: AccountRotator,
   onComplete?: () => void,
+  nativeOllamaChat = false,
 ): Promise<void> {
   let bodyBuffer: Buffer;
   try {
@@ -1275,6 +1279,23 @@ async function handleProxyRequest(
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Invalid JSON body" }));
     return;
+  }
+
+  if (nativeOllamaChat) {
+    const parsed: unknown = JSON.parse(bodyBuffer.toString("utf-8"));
+    const raw = isRecord(parsed) ? parsed : {};
+    if (typeof raw.model !== "string" || raw.model === "") {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid request body: model required" }));
+      return;
+    }
+    body = {
+      project: "",
+      model: raw.model,
+      request: raw,
+      displayModel: raw.model,
+      requestType: "ollama-chat",
+    };
   }
 
   const auth = await authenticateVirtualKey(req, body.model);
@@ -1409,7 +1430,7 @@ async function handleProxyRequest(
     }
 
     const label = account.config.label || account.config.email;
-    const modelKey = resolveQuotaModelKey(body.model) ?? body.model; // quota routing
+    const modelKey = rotator.resolveQuotaModelKeyForDisplay(body.model) ?? body.model; // quota routing
     const displayModelKey = resolveDisplayModelKey(body.model); // metrics/logs
     const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
     proxyLog(
@@ -1460,7 +1481,7 @@ async function handleProxyRequest(
         await sleep(totalDelayMs);
       }
       rotator.recordUpstreamAttempt(account);
-      const forwarded = await forwardRequest(
+      const forwarded = await getProviderForAccount(account.config).forwardRequest(
         account,
         { ...body },
         flattenHeaders(req.headers),
@@ -1537,6 +1558,7 @@ async function handleProxyRequest(
           proxyLog,
           response.status,
           responseHeaders,
+          getProviderForAccount(account.config).createStreamAccumulator(),
         );
         const totalMs = Date.now() - requestStartMs;
         const ttfbMs = usage?.firstByteMs ?? totalMs;
@@ -2165,7 +2187,21 @@ export function startProxy(
       return;
     }
 
-    // Proxy route
+    // Native Ollama chat route (additive; /api/chat payload shape)
+    if (method === "POST" && pathname === "/api/chat") {
+      handleProxyRequest(req, res, rotator, scheduleSseBroadcast, true).catch(
+        (err) => {
+          log(`Unhandled error: ${err}`, rotator, "error");
+          if (!res.headersSent) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+          }
+          res.end(JSON.stringify({ error: "Internal proxy error" }));
+        },
+      );
+      return;
+    }
+
+    // Proxy route (native Antigravity v1internal)
     if (method === "POST" && url.includes("v1internal")) {
       handleProxyRequest(req, res, rotator, scheduleSseBroadcast).catch(
         (err) => {

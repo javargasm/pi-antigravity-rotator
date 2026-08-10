@@ -106,6 +106,7 @@ function createRotatorStub(tracking: Tracking): AccountRotator {
   return {
     getActiveAccount: async () => account,
     getRetryAfterMs: () => 0,
+    resolveQuotaModelKeyForDisplay: () => "gemini-3.5-flash",
     rotateToNext: async () => null,
     finishRequest: () => {
       tracking.finishRequests++;

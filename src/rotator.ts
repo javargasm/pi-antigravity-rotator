@@ -23,6 +23,9 @@ import {
   REQUEST_CLIENT_METADATA,
   ANTIGRAVITY_ENDPOINTS,
   KICKSTART_MODEL_FOR_QUOTA_POOL,
+  OLLAMA_TAGS_URL,
+  OLLAMA_USER_AGENT,
+  TAGS_CACHE_TTL_MS,
   DEFAULT_QUOTA_POLL_INTERVAL_MS,
   MAX_QUOTA_POLL_INTERVAL_MS,
   MIN_QUOTA_POLL_INTERVAL_MS,
@@ -40,6 +43,9 @@ import {
   removeAccountFromConfig,
 } from "./account-store.js";
 import { isHostedOAuthConfigured } from "./providers/google-antigravity/oauth.js";
+import type { RequestBody } from "./proxy.js";
+import { UsagePredictor, type ExhaustionPrediction } from "./providers/ollama/prediction.js";
+import { fetchWithRetry } from "./fetch-with-retry.js";
 import { getProviderForAccount } from "./providers/registry.js";
 import type { QuotaFetchContext } from "./providers/adapter.js";
 import { logger } from "./logger.js";
@@ -102,6 +108,53 @@ export class AccountRotator {
     new Map();
   private static readonly MAX_LATENCY_RECORDS = 200;
   private requestLog: StatusResponse["requestLog"] = [];
+  private ollamaModels = new Set<string>();
+  private readonly usagePredictor = new UsagePredictor();
+  private lastOllamaCatalogFetch = 0;
+
+  setOllamaModels(models: string[]): void {
+    this.ollamaModels = new Set(models.map((m) => m.trim()).filter(Boolean));
+  }
+
+  getOllamaModels(): string[] {
+    return [...this.ollamaModels];
+  }
+
+    private async refreshOllamaCatalogOnce(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastOllamaCatalogFetch < TAGS_CACHE_TTL_MS) return;
+    const ollamaAccount = this.accounts.find(
+      (a) =>
+        getProviderForAccount(a.config).id === "ollama" &&
+        !a.disabled &&
+        !a.flagged,
+    );
+    if (!ollamaAccount || typeof ollamaAccount.config.apiKey !== "string") {
+      return;
+    }
+    this.lastOllamaCatalogFetch = now;
+    try {
+      const response = await fetchWithRetry(OLLAMA_TAGS_URL, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${ollamaAccount.config.apiKey}`,
+          "User-Agent": OLLAMA_USER_AGENT,
+        },
+        timeoutMs: 8000,
+      });
+      if (!response.ok) return;
+      const data = (await response.json()) as {
+        models?: Array<{ name?: string; model?: string }>;
+      };
+      const names = (data.models ?? [])
+        .map((m) => m.name ?? m.model ?? "")
+        .filter(Boolean);
+      if (names.length > 0) this.setOllamaModels(names);
+    } catch {
+      // Catalog refresh is non-fatal
+    }
+  }
+
   private static readonly MAX_REQUEST_LOG = 200;
   private safetyDay = currentUtcDay();
   private projectRequests: Record<string, number> = {};
@@ -500,6 +553,7 @@ export class AccountRotator {
   private async pollAllQuotas(): Promise<void> {
     // Reset per-cycle warmup tracking so each poll cycle allows at most one warmup per upstream model per account.
     this.warmupSentThisCycle.clear();
+    void this.refreshOllamaCatalogOnce().catch(() => {});
 
     const available = this.accounts.filter((a) => !a.disabled && !a.flagged);
     for (const account of available) {
@@ -530,11 +584,12 @@ export class AccountRotator {
             this.warmupSentThisCycle.get(account.config.email) ?? new Set<string>();
           // Build deduplicated upstream model list
           const upstreamToQuotaKey = new Map<string, string>();
+          const warmupAdapter = getProviderForAccount(account.config);
           for (const q of idlePools) {
-            const upstream = KICKSTART_MODEL_FOR_QUOTA_POOL[q.modelKey] ?? q.modelKey;
+            const upstream =
+              warmupAdapter.getKickstartModelForPool(q.modelKey) ?? q.modelKey;
             if (!upstreamToQuotaKey.has(upstream)) {
-              const primaryKey = QUOTA_POOL_FOR_KICKSTART_MODEL[upstream] ?? q.modelKey;
-              upstreamToQuotaKey.set(upstream, primaryKey);
+              upstreamToQuotaKey.set(upstream, q.modelKey);
             }
           }
           for (const [upstream, quotaKey] of upstreamToQuotaKey) {
@@ -717,6 +772,7 @@ export class AccountRotator {
     for (let i = 0; i < this.accounts.length; i++) {
       if (i === excludeIdx) continue;
       const account = this.accounts[i];
+      if (!this.isProviderEligibleForKey(account, modelKey)) continue;
       if (!this.isAvailableForModel(account, modelKey, now)) continue;
 
       const quota = this.getModelQuota(account, modelKey);
@@ -1313,11 +1369,18 @@ export class AccountRotator {
     if (this.accounts.length === 0) return null;
     if (this.isProtectivePauseActive(now)) return null;
 
-    const modelKey = model ? resolveQuotaModelKey(model) : null;
+    const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
     const state = modelKey ? this.modelState.get(modelKey) : null;
     const idx = state?.activeAccountIndex ?? this.defaultIndex;
 
     const current = this.accounts[idx];
+    if (current && modelKey && !this.isProviderEligibleForKey(current, modelKey)) {
+      this.log(
+        `${current.config.label || current.config.email}: provider mismatch for model, rotating`,
+        "warn",
+      );
+      return this.rotateModelForRequest(modelKey, now, idx);
+    }
     if (
       current &&
       (!modelKey
@@ -1522,7 +1585,7 @@ export class AccountRotator {
   // Force rotation for a model (called from proxy on 429 etc.)
   async rotateToNext(model?: string): Promise<AccountRuntime | null> {
     if (this.isProtectivePauseActive(Date.now())) return null;
-    const modelKey = model ? resolveQuotaModelKey(model) : null;
+    const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
     return modelKey ? this.rotateModel(modelKey) : this.rotateDefault();
   }
 
@@ -1534,7 +1597,7 @@ export class AccountRotator {
     account.consecutiveErrors = 0;
     account.lastError = null;
 
-    const modelKey = model ? resolveQuotaModelKey(model) : null;
+    const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
     const state = modelKey ? this.modelState.get(modelKey) : null;
     const shouldRotate =
       !!modelKey &&
@@ -1654,6 +1717,20 @@ export class AccountRotator {
     inputTokens: number;
     outputTokens: number;
   }): void {
+    const ollamaAccount = this.accounts.find(
+      (a) =>
+        getProviderForAccount(a.config).id === "ollama" &&
+        (a.config.email === entry.account ||
+          a.config.label === entry.account),
+    );
+    if (ollamaAccount && entry.statusCode >= 200 && entry.statusCode < 300) {
+      this.usagePredictor.recordUsage(
+        ollamaAccount.config.email,
+        entry.model,
+        entry.inputTokens,
+        entry.outputTokens,
+      );
+    }
     this.requestLog.unshift({
       timestamp: Date.now(),
       ...entry,
@@ -1661,6 +1738,33 @@ export class AccountRotator {
     if (this.requestLog.length > AccountRotator.MAX_REQUEST_LOG) {
       this.requestLog.length = AccountRotator.MAX_REQUEST_LOG;
     }
+  }
+
+    getPredictionSummary(): Record<string, ExhaustionPrediction> {
+    const result: Record<string, ExhaustionPrediction> = {};
+    const now = Date.now();
+    for (const account of this.accounts) {
+      if (getProviderForAccount(account.config).id !== "ollama") continue;
+      const session = account.quota.find((q) => q.modelKey === "session");
+      const weekly = account.quota.find((q) => q.modelKey === "weekly");
+      if (
+        !session ||
+        !weekly ||
+        !Number.isFinite(session.usageRaw) ||
+        !Number.isFinite(weekly.usageRaw)
+      ) {
+        continue;
+      }
+      const model = this.getOllamaModels()[0] ?? "gpt-oss:20b";
+      result[account.config.email] = this.usagePredictor.predict(
+        account.config.email,
+        model,
+        session.usageRaw ?? 0,
+        weekly.usageRaw ?? 0,
+        now,
+      );
+    }
+    return result;
   }
 
   private consolidateTokenBuckets(now: Date): void {
@@ -2384,11 +2488,43 @@ export class AccountRotator {
     );
   }
 
+  private isProviderEligibleForKey(
+    account: AccountRuntime,
+    modelKey: string,
+  ): boolean {
+    const isOllama = getProviderForAccount(account.config).id === "ollama";
+    return modelKey === "session" ? isOllama : !isOllama;
+  }
+
+  /** Public pool-key resolution for quota routing display/logging. */
+  resolveQuotaModelKeyForDisplay(model: string): string | null {
+    return this.resolvePoolKeyForModel(model);
+  }
+
+  private resolvePoolKeyForModel(model: string): string | null {
+    if (this.ollamaModels.has(model)) return "session";
+    return resolveQuotaModelKey(model) ?? null;
+  }
+
+  /** Map a candidate key (model name or pool key) to the account's pool key. */
+  private resolvePoolKey(account: AccountRuntime, key: string): string {
+    if (
+      getProviderForAccount(account.config).id === "ollama" &&
+      key !== "session" &&
+      this.ollamaModels.has(key)
+    ) {
+      return "session";
+    }
+    return key;
+  }
+
   private isRoutableForModel(
     account: AccountRuntime,
     modelKey: string,
     now: number,
   ): boolean {
+    modelKey = this.resolvePoolKey(account, modelKey);
+    if (!this.isProviderEligibleForKey(account, modelKey)) return false;
     if (!this.isAvailableForModel(account, modelKey, now)) return false;
     if (this.getModelQuota(account, modelKey) === 0) return false;
     if (!this.isFreshWindowAllowed(account, modelKey)) return false;
@@ -2468,6 +2604,7 @@ export class AccountRotator {
 
       return {
         email: a.config.email,
+        provider: getProviderForAccount(a.config).id,
         label: a.config.label || a.config.email,
         status,
         activeForModels,
@@ -2585,6 +2722,8 @@ export class AccountRotator {
       updateInfo,
       notifications: getNotifications(),
       hostedOAuthConfigured: isHostedOAuthConfigured(),
+      ollamaModels: this.getOllamaModels(),
+      predictions: this.getPredictionSummary(),
     };
   }
 
@@ -2849,7 +2988,7 @@ export class AccountRotator {
     model?: string,
   ): boolean {
     if (!this.config.useRequestCountRotationWhenQuotaUnknownOnly) return true;
-    const modelKey = model ? resolveQuotaModelKey(model) : null;
+    const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
     if (!modelKey) return true;
     return this.getModelQuota(account, modelKey) < 0;
   }
@@ -3075,49 +3214,79 @@ export class AccountRotator {
       };
     }
 
-    if (!account.accessToken) {
+    const kickstartAdapter = getProviderForAccount(account.config);
+    const isOllamaAccount = kickstartAdapter.id === "ollama";
+    if (!account.accessToken && !isOllamaAccount) {
       return { ok: false, status: 401, upstreamModel: "", error: "no access token" };
     }
 
     const upstreamModel =
-      KICKSTART_MODEL_FOR_QUOTA_POOL[quotaModelKey] ?? quotaModelKey;
-
-    const body = JSON.stringify({
-      project: account.config.projectId,
-      model: upstreamModel,
-      request: {
-        contents: [{ role: "user", parts: [{ text: "." }] }],
-        generationConfig: { maxOutputTokens: 1 },
-      },
-    });
-
-    const endpoint = ANTIGRAVITY_ENDPOINTS[ANTIGRAVITY_ENDPOINTS.length - 1];
-    const url = `${endpoint}/v1internal:streamGenerateContent?alt=sse`;
+      kickstartAdapter.getKickstartModelForPool(quotaModelKey) ??
+      quotaModelKey;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
 
     let response: Response;
-    try {
-      response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${account.accessToken}`,
-          "User-Agent": QUOTA_USER_AGENT,
-          "X-Goog-Api-Client": REQUEST_GOOG_API_CLIENT,
-          "Client-Metadata": REQUEST_CLIENT_METADATA,
+    if (isOllamaAccount) {
+      const ollamaBody: RequestBody = {
+        project: "",
+        model: upstreamModel,
+        request: {
+          messages: [{ role: "user", content: "." }],
+          options: { num_predict: 1 },
+          stream: false,
         },
-        body,
-        signal: controller.signal,
-      });
-    } catch (err) {
+      };
+      try {
+        const forwarded = await kickstartAdapter.forwardRequest(
+          account,
+          ollamaBody,
+          {},
+          controller.signal,
+        );
+        response = forwarded.response;
+      } catch (err) {
+        clearTimeout(timeout);
+        const msg = `kickstart network error: ${err instanceof Error ? err.message : String(err)}`;
+        this.markError(account, msg);
+        return { ok: false, status: 0, upstreamModel, error: msg };
+      }
       clearTimeout(timeout);
-      const msg = `kickstart network error: ${err instanceof Error ? err.message : String(err)}`;
-      this.markError(account, msg);
-      return { ok: false, status: 0, upstreamModel, error: msg };
+    } else {
+      const body = JSON.stringify({
+        project: account.config.projectId,
+        model: upstreamModel,
+        request: {
+          contents: [{ role: "user", parts: [{ text: "." }] }],
+          generationConfig: { maxOutputTokens: 1 },
+        },
+      });
+
+      const endpoint = ANTIGRAVITY_ENDPOINTS[ANTIGRAVITY_ENDPOINTS.length - 1];
+      const url = `${endpoint}/v1internal:streamGenerateContent?alt=sse`;
+
+      try {
+        response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${account.accessToken}`,
+            "User-Agent": QUOTA_USER_AGENT,
+            "X-Goog-Api-Client": REQUEST_GOOG_API_CLIENT,
+            "Client-Metadata": REQUEST_CLIENT_METADATA,
+          },
+          body,
+          signal: controller.signal,
+        });
+      } catch (err) {
+        clearTimeout(timeout);
+        const msg = `kickstart network error: ${err instanceof Error ? err.message : String(err)}`;
+        this.markError(account, msg);
+        return { ok: false, status: 0, upstreamModel, error: msg };
+      }
+      clearTimeout(timeout);
     }
-    clearTimeout(timeout);
 
     // Consume and discard the response body to free the connection
     try {

@@ -37,8 +37,13 @@ switch (command) {
     loadSystemdEnvironment();
     const { initDb } = await import("./db-store.js");
     await initDb();
+    const providerFlag = process.argv.indexOf("--provider");
+    const providerId =
+      providerFlag >= 0 && process.argv[providerFlag + 1]
+        ? process.argv[providerFlag + 1]
+        : undefined;
     const { runLogin } = await import("./login.js");
-    await runLogin();
+    await runLogin(providerId);
     break;
   }
   case "status": {

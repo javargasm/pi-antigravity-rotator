@@ -1,6 +1,7 @@
 // Account types and configuration
 
 import { rotatorEnv } from "./env.js";
+import type { ExhaustionPrediction } from "./providers/ollama/prediction.js";
 
 export type AccountType = "pro" | "free";
 export type AccountTier =
@@ -456,6 +457,8 @@ export interface StatusResponse {
     bindHost: string;
   };
   routingDiagnostics: Record<string, RoutingModelDiagnostics>;
+  ollamaModels: string[];
+  predictions: Record<string, ExhaustionPrediction>;
   circuitBreakers: {
     model: Record<string, { until: number; remainingMs: number }>;
     project: Record<string, { until: number; remainingMs: number }>;
@@ -492,6 +495,8 @@ export interface StatusResponse {
 export interface AccountStatus {
   email: string;
   label: string;
+  /** Provider id, e.g. "google-antigravity" | "ollama". */
+  provider: string;
   status:
     | "active"
     | "ready"
