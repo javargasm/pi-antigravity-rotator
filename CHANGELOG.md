@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Ollama Content Array Normalization**: message `content` arrays (OpenAI-style blocks, e.g. from multimodal requests) are flattened to plain strings and `image_url` blocks are moved to the native `images` field before forwarding to Ollama Cloud, whose Go API rejects `messages[].content` arrays with `cannot unmarshal array` errors. Ported from ollama-rotator `ec5fa5a`; applies to the native `/api/chat` route and all v1 compat adapters.
+
 ## [2.7.0] - 2026-08-10
 
 ### Added

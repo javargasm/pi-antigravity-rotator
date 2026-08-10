@@ -11,20 +11,80 @@ import {
 import type { AccountRuntime } from "../../types.js";
 import type { ForwardedResponse, RequestBody } from "../../proxy.js";
 import { isRecord } from "../../compat/schema-sanitizer.js";
+import {
+  extractTextFromUnknownContent,
+  normalizeContentBlocks,
+} from "../google-antigravity/translators.js";
 import type { StreamAccumulator, TokenUsage } from "../adapter.js";
 
 const OLLAMA_BENCHMARK_MODEL = "gpt-oss:20b";
 
 /**
+ * Normalize one upstream message for Ollama's Go API, which requires
+ * `messages[].content` to be a plain string (it rejects OpenAI-style content
+ * arrays with `cannot unmarshal array ... into Go struct field
+ * ChatRequest.messages.content of type string`). Text blocks are flattened
+ * into the string; image_url blocks are moved to the message's `images` field
+ * (Ollama's native multimodal format).
+ */
+function normalizeOllamaMessageContent(
+  msg: Record<string, unknown>,
+): void {
+  const content = msg.content;
+  if (
+    typeof content === "string" ||
+    content === null ||
+    content === undefined
+  ) {
+    return;
+  }
+  if (!Array.isArray(content)) {
+    msg.content = extractTextFromUnknownContent(content);
+    return;
+  }
+  const blocks = normalizeContentBlocks(content);
+  const parts = Array.isArray(blocks) ? blocks : [];
+  const textParts: string[] = [];
+  const images: string[] = [];
+  for (const block of parts) {
+    if (!isRecord(block)) continue;
+    if (block.type === "text" && typeof block.text === "string") {
+      if (block.text) textParts.push(block.text);
+    } else if (
+      block.type === "image_url" &&
+      isRecord(block.image_url) &&
+      typeof block.image_url.url === "string"
+    ) {
+      images.push(block.image_url.url);
+    }
+  }
+  msg.content = textParts.join("\n");
+  if (images.length > 0) {
+    const existing = Array.isArray(msg.images) ? msg.images : [];
+    msg.images = [...existing, ...images];
+  }
+}
+
+/**
  * Forward a request to Ollama Cloud. The payload shape matches Ollama's
  * native `/api/chat` (messages, stream, tools, options); OpenAI-style
- * bodies are translated by the compat layer before this function.
+ * bodies are translated by the compat layer before this function. Content
+ * arrays are flattened to plain strings and image blocks are moved to the
+ * native `images` field before forwarding, since Ollama's Go API rejects
+ * array content.
  */
 export function buildOllamaPayload(body: RequestBody): Record<string, unknown> {
   const request = isRecord(body.request) ? body.request : {};
+  const rawMessages = Array.isArray(request.messages) ? request.messages : [];
+  const messages = rawMessages.map((msg) => {
+    if (!isRecord(msg)) return msg;
+    const normalized = { ...msg };
+    normalizeOllamaMessageContent(normalized);
+    return normalized;
+  });
   const payload: Record<string, unknown> = {
     model: applyModelAlias(body.model),
-    messages: Array.isArray(request.messages) ? request.messages : [],
+    messages,
     stream: request.stream === false ? false : true,
   };
   if (Array.isArray(request.tools) && request.tools.length > 0) {
