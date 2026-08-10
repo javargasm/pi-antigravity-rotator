@@ -120,6 +120,11 @@ export class AccountRotator {
     return [...this.ollamaModels];
   }
 
+  /** Fetch the Ollama Cloud catalog once at startup so provider-aware routing and /v1/models work before the first quota poll. */
+  primeOllamaCatalog(): Promise<void> {
+    return this.refreshOllamaCatalogOnce();
+  }
+
     private async refreshOllamaCatalogOnce(): Promise<void> {
     const now = Date.now();
     if (now - this.lastOllamaCatalogFetch < TAGS_CACHE_TTL_MS) return;
