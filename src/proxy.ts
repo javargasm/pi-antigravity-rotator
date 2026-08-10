@@ -1261,32 +1261,29 @@ async function handleProxyRequest(
     throw err;
   }
   let body: RequestBody;
-  try {
-    const parsed: unknown = JSON.parse(bodyBuffer.toString("utf-8"));
-    const validation = validateProxyRequestBody(parsed);
-    if (!validation.ok || !validation.value) {
+  if (nativeOllamaChat) {
+    // Native /api/chat payload ({model, messages, stream, options}) is
+    // translated to the internal body shape; the internal validator expects
+    // the wrapped format, so parse the native shape first.
+    let raw: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(bodyBuffer.toString("utf-8"));
+      raw = isRecord(parsed) ? parsed : {};
+    } catch {
       res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error: "Invalid request body",
-          details: validation.errors,
-        }),
-      );
+      res.end(JSON.stringify({ error: "Invalid JSON body" }));
       return;
     }
-    body = validation.value as RequestBody;
-  } catch {
-    res.writeHead(400, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Invalid JSON body" }));
-    return;
-  }
-
-  if (nativeOllamaChat) {
-    const parsed: unknown = JSON.parse(bodyBuffer.toString("utf-8"));
-    const raw = isRecord(parsed) ? parsed : {};
     if (typeof raw.model !== "string" || raw.model === "") {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Invalid request body: model required" }));
+      return;
+    }
+    if (!Array.isArray(raw.messages) || raw.messages.length === 0) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ error: "Invalid request body: messages required" }),
+      );
       return;
     }
     body = {
@@ -1296,6 +1293,26 @@ async function handleProxyRequest(
       displayModel: raw.model,
       requestType: "ollama-chat",
     };
+  } else {
+    try {
+      const parsed: unknown = JSON.parse(bodyBuffer.toString("utf-8"));
+      const validation = validateProxyRequestBody(parsed);
+      if (!validation.ok || !validation.value) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: "Invalid request body",
+            details: validation.errors,
+          }),
+        );
+        return;
+      }
+      body = validation.value as RequestBody;
+    } catch {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid JSON body" }));
+      return;
+    }
   }
 
   const auth = await authenticateVirtualKey(req, body.model);
