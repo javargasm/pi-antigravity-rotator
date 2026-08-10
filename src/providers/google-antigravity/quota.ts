@@ -113,20 +113,18 @@ export async function fetchProviderQuota(
     const data = (await response.json()) as GoogleQuotaResponse;
     const oldQuota = account.quota || [];
     const fresh = extractQuotas(data, oldQuota);
-    // Merge by modelKey: preserve entries from other providers already on
-    // the account so multi-provider accounts accumulate quotas across
-    // credentials without overwriting one another.
-    const previousForProvider = (oldQuota || []).filter(
-      (q) => (q as { providerId?: string }).providerId,
-    );
-    const incomingProviderId = (fresh as { providerId?: string }[]).map(
-      () => "google-antigravity",
+    // Drop the previous Antigravity entries so the new ones fully replace
+    // them; keep entries from OTHER providers (Ollama) so multi-provider
+    // accounts accumulate quotas across credentials without overwriting
+    // one another.
+    const otherProviders = (oldQuota || []).filter(
+      (q) => (q as { providerId?: string }).providerId &&
+        (q as { providerId?: string }).providerId !== "google-antigravity",
     );
     fresh.forEach(
-      (q, i) =>
-        ((q as { providerId?: string }).providerId = incomingProviderId[i]),
+      (q) => ((q as { providerId?: string }).providerId = "google-antigravity"),
     );
-    account.quota = [...previousForProvider, ...fresh];
+    account.quota = [...otherProviders, ...fresh];
     account.lastQuotaPoll = Date.now();
 
     // Stash the provider-local poll log for the rotator to emit as a

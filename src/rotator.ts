@@ -1064,7 +1064,12 @@ export class AccountRotator {
     const modelCooldown = account.cooldownsByModel[modelKey] ?? 0;
     if (modelCooldown > now)
       return { reason: "cooldown", detail: "model cooldown active" };
+    // Ollama Cloud (pool key "session") imposes no per-account
+    // concurrency limit — the in-flight check would otherwise wedge
+    // long-running streams while the same model on another account is
+    // still serving. Antigravity keeps the per-account limit.
     if (
+      modelKey !== "session" &&
       (account.inFlightByModel[modelKey] ?? 0) >=
       (this.config.maxConcurrentRequestsPerAccount ?? 1)
     ) {
@@ -2474,7 +2479,11 @@ export class AccountRotator {
     if (!this.isAvailable(account, now)) return false;
     const modelCooldown = account.cooldownsByModel[modelKey] ?? 0;
     if (modelCooldown > now) return false;
+    // Ollama Cloud (pool key "session") imposes no per-account concurrency
+    // limit. Antigravity keeps it so long streams don't pile up on a
+    // single account while siblings sit idle.
     if (
+      modelKey !== "session" &&
       (account.inFlightByModel[modelKey] ?? 0) >=
       (this.config.maxConcurrentRequestsPerAccount ?? 1)
     )

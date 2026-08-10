@@ -54,16 +54,17 @@ export async function fetchProviderUsage(
     const data = (await response.json()) as OllamaUsageResponse;
     const oldQuota = account.quota || [];
     const fresh = extractUsagePools(data, oldQuota);
-    // Merge by modelKey: preserve entries from other providers already on
-    // the account so multi-provider accounts accumulate quotas across
-    // credentials without overwriting one another.
-    const previousForProvider = (oldQuota || []).filter(
-      (q) => (q as { providerId?: string }).providerId,
+    // Drop the previous Ollama entries so the new ones fully replace
+    // them; keep entries from OTHER providers (Antigravity) so multi-
+    // provider accounts accumulate quotas across credentials.
+    const otherProviders = (oldQuota || []).filter(
+      (q) => (q as { providerId?: string }).providerId &&
+        (q as { providerId?: string }).providerId !== "ollama",
     );
     fresh.forEach(
       (q) => ((q as { providerId?: string }).providerId = "ollama"),
     );
-    account.quota = [...previousForProvider, ...fresh];
+    account.quota = [...otherProviders, ...fresh];
     account.lastQuotaPoll = Date.now();
     void recordUsagePoll(account.config.email, new Date().toISOString(), data);
 

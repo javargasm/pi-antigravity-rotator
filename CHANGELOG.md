@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.8.5] - 2026-08-10
+
+### Fixed
+- **Quota bars duplicated across poll cycles**: `extractQuotas` and `extractUsagePools` already returned the canonical family pool entries (`claude`, `gemini` for Antigravity; `session`, `weekly` for Ollama), but the per-adapter merge into `account.quota` preserved every previous entry from the SAME provider alongside the new ones. Each quota poll therefore appended a fresh copy of each pool instead of replacing the previous one, so the dashboard's RAW POLL line kept growing the bars vertically across cycles (`[claude] [gemini] | ollama: [session] [weekly]` repeated 2×, 3×, …). The merge now keeps entries from the *other* provider and fully replaces this provider's entries every cycle, so each quota is reported exactly once.
+- **Ollama pool wedged on per-account concurrency**: Ollama Cloud imposes no per-account concurrency limit, but `isAvailableForModel` and `getRoutingRejectionForModel` rejected accounts whose `inFlightByModel["session"]` already reached `maxConcurrentRequestsPerAccount` (default 1), so any second concurrent Ollama request was forced to wait for the first to finish or retry on another account. The predecessor project dropped this check for Ollama for the same reason. The pool key `session` now skips the concurrency check; Antigravity (`claude`, `gemini`) keeps it.
+
 ## [2.8.4] - 2026-08-10
 
 ### Fixed
