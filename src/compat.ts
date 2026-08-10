@@ -1628,6 +1628,14 @@ export async function handleOpenAIChatCompletions(
     return;
   }
   const apiKeyHash = auth.key?.tokenHash || (auth.rawKey ? hashKey(auth.rawKey) : null);
+  if (rotator?.getOllamaModels?.().includes(validation.value.model)) {
+    return writeJson(res, 400, {
+      error: {
+        message: `Model ${validation.value.model} is served by the ollama provider; use POST /api/chat (per-provider compat lands in tuxevil-rotator 2.7)`,
+        type: "invalid_request_error",
+      },
+    });
+  }
 
   const compMode = parseCompressionMode(
     req.headers["x-rotator-compression"],
@@ -1754,6 +1762,14 @@ export async function handleOpenAIResponsesCreate(
     return;
   }
   const apiKeyHash = auth.key?.tokenHash || (auth.rawKey ? hashKey(auth.rawKey) : null);
+  if (rotator?.getOllamaModels?.().includes(validation.value.model)) {
+    return writeJson(res, 400, {
+      error: {
+        message: `Model ${validation.value.model} is served by the ollama provider; use POST /api/chat (per-provider compat lands in tuxevil-rotator 2.7)`,
+        type: "invalid_request_error",
+      },
+    });
+  }
 
   let converted: ResponsesConversionResult;
   try {
@@ -2015,6 +2031,15 @@ export async function handleAnthropicMessages(
     return;
   }
   const apiKeyHash = auth.key?.tokenHash || (auth.rawKey ? hashKey(auth.rawKey) : null);
+  if (rotator?.getOllamaModels?.().includes(validation.value.model)) {
+    return writeJson(res, 400, {
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message: `Model ${validation.value.model} is served by the ollama provider; use POST /api/chat (per-provider compat lands in tuxevil-rotator 2.7)`,
+      },
+    });
+  }
 
   const compMode = parseCompressionMode(
     req.headers["x-rotator-compression"],
