@@ -232,7 +232,7 @@ const BENCHMARK_TIMEOUT_MS = 30_000;
 
 function benchmarkRequestBody(account: AccountRuntime): RequestBody {
   return {
-    project: account.config.projectId,
+    project: account.config.projectId as string,
     model: BENCHMARK_MODEL,
     request: {
       contents: [
@@ -295,7 +295,7 @@ export async function forwardRequest(
   signal?: AbortSignal,
 ): Promise<ForwardedResponse> {
   // Swap credentials
-  body.project = account.config.projectId;
+  body.project = account.config.projectId ?? "";
 
   // Map internal display/compat names to Google upstream names (single source
   // of truth: src/types.ts:applyModelAlias)

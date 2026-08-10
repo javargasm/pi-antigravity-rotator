@@ -843,8 +843,7 @@ export class AccountRotator {
       };
     }
 
-    const projectCount = this.getProjectDailyCount(
-      account.config.projectId,
+    const projectCount = this.getProjectDailyCount(account.config.projectId ?? "",
       now,
     );
     const projectLimit = this.config.dailyProjectStopRequests ?? 1200;
@@ -903,11 +902,11 @@ export class AccountRotator {
     if (this.isModelBreakerActive(modelKey, now))
       return "model circuit breaker active";
     if (
-      this.isProjectModelBreakerActive(account.config.projectId, modelKey, now)
+      this.isProjectModelBreakerActive(account.config.projectId ?? "", modelKey, now)
     )
       return "project circuit breaker active";
     if (
-      this.getProjectInFlight(modelKey, account.config.projectId) >=
+      this.getProjectInFlight(modelKey, account.config.projectId ?? "") >=
       (this.config.maxConcurrentRequestsPerProjectModel ?? 1)
     )
       return "project concurrency limit reached";
@@ -2038,7 +2037,7 @@ export class AccountRotator {
     const threshold = this.config.projectCircuitBreaker429Threshold ?? 3;
     const breakerCooldownMs =
       this.config.projectCircuitBreakerCooldownMs ?? 60 * 60 * 1000;
-    const projectId = account.config.projectId;
+    const projectId = account.config.projectId ?? "";
     this.provider429Events = this.provider429Events
       .filter((event) => now - event.ts <= windowMs)
       .concat({ ts: now, projectId, modelKey, account: account.config.email });
@@ -2086,8 +2085,8 @@ export class AccountRotator {
     this.rollDailySafetyIfNeeded(now);
     this.getAccountDailyCount(account, now);
     account.dailyRequestCount++;
-    this.projectRequests[account.config.projectId] =
-      (this.projectRequests[account.config.projectId] ?? 0) + 1;
+    this.projectRequests[account.config.projectId ?? ""] =
+      (this.projectRequests[account.config.projectId ?? ""] ?? 0) + 1;
     this.scheduleStateSave();
   }
 
@@ -2097,7 +2096,7 @@ export class AccountRotator {
       this.getAccountDailyCount(account, now) >=
       (this.config.dailyAccountSlowRequests ?? 250);
     const projectSlow =
-      this.getProjectDailyCount(account.config.projectId, now) >=
+      this.getProjectDailyCount(account.config.projectId ?? "", now) >=
       (this.config.dailyProjectSlowRequests ?? 900);
     if (!accountSlow && !projectSlow) return 0;
     const min = this.config.slowModeJitterMinMs ?? 8_000;
@@ -2422,7 +2421,7 @@ export class AccountRotator {
       if (cooldown > now) retryTimes.push(cooldown);
       const projectBreaker =
         this.projectModelBreakers[
-          projectModelKey(account.config.projectId, modelKey)
+          projectModelKey(account.config.projectId ?? "", modelKey)
         ] ?? 0;
       if (projectBreaker > now) retryTimes.push(projectBreaker);
       if ((this.config.routingPolicy || "timer-first") === "hybrid") {
@@ -2476,8 +2475,7 @@ export class AccountRotator {
         totalRequests: a.totalRequests,
         dailyRequestCount: this.getAccountDailyCount(a, now),
         dailyAccountStopRequests: this.config.dailyAccountStopRequests ?? 350,
-        dailyProjectRequestCount: this.getProjectDailyCount(
-          a.config.projectId,
+        dailyProjectRequestCount: this.getProjectDailyCount(a.config.projectId ?? "",
           now,
         ),
         dailyProjectStopRequests: this.config.dailyProjectStopRequests ?? 1200,

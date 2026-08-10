@@ -44,13 +44,21 @@ export function validateAccountConfig(value: unknown, path = "account"): Validat
 	const errors: string[] = [];
 
 	if (!isNonEmptyString(value.email)) errors.push(`${path}.email must be a non-empty string`);
-	if (!isNonEmptyString(value.refreshToken)) errors.push(`${path}.refreshToken must be a non-empty string`);
-	if (!isNonEmptyString(value.projectId)) errors.push(`${path}.projectId must be a non-empty string`);
+	// Provider-aware credentials: Ollama accounts require an apiKey;
+	// Google Antigravity accounts require refreshToken + projectId.
+	// Legacy configs without a provider field default to Google.
+	const provider = typeof value.provider === "string" ? value.provider : "google-antigravity";
+	if (provider === "ollama") {
+		if (!isNonEmptyString(value.apiKey)) errors.push(`${path}.apiKey must be a non-empty string`);
+	} else {
+		if (!isNonEmptyString(value.refreshToken)) errors.push(`${path}.refreshToken must be a non-empty string`);
+		if (!isNonEmptyString(value.projectId)) errors.push(`${path}.projectId must be a non-empty string`);
+	}
 	if (value.provider !== undefined && typeof value.provider !== "string") errors.push(`${path}.provider must be a string`);
 	if (value.label !== undefined && typeof value.label !== "string") errors.push(`${path}.label must be a string`);
 	if (value.type !== undefined && value.type !== "pro" && value.type !== "free") errors.push(`${path}.type must be "pro" or "free"`);
-	if (value.tier !== undefined && !["ultra", "pro", "plus", "free", "unknown"].includes(String(value.tier))) {
-		errors.push(`${path}.tier must be "ultra", "pro", "plus", "free", or "unknown"`);
+	if (value.tier !== undefined && !["ultra", "pro", "plus", "free", "unknown", "max", "team"].includes(String(value.tier))) {
+		errors.push(`${path}.tier must be "ultra", "pro", "plus", "free", "unknown", "max", or "team"`);
 	}
 	if (value.familyManager !== undefined && typeof value.familyManager !== "boolean") errors.push(`${path}.familyManager must be a boolean`);
 

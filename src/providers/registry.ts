@@ -3,17 +3,19 @@
 // To add a new provider:
 //   1. Implement ProviderAdapter in src/providers/<id>/index.ts
 //   2. Add an entry to PROVIDERS below
-//   3. Extend the AccountConfig union in src/types.ts with your account shape
+//   3. Extend AccountConfig in src/types.ts with your credential fields
 //   4. Wire your login flow through `rotator login --provider <id>`
 
 import type { ProviderAdapter } from "./adapter.js";
 import { googleAntigravityAdapter } from "./google-antigravity/index.js";
+import { ollamaAdapter } from "./ollama/index.js";
 import { logger } from "../logger.js";
 
 export const DEFAULT_PROVIDER = "google-antigravity";
 
 const PROVIDERS: Record<string, ProviderAdapter> = {
   "google-antigravity": googleAntigravityAdapter,
+  ollama: ollamaAdapter,
 };
 
 export function getProviderAdapter(providerId: string): ProviderAdapter {

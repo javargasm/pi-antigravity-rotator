@@ -3,7 +3,14 @@
 import { rotatorEnv } from "./env.js";
 
 export type AccountType = "pro" | "free";
-export type AccountTier = "ultra" | "pro" | "plus" | "free" | "unknown";
+export type AccountTier =
+  | "ultra"
+  | "pro"
+  | "plus"
+  | "free"
+  | "unknown"
+  | "max"
+  | "team";
 export type RoutingPolicy =
   | "timer-first"
   | "tier-first"
@@ -24,26 +31,27 @@ export type RoutingRejectionReason =
   | "daily-project-stop"
   | "token-bucket-empty";
 
-export interface GoogleAccountConfig {
+export interface AccountConfig {
   email: string;
-  refreshToken: string;
-  projectId: string;
+  /**
+   * Provider id: "google-antigravity" (default when absent, legacy configs)
+   * or "ollama". Determines which credential fields are required.
+   */
+  provider?: string;
+  /** Google Antigravity: OAuth refresh token. */
+  refreshToken?: string;
+  /** Google Antigravity: Cloud project id. */
+  projectId?: string;
   // How the projectId was obtained.
   projectSource?: "google" | "manual";
+  /** Ollama Cloud: static API key (never expires). */
+  apiKey?: string;
   label?: string;
   // Optional - pro/free is detected dynamically from quota API reset times
   type?: AccountType;
   tier?: AccountTier;
   familyManager?: boolean;
-  // Provider id; defaults to "google-antigravity" when absent (legacy configs).
-  provider?: string;
 }
-
-/**
- * Discriminated union of provider account configs. Legacy configs without a
- * `provider` field are treated as Google Antigravity accounts.
- */
-export type AccountConfig = GoogleAccountConfig;
 
 export interface Config {
   accounts: AccountConfig[];
@@ -176,6 +184,8 @@ export interface ModelQuota {
   modelKey: string;
   displayName: string;
   percentRemaining: number;
+  /** Raw usage fraction (0..1) when the provider reports one (Ollama). */
+  usageRaw?: number;
   resetTime: string | null;
   // Timer classification based on resetTime duration
   // "fresh" = no active timer, "5h" = short timer, "7d" = long timer
@@ -724,6 +734,22 @@ export const KICKSTART_MODEL_FOR_QUOTA_POOL: Record<string, string> = {
 
 export const QUOTA_API_URL =
   "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
+
+// ── Ollama Cloud endpoints ──────────────────────────────────────────
+export const OLLAMA_API_BASE = "https://ollama.com/api";
+export const OLLAMA_OPENAI_BASE = "https://ollama.com/v1";
+export const OLLAMA_USAGE_URL = "https://ollama.com/api/usage";
+export const OLLAMA_TAGS_URL = "https://ollama.com/api/tags";
+export const OLLAMA_CHAT_URL = "https://ollama.com/api/chat";
+
+// User-Agent sent to ollama.com (defaults are spoofed per docs examples).
+export const OLLAMA_USER_AGENT =
+  process.env.TUXEVIL_ROTATOR_OLLAMA_USER_AGENT ||
+  process.env.OLLAMA_ROTATOR_USER_AGENT ||
+  "ollama-rotator/1.0";
+
+// TTL for the cached /api/tags listing (model catalog refresh).
+export const TAGS_CACHE_TTL_MS = 5 * 60 * 1000;
 export const ANTIGRAVITY_VERSION =
 	process.env.PI_AI_ANTIGRAVITY_VERSION || "1.107.0";
 export const QUOTA_USER_AGENT =
