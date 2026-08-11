@@ -2518,6 +2518,13 @@ export class AccountRotator {
 
   startRequest(account: AccountRuntime, modelKey?: string): void {
     const key = modelKey ?? "__default__";
+    // Ollama Cloud imposes no per-account concurrency limit, so its
+    // requests must not activate in-flight tracking at all (pool key
+    // "session" and raw ollama model names from benchmark probes).
+    if (key === "session" || this.ollamaModels.has(key)) {
+      this.consumeTokenBucket(account, Date.now());
+      return;
+    }
     account.inFlightByModel[key] = (account.inFlightByModel[key] ?? 0) + 1;
     this.recalculateInFlightRequests(account);
     this.consumeTokenBucket(account, Date.now());
@@ -2525,6 +2532,7 @@ export class AccountRotator {
 
   finishRequest(account: AccountRuntime, modelKey?: string): void {
     const key = modelKey ?? "__default__";
+    if (key === "session" || this.ollamaModels.has(key)) return;
     account.inFlightByModel[key] = Math.max(
       0,
       (account.inFlightByModel[key] ?? 0) - 1,

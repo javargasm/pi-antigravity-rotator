@@ -118,4 +118,76 @@ describe("AccountRotator concurrency rules per provider", () => {
     );
     (rotator as unknown as { stopQuotaPolling?: () => void }).stopQuotaPolling?.();
   });
+
+  it("startRequest does not track in-flight for the Ollama session pool", () => {
+    const acc = makeAccount("ollama", "session", 0);
+    acc.inFlightByModel = {};
+    const rotator = new AccountRotator([acc], {
+      routingPolicy: "timer-first",
+      quotaPollIntervalMs: 300000,
+      requestsPerRotation: 5,
+      maxConcurrentRequestsPerAccount: 1,
+      maxConcurrentRequestsPerProjectModel: 1,
+    });
+    rotator.startRequest(acc, "session");
+    assert.deepEqual(
+      acc.inFlightByModel,
+      {},
+      "Ollama session pool must not increment inFlightByModel",
+    );
+    assert.equal(
+      acc.inFlightRequests,
+      0,
+      "Ollama session pool must not increment inFlightRequests",
+    );
+    (rotator as unknown as { stopQuotaPolling?: () => void }).stopQuotaPolling?.();
+  });
+
+  it("startRequest/finishRequest do not track raw Ollama model names", () => {
+    const acc = makeAccount("ollama", "session", 0);
+    acc.inFlightByModel = {};
+    const rotator = new AccountRotator([acc], {
+      routingPolicy: "timer-first",
+      quotaPollIntervalMs: 300000,
+      requestsPerRotation: 5,
+      maxConcurrentRequestsPerAccount: 1,
+      maxConcurrentRequestsPerProjectModel: 1,
+    });
+    rotator.setOllamaModels(["gemma4:31b"]);
+    rotator.startRequest(acc, "gemma4:31b");
+    rotator.finishRequest(acc, "gemma4:31b");
+    assert.deepEqual(
+      acc.inFlightByModel,
+      {},
+      "Raw Ollama model names must not be tracked as in-flight",
+    );
+    assert.equal(acc.inFlightRequests, 0);
+    (rotator as unknown as { stopQuotaPolling?: () => void }).stopQuotaPolling?.();
+  });
+
+  it("Antigravity models still track in-flight through startRequest", () => {
+    const acc = makeAccount("google-antigravity", "claude", 0);
+    const rotator = new AccountRotator([acc], {
+      routingPolicy: "timer-first",
+      quotaPollIntervalMs: 300000,
+      requestsPerRotation: 5,
+      maxConcurrentRequestsPerAccount: 1,
+      maxConcurrentRequestsPerProjectModel: 1,
+    });
+    rotator.startRequest(acc, "claude");
+    assert.equal(
+      acc.inFlightByModel["claude"],
+      1,
+      "Antigravity claude pool must still increment in-flight",
+    );
+    assert.equal(acc.inFlightRequests, 1);
+    rotator.finishRequest(acc, "claude");
+    assert.deepEqual(
+      acc.inFlightByModel,
+      {},
+      "Antigravity claude pool must decrement on finishRequest",
+    );
+    assert.equal(acc.inFlightRequests, 0);
+    (rotator as unknown as { stopQuotaPolling?: () => void }).stopQuotaPolling?.();
+  });
 });

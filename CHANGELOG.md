@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.8.6] - 2026-08-10
+
+### Changed
+- **Ollama models no longer activate in-flight tracking**: `startRequest`/`finishRequest` are now no-ops for the Ollama pool (key `"session"` and any model in the Ollama catalog). Until now every Ollama request went through `getActiveAccount` → `startRequest(account, "session")`, which incremented `inFlightByModel["session"]` — but the proxy's `finishRequest` calls pass `resolveQuotaModelKey(model) ?? undefined`, which resolves to `undefined` for Ollama models, so the decrement landed on `"__default__"` and the counter never came back down. Accounts stayed in-flight forever and the dashboard bars stuck at their peak. Ollama Cloud has no per-account concurrency limit, so tracking it was both broken and pointless; Antigravity (`claude`, `gemini`) counters are unaffected.
+
 ## [2.8.5] - 2026-08-10
 
 ### Fixed
