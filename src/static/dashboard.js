@@ -1070,6 +1070,25 @@ var MODEL_PRICING_CLIENT = {
   "gemini-3.6-flash-low": { input: 1.5, output: 7.5 },
   "gemini-3.6-flash-tiered": { input: 1.5, output: 7.5 },
   "gpt-oss-120b-medium": { input: 2.0, output: 10.0 },
+  // Ollama Cloud models — mirrors MODEL_PRICING in src/types.ts
+  "gpt-oss:20b": { input: 0.075, output: 0.3 },
+  "gpt-oss:120b": { input: 0.15, output: 0.6 },
+  "deepseek-v4-flash:preview": { input: 0.14, output: 0.28 },
+  "deepseek-v4-flash:0731": { input: 0.14, output: 0.28 },
+  "deepseek-v4-pro": { input: 0.435, output: 0.87 },
+  "qwen3.5:397b": { input: 0.6, output: 3.6 },
+  "glm-5.1": { input: 0.8, output: 2.56 },
+  "glm-5.2": { input: 0.8, output: 2.56 },
+  "gemma4:31b": { input: 0.38, output: 1.15 },
+  "kimi-k2.6": { input: 0.95, output: 4.0 },
+  "kimi-k2.7-code": { input: 0.95, output: 4.0 },
+  "kimi-k3": { input: 0.95, output: 4.0 },
+  "minimax-m2.7": { input: 0.3, output: 1.2 },
+  "minimax-m3": { input: 0.3, output: 1.2 },
+  "mistral-large-3:675b": { input: 0.5, output: 1.5 },
+  "nemotron-3-nano:30b": { input: 0.5, output: 1.5 },
+  "nemotron-3-super": { input: 0.6, output: 1.8 },
+  "nemotron-3-ultra": { input: 0.6, output: 1.8 },
 };
 
 function getModelPricingClient(m) {

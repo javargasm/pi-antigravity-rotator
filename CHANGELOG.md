@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.8.10] - 2026-08-11
+
+### Fixed
+- **Token Usage chart missed Ollama model savings**: the dashboard recomputes savings client-side from `MODEL_PRICING_CLIENT`, which only mirrored the Google-model prices. Ollama models (`gpt-oss:20b`, `gemma4:31b`, `deepseek-v4-flash:...`, `kimi-*`, etc.) had no pricing entry, so `calcSavingsFromBuckets` skipped them and the "Savings" total and per-model legend showed nothing for Ollama traffic even though the backend already priced it. The client table now mirrors `MODEL_PRICING` in `src/types.ts` for all Ollama Cloud models.
+
 ## [2.8.9] - 2026-08-11
 
 ### Fixed
