@@ -1,6 +1,6 @@
 # OpenClaw
 
-Connect OpenClaw to pi-antigravity-rotator by adding a custom provider to `~/.openclaw/openclaw.json`.
+Connect OpenClaw to tuxevil-rotator by adding a custom provider to `~/.openclaw/openclaw.json`.
 
 ## Configuration
 

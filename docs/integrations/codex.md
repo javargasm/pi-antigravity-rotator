@@ -1,6 +1,6 @@
 # Codex (OpenAI CLI / VS Code Agent)
 
-pi-antigravity-rotator has full support for the OpenAI Responses API (`/v1/responses`), which is what Codex uses natively. It can act as the multi-account rotation backend for Codex running in VS Code or in the terminal.
+tuxevil-rotator has full support for the OpenAI Responses API (`/v1/responses`), which is what Codex uses natively. It can act as the multi-account rotation backend for Codex running in VS Code or in the terminal.
 
 ## Configuration
 

@@ -1,6 +1,6 @@
 # Setting Up PostgreSQL
 
-PostgreSQL unlocks [Virtual Keys](../virtual-keys.md) and [Spend Logging](../virtual-keys.md#spend-logging) in pi-antigravity-rotator.
+PostgreSQL unlocks [Virtual Keys](../virtual-keys.md) and [Spend Logging](../virtual-keys.md#spend-logging) in tuxevil-rotator.
 
 ## Prompt for Your AI Agent
 
@@ -9,7 +9,7 @@ Copy and paste this prompt into any AI agent (OpenCode, Claude Code, Cursor, Cod
 ---
 
 ```
-Please set up PostgreSQL for pi-antigravity-rotator on this machine. I need you to:
+Please set up PostgreSQL for tuxevil-rotator on this machine. I need you to:
 
 1. Install PostgreSQL if it's not already installed (use the appropriate method for this OS: apt/brew/dnf/etc.)
 2. Start the PostgreSQL service and enable it to start on boot
@@ -21,7 +21,7 @@ Please set up PostgreSQL for pi-antigravity-rotator on this machine. I need you 
 7. Add it to the environment for the current session and tell me how to make it permanent (e.g. .bashrc, .env, systemd service override, or docker-compose.yml)
 
 The connection string should then be set as:
-   export PI_ROTATOR_DATABASE_URL="postgres://rotator:<password>@localhost:5432/rotatordb"
+   export TUXEVIL_ROTATOR_DATABASE_URL="postgres://rotator:<password>@localhost:5432/rotatordb"
 
 When the rotator starts with this variable set, it will automatically create the required tables (rotator_settings, rotator_virtual_keys, rotator_spend_logs, rotator_daily_spend) on first boot — no manual schema setup needed.
 ```
@@ -47,7 +47,7 @@ GRANT ALL PRIVILEGES ON DATABASE rotatordb TO rotator;
 EOF
 
 # Set the environment variable
-export PI_ROTATOR_DATABASE_URL="postgres://rotator:your-secure-password@localhost:5432/rotatordb"
+export TUXEVIL_ROTATOR_DATABASE_URL="postgres://rotator:your-secure-password@localhost:5432/rotatordb"
 ```
 
 ## Docker Compose with PostgreSQL
@@ -57,12 +57,12 @@ If you run the rotator in Docker, add a PostgreSQL service:
 ```yaml
 services:
   rotator:
-    image: ghcr.io/tuxevil/pi-antigravity-rotator:latest
+    image: ghcr.io/tuxevil/tuxevil-rotator:latest
     ports:
       - "127.0.0.1:51200:51200"
     environment:
-      PI_ROTATOR_DATABASE_URL: "postgres://rotator:yourpassword@postgres:5432/rotatordb"
-      PI_ROTATOR_DIR: /data
+      TUXEVIL_ROTATOR_DATABASE_URL: "postgres://rotator:yourpassword@postgres:5432/rotatordb"
+      TUXEVIL_ROTATOR_DIR: /data
     volumes:
       - ./docker-data:/data
     depends_on:
@@ -89,7 +89,7 @@ volumes:
 
 ## What the Rotator Creates
 
-On first boot with `PI_ROTATOR_DATABASE_URL` set, the rotator automatically runs migrations that create:
+On first boot with `TUXEVIL_ROTATOR_DATABASE_URL` set, the rotator automatically runs migrations that create:
 
 | Table | Purpose |
 |-------|---------|

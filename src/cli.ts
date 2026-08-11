@@ -5,7 +5,11 @@
 //   tuxevil-rotator status    Show account status
 //   tuxevil-rotator keys      Manage virtual API keys
 
-import { getConfigDir } from "./paths.js";
+import {
+  getConfigDir,
+  getLastLegacyMigrationReport,
+  migrateLegacyConfig,
+} from "./paths.js";
 
 const args = process.argv
   .slice(2)
@@ -131,6 +135,27 @@ switch (command) {
     process.exit(result.ok ? 0 : 1);
     break;
   }
+  case "migrate": {
+    const report =
+      getLastLegacyMigrationReport() ?? migrateLegacyConfig(getConfigDir());
+    console.log("Legacy migration complete.");
+    console.log(`  Target: ${report.targetDir}`);
+    if (report.copied.length > 0) {
+      console.log(`  Copied: ${report.copied.join(", ")}`);
+    }
+    if (report.skipped.length > 0) {
+      console.log(`  Already present: ${report.skipped.join(", ")}`);
+    }
+    if (report.errors.length > 0) {
+      console.error("  Errors:");
+      for (const error of report.errors) console.error(`    ${error}`);
+      process.exitCode = 1;
+    } else if (report.copied.length === 0 && report.skipped.length === 0) {
+      console.log("  No legacy files were found; nothing to migrate.");
+    }
+    console.log("  Legacy files were not removed.");
+    break;
+  }
   case "keys": {
     const initDb = (await import("./db-store.js")).initDb;
     const { isDbConfigured } = await import("./db-store.js");
@@ -239,6 +264,9 @@ switch (command) {
     );
     console.log(
       "  tuxevil-rotator doctor    Validate config and local state",
+    );
+    console.log(
+      "  tuxevil-rotator migrate   Copy legacy config files safely",
     );
     console.log("  tuxevil-rotator keys     Manage virtual API keys");
     console.log(

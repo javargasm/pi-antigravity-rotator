@@ -2964,7 +2964,7 @@ document.addEventListener("keydown", function (event) {
 });
 
 function hideDonationModalPermanently() {
-  localStorage.setItem("hideDonationPopup", "true");
+  localStorage.setItem("hideDonationModal", "true");
   closeModal(null, "donationModal");
 }
 
@@ -2972,7 +2972,7 @@ refresh();
 connectSSE();
 setInterval(refresh, 15000); // fallback poll every 15s in case SSE drops
 
-if (!localStorage.getItem("hideDonationPopup")) {
+if (!localStorage.getItem("hideDonationModal")) {
   setTimeout(function () {
     openModal("donationModal");
   }, 1000);

@@ -1,6 +1,6 @@
 # Telemetry
 
-pi-antigravity-rotator collects **anonymous usage telemetry** to help understand how the tool is used and — most importantly — to improve the anti-flag algorithm that protects your accounts.
+tuxevil-rotator collects **anonymous usage telemetry** to help understand how the tool is used and — most importantly — to improve the anti-flag algorithm that protects your accounts.
 
 ## What Is Collected
 
@@ -37,17 +37,17 @@ Flag data is the most valuable signal. It lets us study what behavior patterns l
 Set the environment variable before starting:
 
 ```bash
-export PI_ROTATOR_TELEMETRY=off
+export TUXEVIL_ROTATOR_TELEMETRY=off
 ```
 
-Any of `PI_ROTATOR_TELEMETRY=off`, `PI_ROTATOR_TELEMETRY=false`, or `PI_ROTATOR_TELEMETRY=0` disables telemetry.
+Any of `TUXEVIL_ROTATOR_TELEMETRY=off`, `TUXEVIL_ROTATOR_TELEMETRY=false`, or `TUXEVIL_ROTATOR_TELEMETRY=0` disables telemetry.
 
 ## Self-Hosted Receiver
 
 You can point telemetry at your own receiver:
 
 ```bash
-export PI_ROTATOR_TELEMETRY_URL=https://your-receiver.example.com/v1/events
+export TUXEVIL_ROTATOR_TELEMETRY_URL=https://your-receiver.example.com/v1/events
 ```
 
 The default endpoint is `https://telemetry.tuxevil.com/v1/events`.

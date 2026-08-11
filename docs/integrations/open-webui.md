@@ -1,6 +1,6 @@
 # Open WebUI
 
-Connect Open WebUI to pi-antigravity-rotator to use Google Antigravity models from the Open WebUI chat interface.
+Connect Open WebUI to tuxevil-rotator to use Google Antigravity models from the Open WebUI chat interface.
 
 ## Option A: Admin Panel UI (recommended)
 

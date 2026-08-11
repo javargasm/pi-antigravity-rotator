@@ -1,6 +1,6 @@
 # Aider
 
-Connect Aider (AI pair programming CLI) to pi-antigravity-rotator using the OpenAI-compatible provider.
+Connect Aider (AI pair programming CLI) to tuxevil-rotator using the OpenAI-compatible provider.
 
 ## Quick Start
 

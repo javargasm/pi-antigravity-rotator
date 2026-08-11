@@ -1,6 +1,6 @@
 # Cursor
 
-Connect Cursor IDE to pi-antigravity-rotator to use Google Antigravity models directly in Cursor's AI features.
+Connect Cursor IDE to tuxevil-rotator to use Google Antigravity models directly in Cursor's AI features.
 
 ## Configuration
 

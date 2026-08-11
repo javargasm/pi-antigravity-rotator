@@ -20,7 +20,7 @@ Agent 3 (Flash)       --->  localhost:51200  --->  Account A
 
 ```mermaid
 graph LR
-    A[Your Agent] -->|OpenAI / Anthropic API| B[pi-antigravity-rotator]
+    A[Your Agent] -->|OpenAI / Anthropic API| B[tuxevil-rotator]
     B -->|Smart Routing| C[Google Account 1]
     B -->|Smart Routing| D[Google Account 2]
     B -->|Smart Routing| E[Google Account N]

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import { serveCliLogin, handleCliLoginApi } from "../src/onboarding.js";
 import { removeAccountFromConfig } from "../src/account-store.js";
+import type { AccountConfig } from "../src/types.js";
 
 function mockRes() {
 	const state = { body: "", statusCode: 200, headers: {} as Record<string, string> };
@@ -113,7 +114,7 @@ describe("CLI login Ollama provider", () => {
 	const originalFetch = globalThis.fetch;
 	const originalRotator = {} as any;
 	const recordingRotator = {
-		async addOrUpdateAccount(entry: unknown) {
+		async addOrUpdateAccount(entry: AccountConfig) {
 			recordingRotator.lastEntry = entry;
 		},
 		lastEntry: undefined as unknown,

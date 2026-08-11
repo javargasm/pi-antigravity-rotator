@@ -86,7 +86,7 @@ export async function runDoctor(
       backupCount: backups.length,
       firstBackup: backups[0] ?? null,
       adminTokenConfigured: !!getConfiguredAdminToken(env),
-      bindHost: env.TUXEVIL_ROTATOR_BIND_HOST ?? env.TUXEVIL_ROTATOR_BIND_HOST ?? null,
+      bindHost: env.TUXEVIL_ROTATOR_BIND_HOST ?? env.PI_ROTATOR_BIND_HOST ?? null,
       storageBackend: dbConfigured ? "postgresql" : "file",
     },
   };

@@ -1,4 +1,4 @@
-# Contributing to Pi Antigravity Rotator
+# Contributing to tuxevil-rotator
 
 First off, thanks for taking the time to contribute! :tada:
 
@@ -10,7 +10,7 @@ This project and everyone participating in it is governed by the [Code of Conduc
 
 ### Reporting Bugs
 
-Before submitting a bug report, check the [issues](https://github.com/tuxevil/pi-antigravity-rotator/issues) to see if it has already been reported. When creating a bug report, include as many details as possible:
+Before submitting a bug report, check the [issues](https://github.com/tuxevil/tuxevil-rotator/issues) to see if it has already been reported. When creating a bug report, include as many details as possible:
 
 - A clear and descriptive title
 - Steps to reproduce the behavior
@@ -20,7 +20,7 @@ Before submitting a bug report, check the [issues](https://github.com/tuxevil/pi
 
 ### Suggesting Features
 
-Open a [discussion](https://github.com/tuxevil/pi-antigravity-rotator/discussions) first to describe your idea. Once the community agrees on the direction, convert it to an issue or submit a PR.
+Open a [discussion](https://github.com/tuxevil/tuxevil-rotator/discussions) first to describe your idea. Once the community agrees on the direction, convert it to an issue or submit a PR.
 
 ### Pull Requests
 
@@ -42,7 +42,7 @@ Open a [discussion](https://github.com/tuxevil/pi-antigravity-rotator/discussion
 This repository recently underwent a git history rewrite to fix commit authorship. If your fork was created before July 2026, rebase before opening a PR:
 
 ```bash
-git remote add upstream https://github.com/tuxevil/pi-antigravity-rotator.git
+git remote add upstream https://github.com/tuxevil/tuxevil-rotator.git
 git fetch upstream
 git rebase upstream/main
 ```
@@ -50,8 +50,8 @@ git rebase upstream/main
 ## Development Setup
 
 ```bash
-git clone https://github.com/tuxevil/pi-antigravity-rotator.git
-cd pi-antigravity-rotator
+git clone https://github.com/tuxevil/tuxevil-rotator.git
+cd tuxevil-rotator
 npm install
 npm run typecheck
 npm test
@@ -75,4 +75,4 @@ tools/         # Ancillary tools (telemetry receiver, etc.)
 
 ## Questions?
 
-Open a [discussion](https://github.com/tuxevil/pi-antigravity-rotator/discussions) or join the [Discord](https://discord.gg/GgwVqTaKgK).
+Open a [discussion](https://github.com/tuxevil/tuxevil-rotator/discussions) or join the [Discord](https://discord.gg/GgwVqTaKgK).

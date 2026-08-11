@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0] - 2026-08-11
+
+### Changed
+- **Project rebrand**: the project, CLI, repository, default config directory, environment-variable prefix, and GHCR image are now `tuxevil-rotator`.
+- **New npm package**: install `tuxevil-rotator` for the v3 release. The former `pi-antigravity-rotator` package remains available as a deprecated migration path.
+- **Guided migration**: `tuxevil-rotator migrate` safely copies legacy configuration files into `~/.tuxevil-rotator/` without deleting the original files.
+- **Multi-provider surface**: Google Antigravity and Ollama Cloud are exposed through one provider-agnostic rotator and CLI.
+
+### Compatibility
+- The legacy `pi-antigravity-rotator` command, `PI_ROTATOR_*` variables, old config directory, systemd unit fallback, virtual-key salt, and encryption context remain supported for migration.
+
 ## [2.8.12] - 2026-08-11
 
 ### Added

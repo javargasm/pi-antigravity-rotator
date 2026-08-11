@@ -1,10 +1,10 @@
 # Pi Agent
 
-pi-antigravity-rotator was originally built for the Pi agent. The `login` command automatically configures Pi to route all its traffic through the proxy — no additional setup required.
+tuxevil-rotator was originally built for the Pi agent. The `login` command automatically configures Pi to route all its traffic through the proxy — no additional setup required.
 
 ## How It Works
 
-Running `pi-antigravity-rotator login` writes two files that redirect Pi's API calls to the local rotator:
+Running `tuxevil-rotator login` writes two files that redirect Pi's API calls to the local rotator:
 
 **`~/.pi/agent/auth.json`** — tells Pi that credentials are proxy-managed:
 
@@ -38,7 +38,7 @@ With these files in place, Pi sends all requests to `http://localhost:51200` ins
 
 ```bash
 # Start the rotator (if not already running)
-pi-antigravity-rotator start
+tuxevil-rotator start
 
 # Pi will now route through the proxy automatically
 pi
@@ -52,4 +52,4 @@ The rotator manages all account rotation transparently. Pi doesn't need any addi
 
 - The native `/v1internal:streamGenerateContent` endpoint used by Pi is passed through unchanged — no translation layer is applied
 - The OpenAI-compatible adapter (`/v1/chat/completions`) is additive and does not affect Pi's native route
-- Re-running `pi-antigravity-rotator login` updates credentials without disrupting the Pi configuration
+- Re-running `tuxevil-rotator login` updates credentials without disrupting the Pi configuration

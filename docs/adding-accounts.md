@@ -2,7 +2,7 @@
 
 ## Login Flow
 
-Run `pi-antigravity-rotator login` (or `npm run login` from source) once per Google account:
+Run `tuxevil-rotator login` (or `npm run login` from source) once per Google account:
 
 1. A Google OAuth URL is printed to the terminal — open it in your browser
 2. Complete the sign-in and grant permissions
@@ -14,9 +14,9 @@ The tool automatically:
 - Configures `~/.pi/agent/auth.json` with proxy-managed credentials (for the Pi agent)
 
 The account store is either `accounts.json` in the config directory or the
-PostgreSQL database, depending on whether `PI_ROTATOR_DATABASE_URL` is set.
+PostgreSQL database, depending on whether `TUXEVIL_ROTATOR_DATABASE_URL` is set.
 When the rotator is installed as a systemd service, the `login` CLI command
-auto-detects the service environment (including `PI_ROTATOR_DATABASE_URL` and
+auto-detects the service environment (including `TUXEVIL_ROTATOR_DATABASE_URL` and
 the OAuth client from `EnvironmentFile=` drop-ins) so login always writes to the
 same backend the running service reads from.
 
@@ -25,7 +25,7 @@ Re-running with the same email updates the existing entry.
 > Note: if `login` reports the account as added but it doesn't appear on the
 > dashboard / in `status`, the CLI and the service are usually pointing at
 > different backends. Install the unit (see `sudo install` / the systemd setup)
-> or set `PI_ROTATOR_DATABASE_URL` explicitly so both use PostgreSQL.
+> or set `TUXEVIL_ROTATOR_DATABASE_URL` explicitly so both use PostgreSQL.
 
 ## Ollama Cloud Accounts
 
@@ -67,7 +67,7 @@ New accounts usually get a companion project bound automatically during login: i
 
 1. Open that exact Google account in Antigravity IDE
 2. Send one message to any model
-3. Re-run `pi-antigravity-rotator login`
+3. Re-run `tuxevil-rotator login`
 
 ## Account Management from Dashboard
 

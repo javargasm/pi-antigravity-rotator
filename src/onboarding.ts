@@ -15,7 +15,11 @@ import {
   defaultAccountEmail,
   validateApiKey,
 } from "./providers/ollama/api-key-validation.js";
-import type { AccountRotator } from "./rotator.js";
+import type { AccountConfig } from "./types.js";
+
+interface AccountSink {
+  addOrUpdateAccount(account: AccountConfig): Promise<void>;
+}
 
 interface PendingSession {
   verifier: string;
@@ -458,7 +462,7 @@ document.getElementById('keyForm').addEventListener('submit', async (e) => {
 export async function handleCliLoginApi(
   req: IncomingMessage,
   res: ServerResponse,
-  rotator: AccountRotator,
+  rotator: AccountSink,
 ): Promise<void> {
   let body: {
     provider?: string;
@@ -614,7 +618,7 @@ const MAX_ACCOUNT_LABEL_LENGTH = 200;
 async function handleOllamaCliLogin(
   body: { email?: string; apiKey?: string },
   res: ServerResponse,
-  rotator: AccountRotator,
+  rotator: AccountSink,
 ): Promise<void> {
   const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
   const email = typeof body.email === "string" ? body.email.trim() : "";
@@ -668,7 +672,7 @@ async function handleOllamaCliLogin(
 export async function handleHostedCallback(
   req: IncomingMessage,
   res: ServerResponse,
-  rotator: AccountRotator,
+  rotator: AccountSink,
 ): Promise<void> {
   const requestUrl = new URL(req.url || "/", "http://localhost");
   const code = requestUrl.searchParams.get("code");

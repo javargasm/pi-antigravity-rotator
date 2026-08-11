@@ -1,6 +1,6 @@
 # OpenCode
 
-Connect OpenCode to pi-antigravity-rotator to use Google Antigravity models as your OpenCode provider.
+Connect OpenCode to tuxevil-rotator to use Google Antigravity models as your OpenCode provider.
 
 ## Configuration
 
@@ -62,14 +62,14 @@ Select "Other", enter provider ID `antigravity`, then enter your key (`no-key` i
     "antigravity": {
       "options": {
         "baseURL": "http://localhost:51200/v1",
-        "apiKey": "{env:PI_ROTATOR_KEY}"
+        "apiKey": "{env:TUXEVIL_ROTATOR_KEY}"
       }
     }
   }
 }
 ```
 
-Then set `PI_ROTATOR_KEY=no-key` (or your `rk-...` key) in your shell.
+Then set `TUXEVIL_ROTATOR_KEY=no-key` (or your `rk-...` key) in your shell.
 
 ## Selecting a Model
 

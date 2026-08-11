@@ -1,6 +1,6 @@
 # Claude Code
 
-Connect Claude Code (Anthropic's CLI coding agent) to pi-antigravity-rotator using the Anthropic-compatible `/v1/messages` endpoint.
+Connect Claude Code (Anthropic's CLI coding agent) to tuxevil-rotator using the Anthropic-compatible `/v1/messages` endpoint.
 
 ## Quick Start
 

@@ -8,7 +8,7 @@ Config files are stored in `~/.tuxevil-rotator/` by default. Override with:
 export TUXEVIL_ROTATOR_DIR=/path/to/config
 
 # Or CLI flag
-pi-antigravity-rotator start --config-dir /path/to/config
+tuxevil-rotator start --config-dir /path/to/config
 ```
 
 ## Environment Variables
@@ -16,18 +16,18 @@ pi-antigravity-rotator start --config-dir /path/to/config
 | Variable | Description |
 |----------|-------------|
 | `TUXEVIL_ROTATOR_DIR` | Config directory path (default: `~/.tuxevil-rotator/`) |
-| `PI_ROTATOR_DATABASE_URL` | PostgreSQL connection string for Virtual Keys and Spend Logging |
 | `DATABASE_URL` | Fallback PostgreSQL connection string |
-| `PI_ROTATOR_ENCRYPTION_KEY` | Secret used to encrypt OAuth refresh tokens at rest. A 64-character hexadecimal key is recommended. `ENCRYPTION_KEY` is accepted as a fallback. |
-| `PI_ROTATOR_ADMIN_TOKEN` | Admin token for dashboard/API access. If unset, a secure token is auto-generated on first run and saved to `.admin-token` |
-| `PI_ROTATOR_BIND_HOST` | Network interface to bind on (default: `0.0.0.0`; set to `127.0.0.1` for local-only) |
-| `PI_ROTATOR_MAX_BODY_BYTES` | Max accepted proxy request body size in bytes (default: `26214400` = 25 MiB) |
-| `PI_ROTATOR_LOG_LEVEL` | Log verbosity: `debug`, `info`, `warn`, `error`, `silent` (default: `info`) |
-| `PI_ROTATOR_LOG_RETENTION_DAYS` | Spend log retention in days (default: `30`) |
-| `PI_ROTATOR_QUOTA_USER_AGENT` | Override the User-Agent for quota API fetches |
-| `PI_AI_ANTIGRAVITY_VERSION` | Override the Antigravity version in quota fetch UA (default: `1.107.0`) |
-| `PI_ROTATOR_TELEMETRY` | Set to `off`, `false`, or `0` to disable anonymous telemetry |
-| `PI_ROTATOR_TELEMETRY_URL` | Custom HTTPS endpoint for telemetry (self-hosted receiver) |
+| `TUXEVIL_ROTATOR_DATABASE_URL` | PostgreSQL connection string for Virtual Keys and Spend Logging |
+| `TUXEVIL_ROTATOR_ENCRYPTION_KEY` | Secret used to encrypt OAuth refresh tokens at rest. A 64-character hexadecimal key is recommended. `ENCRYPTION_KEY` is accepted as a fallback. |
+| `TUXEVIL_ROTATOR_ADMIN_TOKEN` | Admin token for dashboard/API access. If unset, a secure token is auto-generated on first run and saved to `.admin-token` |
+| `TUXEVIL_ROTATOR_BIND_HOST` | Network interface to bind on (default: `0.0.0.0`; set to `127.0.0.1` for local-only) |
+| `TUXEVIL_ROTATOR_MAX_BODY_BYTES` | Max accepted proxy request body size in bytes (default: `26214400` = 25 MiB) |
+| `TUXEVIL_ROTATOR_LOG_LEVEL` | Log verbosity: `debug`, `info`, `warn`, `error`, `silent` (default: `info`) |
+| `TUXEVIL_ROTATOR_LOG_RETENTION_DAYS` | Spend log retention in days (default: `30`) |
+| `TUXEVIL_ROTATOR_QUOTA_USER_AGENT` | Override the User-Agent for quota API fetches |
+| `TUXEVIL_ROTATOR_ANTIGRAVITY_VERSION` | Override the Antigravity version in quota fetch UA (default: `1.107.0`) |
+| `TUXEVIL_ROTATOR_TELEMETRY` | Set to `off`, `false`, or `0` to disable anonymous telemetry |
+| `TUXEVIL_ROTATOR_TELEMETRY_URL` | Custom HTTPS endpoint for telemetry (self-hosted receiver) |
 | `ANTIGRAVITY_CLIENT_ID` | Your Google OAuth client ID (see [OAuth Setup](#oauth-client-credentials)) |
 | `ANTIGRAVITY_CLIENT_SECRET` | Your Google OAuth client secret |
 | `ANTIGRAVITY_REDIRECT_URI` | OAuth callback URI for hosted login (default: `http://localhost:51121/oauth-callback`) |

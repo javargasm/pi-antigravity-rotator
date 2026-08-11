@@ -17,6 +17,7 @@
 // produces ~2 rows per account per poll (session + weekly), which at the
 // default 5-minute poll interval is ~576 rows/account/day.
 
+import { rotatorEnv } from "../../env.js";
 import type { OllamaUsageResponse } from "./quota.js";
 
 const RETENTION_DEFAULT_DAYS = 14;
@@ -34,7 +35,7 @@ export interface QuotaPollRecord {
 }
 
 export function isQuotaPollStoreEnabled(): boolean {
-  return !!(process.env.TUXEVIL_ROTATOR_DATABASE_URL || process.env.DATABASE_URL);
+  return !!(rotatorEnv("DATABASE_URL") || process.env.DATABASE_URL);
 }
 
 async function ensureSchema(): Promise<void> {

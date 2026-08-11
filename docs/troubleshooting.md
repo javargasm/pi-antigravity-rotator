@@ -15,7 +15,7 @@ Flagged accounts are **quarantined** and cannot be re-enabled via `/api/enable/<
 The account has hit consecutive errors. Common causes:
 
 - **Revoked OAuth consent** — the user removed the app from Google Account > Security > Third-party connections
-- **Expired refresh token** — re-run `pi-antigravity-rotator login` for that account
+- **Expired refresh token** — re-run `tuxevil-rotator login` for that account
 - **Google account suspension** — check the account status in your Google Account settings
 
 ## Quota bars not showing
@@ -43,7 +43,7 @@ This should not happen — each model routes independently. Agent 1 using Gemini
 
 ## Dashboard shows "token expired" or admin token issues
 
-After upgrading to v2.3.0+, the auto-generated admin token is regenerated. Check logs on startup for the new token, or set `PI_ROTATOR_ADMIN_TOKEN` explicitly in your environment.
+After upgrading to v2.3.0+, the auto-generated admin token is regenerated. Check logs on startup for the new token, or set `TUXEVIL_ROTATOR_ADMIN_TOKEN` explicitly in your environment.
 
 ## Login fails at project discovery
 
@@ -51,7 +51,7 @@ Login now auto-provisions a Cloud Code companion project for new accounts via th
 
 1. Open that exact Google account in Antigravity IDE
 2. Send one message to any model
-3. Re-run `pi-antigravity-rotator login`
+3. Re-run `tuxevil-rotator login`
 
 ## Docker container can't write to data directory
 
@@ -68,7 +68,7 @@ This is a known limitation. The current compatibility adapter buffers the full u
 ## Running `doctor` for diagnostics
 
 ```bash
-pi-antigravity-rotator doctor
+tuxevil-rotator doctor
 ```
 
 Validates `accounts.json`, checks local state files, lists backups, and warns when admin auth is not configured.

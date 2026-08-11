@@ -7,7 +7,7 @@
 - `X-Rotator-Admin-Token: <token>`
 - `?token=<token>` (URL parameter, for browser dashboard access)
 
-The admin token is auto-generated on first run and saved to `.admin-token`. Override with `PI_ROTATOR_ADMIN_TOKEN`.
+The admin token is auto-generated on first run and saved to `.admin-token`. Override with `TUXEVIL_ROTATOR_ADMIN_TOKEN`.
 
 **Proxy routes** (`/v1/*`, `/v1internal:*`) run in open mode by default. Once at least one Virtual Key is created in PostgreSQL, all proxy routes require a valid `rk-...` key. See [Virtual Keys](virtual-keys.md).
 

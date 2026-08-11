@@ -1,6 +1,6 @@
 # Cline
 
-Connect Cline (VS Code extension) to pi-antigravity-rotator using the OpenAI Compatible provider.
+Connect Cline (VS Code extension) to tuxevil-rotator using the OpenAI Compatible provider.
 
 ## Configuration
 

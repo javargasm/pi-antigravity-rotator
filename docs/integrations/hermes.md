@@ -1,6 +1,6 @@
 # Hermes
 
-Connect Hermes AI agent to pi-antigravity-rotator using a custom provider configuration.
+Connect Hermes AI agent to tuxevil-rotator using a custom provider configuration.
 
 ## Configuration
 

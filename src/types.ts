@@ -826,7 +826,9 @@ export const OLLAMA_USER_AGENT =
 // TTL for the cached /api/tags listing (model catalog refresh).
 export const TAGS_CACHE_TTL_MS = 5 * 60 * 1000;
 export const ANTIGRAVITY_VERSION =
-	process.env.PI_AI_ANTIGRAVITY_VERSION || "1.107.0";
+	rotatorEnv("ANTIGRAVITY_VERSION") ||
+	process.env.PI_AI_ANTIGRAVITY_VERSION ||
+	"1.107.0";
 export const QUOTA_USER_AGENT =
 	rotatorEnv("QUOTA_USER_AGENT") ||
 	`antigravity/${ANTIGRAVITY_VERSION} darwin/arm64`;

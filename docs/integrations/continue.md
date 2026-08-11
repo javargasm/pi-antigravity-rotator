@@ -1,6 +1,6 @@
 # Continue
 
-Connect Continue (VS Code / JetBrains extension) to pi-antigravity-rotator via the OpenAI-compatible provider.
+Connect Continue (VS Code / JetBrains extension) to tuxevil-rotator via the OpenAI-compatible provider.
 
 ## Configuration (YAML — recommended)
 

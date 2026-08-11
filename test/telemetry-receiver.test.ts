@@ -181,4 +181,49 @@ describe("telemetry receiver", () => {
 		assert.equal(stats.savings.byModel["gemini-3.6-flash-high"].totalUsd, 9.00);
 		assert.equal(stats.savings.byModel["gemini-3.6-flash"].totalUsd, 9.00);
 	});
+
+	it("calculates estimated savings for Ollama Cloud models in /v1/stats", async () => {
+		const payload = {
+			event: "heartbeat",
+			installId: "ollama-savings-test-install",
+			version: "2.8.12",
+			nodeVersion: process.version,
+			os: process.platform,
+			arch: process.arch,
+			ts: new Date().toISOString(),
+			accountCount: 1,
+			modelsUsed: ["gpt-oss:20b", "gemma4:31b", "deepseek-v4-pro", "kimi-k3"],
+			totalRequests: 20,
+			uptimeSeconds: 200,
+			routingHealthState: "healthy",
+			tokensByModel: {
+				"gpt-oss:20b": { input: 1_000_000, output: 1_000_000, requests: 5 },
+				"gemma4:31b": { input: 1_000_000, output: 1_000_000, requests: 5 },
+				"deepseek-v4-pro": { input: 1_000_000, output: 1_000_000, requests: 5 },
+				"kimi-k3": { input: 1_000_000, output: 1_000_000, requests: 5 },
+			},
+		};
+
+		const postRes = await fetch(`http://127.0.0.1:${port}/v1/events`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(payload),
+		});
+		assert.equal(postRes.status, 202);
+
+		const statsRes = await fetch(`http://127.0.0.1:${port}/v1/stats`, {
+			headers: { Authorization: "Bearer secret-token" },
+		});
+		assert.equal(statsRes.status, 200);
+		const stats = (await statsRes.json()) as any;
+		assert.ok(stats.savings);
+		assert.ok(stats.savings.byModel["gpt-oss:20b"]);
+		assert.equal(stats.savings.byModel["gpt-oss:20b"].totalUsd, 0.38);
+		assert.ok(stats.savings.byModel["gemma4:31b"]);
+		assert.equal(stats.savings.byModel["gemma4:31b"].totalUsd, 1.53);
+		assert.ok(stats.savings.byModel["deepseek-v4-pro"]);
+		assert.equal(stats.savings.byModel["deepseek-v4-pro"].totalUsd, 1.31);
+		assert.ok(stats.savings.byModel["kimi-k3"]);
+		assert.equal(stats.savings.byModel["kimi-k3"].totalUsd, 4.95);
+	});
 });

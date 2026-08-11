@@ -4,7 +4,14 @@
 // Legacy: PI_ROTATOR_DIR env var and ~/.pi-antigravity-rotator/ still work
 // (the first run auto-migrates the legacy directory contents).
 
-import { existsSync, copyFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { rotatorEnv } from "./env.js";
@@ -15,6 +22,15 @@ const DEFAULT_DIR = join(homedir(), ".tuxevil-rotator");
 const LEGACY_DIRS = [join(homedir(), ".pi-antigravity-rotator")];
 
 let configDir: string | null = null;
+
+export interface LegacyMigrationReport {
+  targetDir: string;
+  copied: string[];
+  skipped: string[];
+  errors: string[];
+}
+
+let lastLegacyMigrationReport: LegacyMigrationReport | null = null;
 
 /**
  * Validate that a user-supplied config dir doesn't contain obvious path
@@ -44,14 +60,26 @@ export function resolveSafeConfigDir(
  * config dir. Only runs when the active dir holds no file at the target
  * path yet, so it never overwrites newer data.
  */
-function migrateLegacyConfig(targetDir: string): void {
+export function migrateLegacyConfig(
+  targetDir: string,
+  legacyDirs: string[] = LEGACY_DIRS,
+): LegacyMigrationReport {
+  const report: LegacyMigrationReport = {
+    targetDir,
+    copied: [],
+    skipped: [],
+    errors: [],
+  };
   mkdirSync(targetDir, { recursive: true });
-  for (const legacyDir of LEGACY_DIRS) {
+  for (const legacyDir of legacyDirs) {
     if (!existsSync(legacyDir)) continue;
     let entries: string[];
     try {
       entries = readdirSync(legacyDir);
-    } catch {
+    } catch (error) {
+      report.errors.push(
+        `${legacyDir}: ${error instanceof Error ? error.message : String(error)}`,
+      );
       continue;
     }
     for (const entry of entries) {
@@ -62,14 +90,27 @@ function migrateLegacyConfig(targetDir: string): void {
       } catch {
         continue;
       }
-      if (existsSync(targetPath)) continue;
+      if (existsSync(targetPath)) {
+        report.skipped.push(entry);
+        continue;
+      }
       try {
         copyFileSync(sourcePath, targetPath);
-      } catch {
-        // Non-fatal: keep going with the remaining files.
+        chmodSync(targetPath, statSync(sourcePath).mode & 0o7777);
+        report.copied.push(entry);
+      } catch (error) {
+        report.errors.push(
+          `${entry}: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
   }
+  lastLegacyMigrationReport = report;
+  return report;
+}
+
+export function getLastLegacyMigrationReport(): LegacyMigrationReport | null {
+  return lastLegacyMigrationReport;
 }
 
 export function getConfigDir(): string {
