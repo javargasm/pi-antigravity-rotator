@@ -78,11 +78,16 @@ import type {
   CompatCompletion,
   ResponsesConversionResult,
 } from "./providers/google-antigravity/translators.js";
-import { isCodexModel, getCodexModels } from "./providers/openai-codex/catalog.js";
+import {
+  isCodexModel,
+  isCodexProviderModelId,
+  getCodexModels,
+} from "./providers/openai-codex/catalog.js";
 import { serveCodexChat, serveCodexResponses } from "./providers/openai-codex/compat.js";
 
 function isCodexModelForRotator(rotator: AccountRotator, model: string): boolean {
   if (isCodexModel(model)) return true;
+  if (!isCodexProviderModelId(model)) return false;
   try {
     return rotator.getCodexModels?.().includes(model) ?? false;
   } catch {
@@ -111,6 +116,7 @@ export {
   validateOpenAIChatCompletionRequest,
   validateOpenAIResponsesRequest,
   validateAnthropicMessagesRequest,
+  isCodexModelForRotator,
 };
 export type {
   ModelSpec,

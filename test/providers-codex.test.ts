@@ -20,6 +20,7 @@ import {
   chatToCodexResponsesRequest,
   parseCodexResponse,
 } from "../src/providers/openai-codex/compat.js";
+import { isCodexModelForRotator } from "../src/compat.js";
 import {
   CODEX_QUOTA_MODEL_KEY,
   codexQuotaRows,
@@ -31,6 +32,7 @@ import {
   setDiscoveredCodexModels,
 } from "../src/providers/openai-codex/catalog.js";
 import type { AccountRuntime } from "../src/types.js";
+import type { AccountRotator } from "../src/rotator.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -80,6 +82,15 @@ describe("openai-codex OAuth", () => {
     assert.equal(isCodexModel("claude-sonnet-4-6"), false);
     assert.equal(isCodexModel("gpt-oss-120b-medium"), false);
     assert.equal(isCodexModel("gpt-5.6-nova"), true);
+  });
+
+  it("does not route non-Codex models from a contaminated rotator catalog", () => {
+    const rotator = {
+      getCodexModels: () => ["claude-sonnet-4-6", "gpt-oss-120b-medium"],
+    } as unknown as AccountRotator;
+
+    assert.equal(isCodexModelForRotator(rotator, "claude-sonnet-4-6"), false);
+    assert.equal(isCodexModelForRotator(rotator, "gpt-oss-120b-medium"), false);
   });
 
   it("generates S256 PKCE and a state-bound URL", () => {
