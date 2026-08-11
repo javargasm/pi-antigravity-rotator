@@ -739,6 +739,7 @@ contentHtml: `
         </div>
       </div>
       <textarea id="configEditor" spellcheck="false" style="width:100%;min-height:420px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:12px;font-family:'JetBrains Mono', monospace;font-size:12px;line-height:1.5"></textarea>
+      <div style="margin-top:8px;font-size:12px;color:var(--text-dim)">routingPolicy: timer-first, tier-first, quota-first, hybrid, sequential-quota o sticky-quota. Las políticas quota-aware evitan la rotación por contador; sticky-quota vuelve a la cuenta preferida después de un cooldown.</div>
     </div>
   </div>
 </div>

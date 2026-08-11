@@ -13,6 +13,7 @@ import {
 } from "../../types.js";
 import { fetchWithRetry } from "../../fetch-with-retry.js";
 import type { QuotaFetchContext } from "../adapter.js";
+import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
 
 /**
  * Extract per-model quotas from a Google quota response, preserving the
@@ -92,6 +93,7 @@ export async function fetchProviderQuota(
       },
       body: JSON.stringify({ project: account.config.projectId }),
       timeoutMs: 8000,
+      dispatcher: getAccountProxyDispatcher(account, "google-antigravity"),
     });
 
     if (!response.ok) {

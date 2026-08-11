@@ -82,6 +82,11 @@ The admin token is auto-generated on first run and saved to `.admin-token`. Over
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/v1internal:streamGenerateContent` | Native Antigravity proxy (used by Pi agent) |
+| `POST` | `/v1internal:<code-assist-action>` | Allowlisted Code Assist passthrough: `loadCodeAssist`, `fetchAvailableModels`, `onboardUser`, `listExperiments`, `countTokens`, `retrieveUserQuota`, or `retrieveUserQuotaSummary` |
+
+Code Assist operations are forwarded only by the Google Antigravity provider. Project-scoped
+operations use the active account's configured `projectId`; the client cannot override it and
+there is no shared-project fallback. Other `/v1internal:*` operations are rejected.
 
 ---
 

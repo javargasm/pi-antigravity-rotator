@@ -15,6 +15,10 @@ import {
   createGoogleStreamAccumulator,
   getBenchmarkSpec,
 } from "./forward.js";
+import {
+  forwardCodeAssistRequest,
+  isCodeAssistAction,
+} from "./code-assist.js";
 import { runLogin } from "./login.js";
 import { validateCredentials } from "./credentials.js";
 import {
@@ -28,6 +32,7 @@ import {
 import type { AccountRuntime } from "../../types.js";
 import { fetchWithRetry } from "../../fetch-with-retry.js";
 import { logger } from "../../logger.js";
+import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
 
 const providerLog = logger.child("provider/google");
 
@@ -49,13 +54,14 @@ async function ensureGoogleToken(account: AccountRuntime): Promise<void> {
   const response = await fetchWithRetry(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
+      body: new URLSearchParams({
       client_id: oauth.clientId,
       client_secret: oauth.clientSecret,
       refresh_token: account.config.refreshToken,
-      grant_type: "refresh_token",
-    }),
-  });
+        grant_type: "refresh_token",
+      }),
+      dispatcher: getAccountProxyDispatcher(account, "google-antigravity"),
+    });
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Token refresh failed (${response.status}): ${errorText}`);
@@ -115,6 +121,12 @@ export const googleAntigravityAdapter: ProviderAdapter = {
     return `Bearer ${account.accessToken}`;
   },
 
+  shouldRetryOnQuotaExhaustion(): boolean {
+    // Antigravity quota buckets are attached to the OAuth account/project
+    // being used. A different eligible account has an independent bucket.
+    return true;
+  },
+
   async fetchQuota(
     account: AccountRuntime,
     ctx: QuotaFetchContext,
@@ -123,6 +135,24 @@ export const googleAntigravityAdapter: ProviderAdapter = {
   },
 
   forwardRequest,
+  async forwardCodeAssistRequest(
+    account,
+    action,
+    body,
+    originalHeaders,
+    signal,
+  ) {
+    if (!isCodeAssistAction(action)) {
+      throw new Error(`Unsupported Code Assist action: ${action}`);
+    }
+    return forwardCodeAssistRequest(
+      account,
+      action,
+      body,
+      originalHeaders,
+      signal,
+    );
+  },
   createStreamAccumulator: createGoogleStreamAccumulator,
 
   getKickstartModelForPool(quotaModelKey: string): string | undefined {

@@ -17,6 +17,8 @@ import {
   normalizeContentBlocks,
 } from "../google-antigravity/translators.js";
 import type { StreamAccumulator, TokenUsage } from "../adapter.js";
+import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
+import type { RequestInitWithDispatcher } from "../../fetch-with-retry.js";
 
 const OLLAMA_BENCHMARK_MODEL = "gpt-oss:20b";
 
@@ -149,7 +151,8 @@ export async function forwardRequest(
     headers: forwardHeaders,
     body: requestBody,
     signal,
-  });
+    dispatcher: getAccountProxyDispatcher(account, "ollama"),
+  } as RequestInitWithDispatcher);
 
   return { response, endpoint };
 }

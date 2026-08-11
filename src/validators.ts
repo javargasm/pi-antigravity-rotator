@@ -4,6 +4,7 @@ import {
 	type AccountConfig,
 	type Config,
 } from "./types.js";
+import { getProxyConfigurationError } from "./providers/proxy-dispatcher.js";
 
 export interface ValidationResult<T> {
 	ok: boolean;
@@ -44,6 +45,8 @@ export function validateAccountConfig(value: unknown, path = "account"): Validat
 	const errors: string[] = [];
 
 	if (!isNonEmptyString(value.email)) errors.push(`${path}.email must be a non-empty string`);
+	const accountProxyError = getProxyConfigurationError(value.proxyUrl);
+	if (accountProxyError) errors.push(`${path}.${accountProxyError}`);
 	// Parent-account model: email owns per-provider credentials.
 	// Legacy flat shape (provider/apiKey/refreshToken at top level) is
 	// still accepted and normalized on load.
@@ -61,6 +64,8 @@ export function validateAccountConfig(value: unknown, path = "account"): Validat
 				continue;
 			}
 			if (!isNonEmptyString(cred.provider)) errors.push(`${cpath}.provider must be a non-empty string`);
+			const proxyError = getProxyConfigurationError(cred.proxyUrl);
+			if (proxyError) errors.push(`${cpath}.${proxyError}`);
 			if (cred.provider === "ollama") {
 				if (!isNonEmptyString(cred.apiKey)) errors.push(`${cpath}.apiKey must be a non-empty string`);
 			} else {
@@ -103,8 +108,8 @@ export function validateConfig(value: unknown): ValidationResult<Config> {
 
 	if (value.proxyPort !== undefined && !isPositiveNumber(value.proxyPort)) errors.push("config.proxyPort must be a positive number");
 	if (value.bindHost !== undefined && !isNonEmptyString(value.bindHost)) errors.push("config.bindHost must be a non-empty string");
-	if (value.routingPolicy !== undefined && !["timer-first", "tier-first", "quota-first", "hybrid"].includes(String(value.routingPolicy))) {
-		errors.push('config.routingPolicy must be "timer-first", "tier-first", "quota-first", or "hybrid"');
+	if (value.routingPolicy !== undefined && !["timer-first", "tier-first", "quota-first", "hybrid", "sequential-quota", "sticky-quota"].includes(String(value.routingPolicy))) {
+		errors.push('config.routingPolicy must be "timer-first", "tier-first", "quota-first", "hybrid", "sequential-quota", or "sticky-quota"');
 	}
 	if (value.requestsPerRotation !== undefined && !isPositiveNumber(value.requestsPerRotation)) errors.push("config.requestsPerRotation must be a positive number");
 	if (value.rotateOnQuotaDrop !== undefined && !isNonNegativeNumber(value.rotateOnQuotaDrop)) errors.push("config.rotateOnQuotaDrop must be a non-negative number");

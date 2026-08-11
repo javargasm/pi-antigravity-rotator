@@ -26,6 +26,7 @@ import { runKeyMigrations } from "./key-migrations.js";
 import { flushSpendLogs, stopRetentionCleanup, startRetentionCleanup } from "./spend-logger.js";
 import { stopPendingSessionReaper } from "./onboarding.js";
 import { getProxyExposureWarning } from "./exposure.js";
+import { closeProxyDispatchers } from "./providers/proxy-dispatcher.js";
 
 function loadConfig(): Config {
   try {
@@ -246,6 +247,7 @@ export async function main(): Promise<void> {
     await telemetry.shutdown();
     rotator.stopQuotaPolling();
     stopPendingSessionReaper();
+    await closeProxyDispatchers();
     const { closeDb } = await import("./db-store.js");
     await closeDb();
     process.exit(0);

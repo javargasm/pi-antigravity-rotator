@@ -5,10 +5,12 @@
 
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { once } from "node:events";
 import { afterEach, describe, it } from "node:test";
 import {
-	withRotation,
-	type RequestBody,
+  startProxy,
+  withRotation,
+  type RequestBody,
 } from "../src/proxy.js";
 import { ANTIGRAVITY_ENDPOINTS, type AccountRuntime } from "../src/types.js";
 import type { AccountRotator } from "../src/rotator.js";
@@ -69,7 +71,8 @@ type RotatorTracking = {
 	markError?: number;
 	recordRequest?: number;
 	recordProvider429?: number;
-	finishRequest?: number;
+  finishRequest?: number;
+  rotations?: number;
 };
 
 type RotatorOptions = {
@@ -88,6 +91,7 @@ function makeRotator(
 	tracking.recordRequest ??= 0;
 	tracking.recordProvider429 ??= 0;
 	tracking.finishRequest ??= 0;
+	tracking.rotations ??= 0;
 	const accounts = [account, ...(options.accounts || [])];
 	let activeIndex = 0;
 	return {
@@ -96,6 +100,7 @@ function makeRotator(
 		rotateToNext: async () => {
 			if (activeIndex >= accounts.length - 1) return null;
 			activeIndex += 1;
+			tracking.rotations!++;
 			return accounts[activeIndex];
 		},
 		finishRequest: () => { tracking.finishRequest!++; },
@@ -120,6 +125,13 @@ function makeRotator(
 		getConfig: () => ({
 			streamRecoveryMaxRetries: options.streamRecoveryMaxRetries ?? 2,
 		}),
+		saveState: async () => {},
+		getStatus: () => ({ accounts: [] }),
+		getOllamaModels: () => [],
+		resolveQuotaModelKeyForDisplay: (model: string) => model,
+		recordRequestLog: () => {},
+		recordLatency: () => {},
+		recordTokenUsage: () => {},
 	} as unknown as AccountRotator;
 }
 
@@ -422,6 +434,249 @@ describe("proxy e2e: 429 rate-limited", () => {
 			}
 			assert.equal(tracking.finishRequest, 1, "RESOURCE_EXHAUSTED should release the account once");
 		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("retries account-scoped RESOURCE_EXHAUSTED with the next account", async () => {
+		const attempts: string[] = [];
+		const upstream = await listen((req, res) => {
+			const authorization = String(req.headers.authorization ?? "");
+			attempts.push(authorization);
+			if (authorization.includes("token-quota@example.com")) {
+				res.writeHead(429, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED", message: "quota exceeded" } }));
+				return;
+			}
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end("ok");
+		});
+		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
+
+		const tracking = { markExhausted: 0, recordProvider429: 0, finishRequest: 0, rotations: 0, recordRequest: 0 };
+		const rotator = makeRotator(
+			makeAccount("quota@example.com"),
+			tracking,
+			{ accounts: [makeAccount("healthy@example.com")] },
+		);
+
+		try {
+			const outcome = await withRotation(
+				rotator,
+				"gemini-3.1-pro",
+				{},
+				makeBody(),
+				async () => "retried-successfully",
+			);
+
+			assert.deepEqual(outcome.ok && outcome.result, "retried-successfully");
+			assert.equal(attempts.length, 2);
+			assert.deepEqual(attempts, ["Bearer token-quota@example.com", "Bearer token-healthy@example.com"]);
+			assert.equal(tracking.markExhausted, 1);
+			assert.equal(tracking.recordProvider429, 1);
+			assert.equal(tracking.rotations, 1);
+			// rotateToNext briefly starts/releases the reserved account; the next
+			// loop starts/releases it again for the actual retry.
+			assert.equal(tracking.finishRequest, 3, "failed account and reservation lifecycle must be balanced");
+		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("does not rotate to another account for a generic 429", async () => {
+		const upstream = await listen((req, res) => {
+			res.writeHead(429, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: { status: "RATE_LIMITED", message: "try later" } }));
+		});
+		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
+
+		const tracking = { rotations: 0 };
+		const rotator = makeRotator(
+			makeAccount("limited@example.com"),
+			tracking,
+			{ accounts: [makeAccount("unused@example.com")] },
+		);
+
+		try {
+			const outcome = await withRotation(
+				rotator,
+				"gemini-3.1-pro",
+				{},
+				makeBody(),
+				async () => "should-not-reach",
+			);
+
+			assert.equal(outcome.ok, false);
+			assert.equal(tracking.rotations, 0);
+		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("retries RESOURCE_EXHAUSTED through the native v1internal route", async () => {
+		const attempts: string[] = [];
+		const upstream = await listen((req, res) => {
+			const authorization = String(req.headers.authorization ?? "");
+			attempts.push(authorization);
+			if (authorization.includes("token-native-quota@example.com")) {
+				res.writeHead(429, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED", message: "quota exceeded" } }));
+				return;
+			}
+			res.writeHead(200, { "Content-Type": "text/event-stream" });
+			res.end('data: {"response":{"candidates":[{"content":{"parts":[{"text":"native ok"}]}}]}}\n\ndata: [DONE]\n\n');
+		});
+		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
+
+		const tracking = { rotations: 0 };
+		const rotator = makeRotator(
+			makeAccount("native-quota@example.com"),
+			tracking,
+			{ accounts: [makeAccount("native-healthy@example.com")] },
+		);
+		const proxy = startProxy(rotator, 0, "127.0.0.1");
+		await once(proxy, "listening");
+		const address = proxy.address();
+		if (!address || typeof address === "string") throw new Error("proxy did not bind");
+
+		try {
+			const response = await fetch(`http://127.0.0.1:${address.port}/v1internal:streamGenerateContent?alt=sse`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					project: "test-project",
+					model: "gemini-3.1-pro",
+					request: { contents: [{ role: "user", parts: [{ text: "hello" }] }] },
+				}),
+			});
+
+			assert.equal(response.status, 200);
+			assert.match(await response.text(), /native ok/);
+			assert.deepEqual(attempts, ["Bearer token-native-quota@example.com", "Bearer token-native-healthy@example.com"]);
+			assert.equal(tracking.rotations, 1);
+		} finally {
+			await new Promise<void>((resolve, reject) => proxy.close((err) => (err ? reject(err) : resolve())));
+			await upstream.close();
+		}
+	});
+});
+
+describe("native Code Assist passthrough", () => {
+	it("allowlists actions, injects the active project, and preserves JSON responses", async () => {
+		const requests: Array<{ action: string; body: Record<string, unknown> }> = [];
+		const upstream = await listen((req, res) => {
+			const action = (req.url || "").split(":").pop() || "";
+			let raw = "";
+			req.on("data", (chunk) => { raw += chunk.toString(); });
+			req.on("end", () => {
+				requests.push({ action, body: JSON.parse(raw) as Record<string, unknown> });
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ models: [{ name: "gemini-3-flash" }] }));
+			});
+		});
+		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
+		const proxy = startProxy(makeRotator(makeAccount("code-assist@example.com")), 0, "127.0.0.1");
+		await once(proxy, "listening");
+		const address = proxy.address();
+		if (!address || typeof address === "string") throw new Error("proxy did not bind");
+
+		try {
+			const response = await fetch(`http://127.0.0.1:${address.port}/v1internal:fetchAvailableModels`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json", Authorization: "Bearer client-token" },
+				body: JSON.stringify({ project: "client-project", metadata: { ideType: "ANTIGRAVITY" } }),
+			});
+			assert.equal(response.status, 200);
+			assert.deepEqual(await response.json(), { models: [{ name: "gemini-3-flash" }] });
+			assert.deepEqual(requests, [{
+				action: "fetchAvailableModels",
+				body: { project: "test-project", metadata: { ideType: "ANTIGRAVITY" } },
+			}]);
+		} finally {
+			await new Promise<void>((resolve, reject) => proxy.close((err) => (err ? reject(err) : resolve())));
+			await upstream.close();
+		}
+	});
+
+	it("rejects invalid payloads and unknown operations before upstream forwarding", async () => {
+		let upstreamCalls = 0;
+		const upstream = await listen((req, res) => {
+			upstreamCalls++;
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end("{}");
+		});
+		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
+		const proxy = startProxy(makeRotator(makeAccount("code-validation@example.com")), 0, "127.0.0.1");
+		await once(proxy, "listening");
+		const address = proxy.address();
+		if (!address || typeof address === "string") throw new Error("proxy did not bind");
+
+		try {
+			const invalid = await fetch(`http://127.0.0.1:${address.port}/v1internal:countTokens`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({}),
+			});
+			assert.equal(invalid.status, 400);
+
+			const unknown = await fetch(`http://127.0.0.1:${address.port}/v1internal:deleteAccount`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ email: "nope@example.com" }),
+			});
+			assert.equal(unknown.status, 404);
+			assert.equal(upstreamCalls, 0);
+		} finally {
+			await new Promise<void>((resolve, reject) => proxy.close((err) => (err ? reject(err) : resolve())));
+			await upstream.close();
+		}
+	});
+
+	it("rotates after a Code Assist transport failure", async () => {
+		const attempts: string[] = [];
+		const upstream = await listen((req, res) => {
+			const authorization = String(req.headers.authorization ?? "");
+			attempts.push(authorization);
+			req.resume();
+			req.on("end", () => {
+				if (authorization.includes("code-transport@example.com")) {
+					res.destroy();
+					return;
+				}
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ ok: true }));
+			});
+		});
+		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
+		const tracking = { rotations: 0 };
+		const proxy = startProxy(
+			makeRotator(
+				makeAccount("code-transport@example.com"),
+				tracking,
+				{ accounts: [makeAccount("code-healthy@example.com")] },
+			),
+			0,
+			"127.0.0.1",
+		);
+		await once(proxy, "listening");
+		const address = proxy.address();
+		if (!address || typeof address === "string") throw new Error("proxy did not bind");
+
+		try {
+			const response = await fetch(`http://127.0.0.1:${address.port}/v1internal:loadCodeAssist`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ metadata: { ideType: "ANTIGRAVITY" } }),
+			});
+			assert.equal(response.status, 200);
+			assert.deepEqual(await response.json(), { ok: true });
+			assert.deepEqual(attempts, [
+				"Bearer token-code-transport@example.com",
+				"Bearer token-code-healthy@example.com",
+			]);
+			assert.equal(tracking.rotations, 1);
+		} finally {
+			await new Promise<void>((resolve, reject) => proxy.close((err) => (err ? reject(err) : resolve())));
 			await upstream.close();
 		}
 	});

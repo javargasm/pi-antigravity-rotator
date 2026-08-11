@@ -21,7 +21,14 @@ export function normalizeAccountConfig(account: AccountConfig): AccountConfig {
   // KEEP the top-level fields: Google reads (forward/quota/index) still
   // consult them, so both shapes coexist until the runtime migrates.
   if (provider === "ollama" && typeof account.apiKey === "string" && account.apiKey.trim() !== "") {
-    return { ...account, credentials: [{ provider: "ollama", apiKey: account.apiKey }] };
+    return {
+      ...account,
+      credentials: [{
+        provider: "ollama",
+        apiKey: account.apiKey,
+        proxyUrl: account.proxyUrl,
+      }],
+    };
   }
   if (provider !== "ollama" && (account.refreshToken !== undefined || account.projectId !== undefined)) {
     return {
@@ -32,6 +39,7 @@ export function normalizeAccountConfig(account: AccountConfig): AccountConfig {
           refreshToken: account.refreshToken,
           projectId: account.projectId,
           projectSource: account.projectSource,
+          proxyUrl: account.proxyUrl,
         },
       ],
     };

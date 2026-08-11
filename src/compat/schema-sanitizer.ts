@@ -21,11 +21,15 @@ export function sanitizeGeminiSchema(schema: unknown): unknown {
 		"multipleOf", "minLength", "maxLength", "pattern",
 		"minItems", "maxItems", "uniqueItems",
 		"minProperties", "maxProperties", "propertyNames", "title", "default",
+		"deprecated",
 	]);
 
 	const out: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(schema)) {
 		if (UNSUPPORTED.has(key)) continue;
+		// Gemini's protobuf layer rejects vendor extensions such as
+		// x-google-enum-descriptions and x-google-identifier.
+		if (key.startsWith("x-")) continue;
 
 		if (key === "anyOf" || key === "oneOf" || key === "allOf") {
 			if (Array.isArray(value)) {
@@ -104,12 +108,15 @@ export function sanitizeClaudeViaGeminiSchema(schema: unknown): unknown {
 		"patternProperties", "unevaluatedProperties", "unevaluatedItems",
 		"contentEncoding", "contentMediaType",
 		// Gemini's protobuf layer rejects these regardless of target model
-		"exclusiveMinimum", "exclusiveMaximum", "propertyNames",
+		"exclusiveMinimum", "exclusiveMaximum", "propertyNames", "deprecated",
 	]);
 
 	const out: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(schema)) {
 		if (UNSUPPORTED.has(key)) continue;
+		// Vendor extensions are not understood by Gemini's outer protobuf API,
+		// even when the inner request targets Claude.
+		if (key.startsWith("x-")) continue;
 
 		// `const` is not supported by Gemini's API — convert to a single-value enum
 		if (key === "const") {

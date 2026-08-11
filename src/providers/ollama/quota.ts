@@ -14,6 +14,7 @@ import {
   sessionWindowEndMs,
   SESSION_WINDOW_MS,
 } from "./usage-windows.js";
+import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
 
 /**
  * Poll `GET /api/usage` for one account and store the parsed pool quotas.
@@ -33,6 +34,7 @@ export async function fetchProviderUsage(
         "User-Agent": OLLAMA_USER_AGENT,
       },
       timeoutMs: 8000,
+      dispatcher: getAccountProxyDispatcher(account, "ollama"),
     });
 
     if (!response.ok) {

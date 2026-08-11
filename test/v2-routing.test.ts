@@ -213,6 +213,149 @@ describe("v2 routing and status", () => {
     );
   });
 
+  it("keeps sticky-quota on the active account beyond the request threshold", async () => {
+    const config = makeConfig();
+    config.routingPolicy = "sticky-quota";
+    config.requestsPerRotation = 1;
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+    rotator.ensureValidToken = async () => {};
+    const model = "gemini";
+    for (const account of rotator.accounts) {
+      account.quota = [
+        {
+          modelKey: model,
+          displayName: "G3.1Pro",
+          percentRemaining: 80,
+          resetTime: null,
+          timerType: "7d",
+        },
+      ];
+    }
+    rotator.modelState.set(model, {
+      activeAccountIndex: 0,
+      stickyAccountIndex: 0,
+      quotaAtRotationStart: 80,
+      requestsOnActiveAccount: 0,
+    });
+
+    const account = await rotator.getActiveAccount(model);
+    assert.equal(account?.config.email, "a@example.com");
+    rotator.finishRequest(account, model);
+    assert.equal(rotator.recordRequest(account, model), false);
+    assert.equal(rotator.modelState.get(model).activeAccountIndex, 0);
+  });
+
+  it("temporarily falls back from sticky-quota and restores the preferred account", async () => {
+    const config = makeConfig();
+    config.routingPolicy = "sticky-quota";
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+    rotator.ensureValidToken = async () => {};
+    const model = "gemini";
+    for (const account of rotator.accounts) {
+      account.quota = [
+        {
+          modelKey: model,
+          displayName: "G3.1Pro",
+          percentRemaining: 80,
+          resetTime: null,
+          timerType: "7d",
+        },
+      ];
+    }
+    rotator.modelState.delete(model);
+    const initial = await rotator.getActiveAccount(model);
+    assert.equal(initial?.config.email, "a@example.com");
+    rotator.finishRequest(initial, model);
+    assert.equal(rotator.modelState.get(model).stickyAccountIndex, 0);
+    rotator.accounts[0].cooldownsByModel[model] = Date.now() + 60_000;
+
+    const fallback = await rotator.getActiveAccount(model);
+    assert.equal(fallback?.config.email, "b@example.com");
+    rotator.finishRequest(fallback, model);
+    assert.equal(rotator.modelState.get(model).stickyAccountIndex, 0);
+
+    rotator.accounts[0].cooldownsByModel[model] = Date.now() - 1;
+    const restored = await rotator.getActiveAccount(model);
+    assert.equal(restored?.config.email, "a@example.com");
+    rotator.finishRequest(restored, model);
+    assert.equal(rotator.modelState.get(model).activeAccountIndex, 0);
+  });
+
+  it("permanently leaves a sticky account after its quota reaches zero", async () => {
+    const config = makeConfig();
+    config.routingPolicy = "sticky-quota";
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+    rotator.ensureValidToken = async () => {};
+    const model = "gemini";
+    rotator.accounts[0].quota = [
+      {
+        modelKey: model,
+        displayName: "G3.1Pro",
+        percentRemaining: 0,
+        resetTime: null,
+        timerType: "7d",
+      },
+    ];
+    rotator.accounts[1].quota = [
+      {
+        modelKey: model,
+        displayName: "G3.1Pro",
+        percentRemaining: 80,
+        resetTime: null,
+        timerType: "7d",
+      },
+    ];
+    rotator.modelState.set(model, {
+      activeAccountIndex: 0,
+      stickyAccountIndex: 0,
+      quotaAtRotationStart: 80,
+      requestsOnActiveAccount: 3,
+    });
+
+    const replacement = await rotator.getActiveAccount(model);
+    assert.equal(replacement?.config.email, "b@example.com");
+    rotator.finishRequest(replacement, model);
+    assert.equal(rotator.modelState.get(model).stickyAccountIndex, 1);
+  });
+
+  it("uses circular account order for sequential-quota", () => {
+    const config = makeConfig();
+    config.routingPolicy = "sequential-quota";
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+    const model = "gemini";
+    rotator.accounts[0].quota = [
+      {
+        modelKey: model,
+        displayName: "G3.1Pro",
+        percentRemaining: 1,
+        resetTime: null,
+        timerType: "fresh",
+      },
+    ];
+    rotator.accounts[1].quota = [
+      {
+        modelKey: model,
+        displayName: "G3.1Pro",
+        percentRemaining: 99,
+        resetTime: null,
+        timerType: "7d",
+      },
+    ];
+
+    assert.equal(
+      rotator.pickBestModelAccount(model, Date.now(), -1)?.config.email,
+      "a@example.com",
+    );
+    assert.equal(
+      rotator.pickBestModelAccount(model, Date.now(), 0)?.config.email,
+      "b@example.com",
+    );
+  });
+
   it("exposes the health score components in routing diagnostics", () => {
     const rotator = new AccountRotator(makeConfig()) as any;
     rotator.stopQuotaPolling();

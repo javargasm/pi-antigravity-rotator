@@ -61,7 +61,7 @@ export type ResponseOutputItem =
 
 export interface ChatMessage {
   role: "system" | "developer" | "user" | "assistant" | "model" | "tool";
-  content:
+  content?:
     | string
     | Array<{ type: string; text?: string; [key: string]: unknown }>
     | null;
@@ -364,12 +364,33 @@ export function validateMessages(value: unknown): value is ChatMessage[] {
         )
       )
         return false;
+      // OpenAI clients may omit assistant content when the turn consists
+      // solely of valid tool calls. Other roles still require content.
+      if (msg.content === undefined) {
+        return msg.role === "assistant" && hasValidToolCalls(msg.tool_calls);
+      }
       return (
         typeof msg.content === "string" ||
         msg.content === null ||
         Array.isArray(msg.content)
       );
     })
+  );
+}
+
+function hasValidToolCalls(value: unknown): value is OpenAIToolCall[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (toolCall) =>
+        isRecord(toolCall) &&
+        isNonEmptyString(toolCall.id) &&
+        toolCall.type === "function" &&
+        isRecord(toolCall.function) &&
+        isNonEmptyString(toolCall.function.name) &&
+        "arguments" in toolCall.function,
+    )
   );
 }
 

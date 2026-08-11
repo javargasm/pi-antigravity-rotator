@@ -40,6 +40,19 @@ describe("fetchWithRetry", () => {
 		assert.equal(await response.text(), "ok");
 	});
 
+	it("passes an account-selected dispatcher through without replacing it", async () => {
+		const dispatcher = { dispatch() { return true; } } as never;
+		let received: unknown;
+		await fetchWithRetry("https://example.test", {
+			dispatcher,
+			fetchImpl: async (_input, init) => {
+				received = (init as RequestInit & { dispatcher?: unknown }).dispatcher;
+				return new Response("ok", { status: 200 });
+			},
+		});
+		assert.strictEqual(received, dispatcher);
+	});
+
 	it("retries retryable statuses then returns success", async () => {
 		let calls = 0;
 		const response = await fetchWithRetry("https://example.test", {

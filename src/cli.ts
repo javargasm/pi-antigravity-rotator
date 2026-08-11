@@ -46,6 +46,45 @@ switch (command) {
     await runLogin(providerId);
     break;
   }
+  case "import": {
+    const { initDb, closeDb } = await import("./db-store.js");
+    const { readFile } = await import("node:fs/promises");
+    const { homedir } = await import("node:os");
+    const { join, resolve } = await import("node:path");
+    const {
+      ensurePiAuthConfig,
+      ensurePiModelsConfig,
+      importAccountsToConfig,
+    } = await import("./account-store.js");
+    const sourcePath = resolve(
+      args[1] || join(homedir(), ".config", "antigravity", "accounts.json"),
+    );
+
+    try {
+      await initDb();
+      const parsed = JSON.parse(await readFile(sourcePath, "utf-8")) as unknown;
+      const result = await importAccountsToConfig(parsed);
+      if (result.added + result.updated > 0) {
+        await ensurePiModelsConfig();
+        await ensurePiAuthConfig();
+      }
+      console.log(`Imported ${result.added + result.updated} account(s) from ${sourcePath}`);
+      console.log(`  Added:     ${result.added}`);
+      console.log(`  Updated:   ${result.updated}`);
+      console.log(`  Unchanged: ${result.unchanged}`);
+      console.log(`  Skipped:   ${result.skipped}`);
+      for (const error of result.errors) console.error(`  Skipped: ${error}`);
+      if (result.errors.length > 0) process.exitCode = 1;
+    } catch (err) {
+      console.error(
+        `Import failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      process.exitCode = 1;
+    } finally {
+      await closeDb();
+    }
+    break;
+  }
   case "status": {
     const { initDb, closeDb } = await import("./db-store.js");
     const {
@@ -193,6 +232,9 @@ switch (command) {
     console.log("  tuxevil-rotator start     Start the proxy (default)");
     console.log("  tuxevil-rotator login     Add a Google account (login --provider ollama for Ollama Cloud)");
     console.log(
+      "  tuxevil-rotator import    Import Google/Pi accounts from JSON (default: ~/.config/antigravity/accounts.json)",
+    );
+    console.log(
       "  tuxevil-rotator status    Show account status (JSON)",
     );
     console.log(
@@ -212,6 +254,9 @@ switch (command) {
     console.log("Options:");
     console.log(
       "  --config-dir <path>    Config directory (default: ~/.tuxevil-rotator/)",
+    );
+    console.log(
+      "  routingPolicy          timer-first | tier-first | quota-first | hybrid | sequential-quota | sticky-quota (accounts.json)",
     );
     console.log();
     console.log("Environment:");

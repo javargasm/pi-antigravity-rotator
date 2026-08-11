@@ -47,6 +47,7 @@ import { isHostedOAuthConfigured } from "./providers/google-antigravity/oauth.js
 import type { RequestBody } from "./proxy.js";
 import { UsagePredictor, type ExhaustionPrediction } from "./providers/ollama/prediction.js";
 import { fetchWithRetry } from "./fetch-with-retry.js";
+import type { RequestInitWithDispatcher } from "./fetch-with-retry.js";
 import { getOllamaApiKey } from "./providers/ollama/credentials.js";
 import {
   DEFAULT_PROVIDER,
@@ -57,6 +58,7 @@ import {
 } from "./providers/registry.js";
 import type { QuotaFetchContext } from "./providers/adapter.js";
 import { logger } from "./logger.js";
+import { getAccountProxyDispatcher } from "./providers/proxy-dispatcher.js";
 import { getUpdateInfo } from "./version-check.js";
 import { getNotifications } from "./notification-poller.js";
 import { getConfiguredAdminToken } from "./admin-auth.js";
@@ -334,6 +336,13 @@ export class AccountRotator {
         for (const [model, idx] of Object.entries(state.modelAccounts)) {
           this.modelState.set(model, {
             activeAccountIndex: Math.min(idx, this.accounts.length - 1),
+            stickyAccountIndex:
+              state.modelStickyAccounts?.[model] !== undefined
+                ? Math.min(
+                    state.modelStickyAccounts[model],
+                    this.accounts.length - 1,
+                  )
+                : undefined,
             quotaAtRotationStart: -1,
             requestsOnActiveAccount: state.modelRequestCounts?.[model] ?? 0,
           });
@@ -443,14 +452,19 @@ export class AccountRotator {
   async saveState(): Promise<void> {
     const modelAccounts: Record<string, number> = {};
     const modelRequestCounts: Record<string, number> = {};
+    const modelStickyAccounts: Record<string, number> = {};
     for (const [model, state] of this.modelState.entries()) {
       modelAccounts[model] = state.activeAccountIndex;
       modelRequestCounts[model] = state.requestsOnActiveAccount;
+      if (state.stickyAccountIndex !== undefined) {
+        modelStickyAccounts[model] = state.stickyAccountIndex;
+      }
     }
 
     const state: PersistedState = {
       modelAccounts,
       modelRequestCounts,
+      modelStickyAccounts,
       currentIndex: this.defaultIndex,
       protectivePauseUntil: this.protectivePauseUntil,
       protectivePauseReason: this.protectivePauseReason,
@@ -797,6 +811,12 @@ export class AccountRotator {
     });
   }
 
+  private isQuotaAwarePolicy(
+    policy: Config["routingPolicy"] = this.config.routingPolicy,
+  ): boolean {
+    return policy === "sequential-quota" || policy === "sticky-quota";
+  }
+
   private pickBestModelAccount(
     modelKey: string,
     now: number,
@@ -814,7 +834,16 @@ export class AccountRotator {
     } | null = null;
     const policy = this.config.routingPolicy || "timer-first";
 
-    for (let i = 0; i < this.accounts.length; i++) {
+    const candidateIndices =
+      policy === "sequential-quota"
+        ? Array.from({ length: this.accounts.length }, (_, offset) =>
+            excludeIdx >= 0
+              ? (excludeIdx + 1 + offset) % this.accounts.length
+              : offset,
+          )
+        : Array.from({ length: this.accounts.length }, (_, i) => i);
+
+    for (const i of candidateIndices) {
       if (i === excludeIdx) continue;
       const account = this.accounts[i];
       if (!this.isProviderEligibleForKey(account, modelKey)) continue;
@@ -842,6 +871,7 @@ export class AccountRotator {
         tokenSnapshot.tokens < 1
       )
         continue;
+      if (policy === "sequential-quota") return account;
       const metrics = {
         priority,
         quota,
@@ -1181,6 +1211,9 @@ export class AccountRotator {
     },
     policy: Config["routingPolicy"],
   ): boolean {
+    if (policy === "sequential-quota") {
+      return candidate.distance < best.distance;
+    }
     if (policy === "hybrid") {
       return (
         candidate.hybridScore > best.hybridScore ||
@@ -1428,8 +1461,37 @@ export class AccountRotator {
     const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
     const state = modelKey ? this.modelState.get(modelKey) : null;
     const idx = state?.activeAccountIndex ?? this.defaultIndex;
-
     const current = this.accounts[idx];
+
+    if (
+      modelKey &&
+      !state &&
+      current &&
+      this.isQuotaAwarePolicy() &&
+      this.isRoutableForModel(current, modelKey, now)
+    ) {
+      // Seed the preference on the first request as well. Without this, a
+      // default account that later enters cooldown would be indistinguishable
+      // from an account that was never preferred and could not be restored.
+      this.modelState.set(modelKey, {
+        activeAccountIndex: idx,
+        stickyAccountIndex: idx,
+        quotaAtRotationStart: this.getModelQuota(current, modelKey),
+        requestsOnActiveAccount: 0,
+      });
+      this.scheduleStateSave();
+    }
+
+    if (modelKey && state) {
+      const restored = await this.restorePreferredModelAccount(
+        modelKey,
+        now,
+        state,
+        idx,
+      );
+      if (restored) return restored;
+    }
+
     if (current && modelKey && !this.isProviderEligibleForKey(current, modelKey)) {
       this.log(
         `${current.config.label || current.config.email}: provider mismatch for model, rotating`,
@@ -1506,6 +1568,45 @@ export class AccountRotator {
     return this.rotateDefault();
   }
 
+  private async restorePreferredModelAccount(
+    modelKey: string,
+    now: number,
+    state: ModelRotationState,
+    activeIndex: number,
+  ): Promise<AccountRuntime | null> {
+    if (!this.isQuotaAwarePolicy()) return null;
+    const preferredIndex = state.stickyAccountIndex;
+    if (
+      preferredIndex === undefined ||
+      preferredIndex === activeIndex ||
+      preferredIndex < 0 ||
+      preferredIndex >= this.accounts.length
+    ) {
+      return null;
+    }
+
+    const preferred = this.accounts[preferredIndex];
+    if (this.getModelQuota(preferred, modelKey) === 0) {
+      // A zero quota is a permanent hand-off for this rotation cycle. The
+      // next selected account becomes the new preference in rotateModel().
+      state.stickyAccountIndex = undefined;
+      this.scheduleStateSave();
+      return null;
+    }
+    if (!this.isRoutableForModel(preferred, modelKey, now)) return null;
+
+    this.log(
+      `[${modelKey}] Restoring preferred account ${preferred.config.label || preferred.config.email} after temporary fallback`,
+    );
+    const restored = await this.activateModelAccount(
+      modelKey,
+      preferred,
+      preferredIndex,
+    );
+    this.countModelAssignment(modelKey);
+    return restored;
+  }
+
   // Rotate a specific model to the best available account.
   async rotateModel(
     modelKey: string,
@@ -1516,27 +1617,32 @@ export class AccountRotator {
     const best = this.pickBestModelAccount(modelKey, now, excludeIdx);
 
     if (best) {
-      const newIdx = this.accounts.indexOf(best);
+      const previous = this.modelState.get(modelKey);
+      let stickyAccountIndex: number | undefined;
+      if (this.isQuotaAwarePolicy() && previous) {
+        const preferredIndex = previous.stickyAccountIndex;
+        const preferred =
+          preferredIndex === undefined
+            ? undefined
+            : this.accounts[preferredIndex];
+        if (
+          preferredIndex !== undefined &&
+          preferred &&
+          this.getModelQuota(preferred, modelKey) !== 0 &&
+          (preferredIndex !== previous.activeAccountIndex ||
+            !this.isAvailableForModel(preferred, modelKey, now))
+        ) {
+          // Keep the original account as the preference while a cooldown,
+          // breaker, or concurrency limit forces a temporary fallback.
+          stickyAccountIndex = preferredIndex;
+        }
+      }
       const quota = this.getModelQuota(best, modelKey);
       const timerType = this.getModelTimerType(best, modelKey);
-      this.modelState.set(modelKey, {
-        activeAccountIndex: newIdx,
-        quotaAtRotationStart: quota,
-        requestsOnActiveAccount: 0,
-      });
       this.log(
         `[${modelKey}] Rotated to ${best.config.label || best.config.email} [${timerType}] (quota: ${quota >= 0 ? quota + "%" : "unknown"})`,
       );
-      await this.saveState();
-      this.startRequest(best, modelKey);
-      try {
-        await this.ensureValidToken(best);
-        return best;
-      } catch (err) {
-        this.refundTokenBucket(best, Date.now());
-        this.finishRequest(best, modelKey);
-        throw err;
-      }
+      return this.activateModelAccount(modelKey, best, stickyAccountIndex);
     }
 
     if (
@@ -1581,6 +1687,33 @@ export class AccountRotator {
       );
     }
     return null;
+  }
+
+  private async activateModelAccount(
+    modelKey: string,
+    account: AccountRuntime,
+    stickyAccountIndex?: number,
+  ): Promise<AccountRuntime> {
+    const newIdx = this.accounts.indexOf(account);
+    const quota = this.getModelQuota(account, modelKey);
+    this.modelState.set(modelKey, {
+      activeAccountIndex: newIdx,
+      stickyAccountIndex: this.isQuotaAwarePolicy()
+        ? stickyAccountIndex ?? newIdx
+        : undefined,
+      quotaAtRotationStart: quota,
+      requestsOnActiveAccount: 0,
+    });
+    await this.saveState();
+    this.startRequest(account, modelKey);
+    try {
+      await this.ensureValidToken(account);
+      return account;
+    } catch (err) {
+      this.refundTokenBucket(account, Date.now());
+      this.finishRequest(account, modelKey);
+      throw err;
+    }
   }
 
   // Fallback rotation when model can't be resolved
@@ -3075,6 +3208,7 @@ export class AccountRotator {
     account: AccountRuntime,
     model?: string,
   ): boolean {
+    if (this.isQuotaAwarePolicy()) return false;
     if (!this.config.useRequestCountRotationWhenQuotaUnknownOnly) return true;
     const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
     if (!modelKey) return true;
@@ -3369,7 +3503,8 @@ export class AccountRotator {
           },
           body,
           signal: controller.signal,
-        });
+          dispatcher: getAccountProxyDispatcher(account, "google-antigravity"),
+        } as RequestInitWithDispatcher);
       } catch (err) {
         clearTimeout(timeout);
         const msg = `kickstart network error: ${err instanceof Error ? err.message : String(err)}`;

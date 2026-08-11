@@ -56,7 +56,7 @@ Within the same priority tier, the account with the most remaining quota for tha
 
 ## Routing Policies
 
-Four routing policies are available via `routingPolicy` in `accounts.json`:
+Six routing policies are available via `routingPolicy` in `accounts.json`:
 
 | Policy | Primary Sort | Description |
 |--------|-------------|-------------|
@@ -64,6 +64,17 @@ Four routing policies are available via `routingPolicy` in `accounts.json`:
 | `tier-first` | Account tier | Ultra > Pro > Plus > Free > Unknown |
 | `quota-first` | Remaining quota % | Highest remaining quota wins |
 | `hybrid` | Composite score | Weighted numeric score combining all factors |
+| `sequential-quota` | Circular account order | Walk accounts in configured order, skipping cooldowns and zero-quota pools |
+| `sticky-quota` | Preferred account | Keep the current account while it has quota; use a temporary fallback during cooldowns and return when it recovers |
+
+The quota-aware policies do not rotate merely because `requestsPerRotation` was
+reached. `sticky-quota` prefers the account already serving the model, while
+`sequential-quota` advances to the next eligible account when the current one
+cannot serve. A preferred account is discarded when its model quota reaches
+zero; cooldowns, circuit breakers, concurrency limits, and transient provider
+errors preserve the preference so routing can return to that account after it
+recovers. Both policies use the same provider eligibility and quota pools for
+Google Antigravity and Ollama Cloud.
 
 The `hybrid` score formula:
 

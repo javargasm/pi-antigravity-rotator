@@ -7,6 +7,7 @@ import {
 	type OpenAIChatCompletionRequest,
 } from "../src/compat.js";
 import { cacheThoughtSignature, thoughtSignatureCache } from "../src/compat/cache.js";
+import { validateMessages } from "../src/providers/google-antigravity/translators.js";
 
 describe("OpenAI Compat Tool Calling", () => {
 	it("converts basic messages without tools to multi-turn format", () => {
@@ -151,6 +152,88 @@ describe("OpenAI Compat Tool Calling", () => {
 
 		assert.strictEqual(parameters.properties.config.propertyNames, undefined);
 		assert.strictEqual(parameters.properties.config.properties.key.type, "string");
+	});
+
+	it("strips Gemini vendor schema extensions recursively", () => {
+		const schema = {
+			type: "object",
+			deprecated: true,
+			"x-google-identifier": "root",
+			properties: {
+				state: {
+					type: "string",
+					deprecated: true,
+					"x-google-enum-descriptions": ["old"],
+				},
+				items: {
+					type: "array",
+					items: { type: "string", "x-vendor-extra": true },
+				},
+			},
+			anyOf: [
+				{
+					type: "object",
+					properties: { nested: { type: "number", "x-google-extra": true } },
+				},
+				{ type: "null", "x-google-null": true },
+			],
+		};
+
+		const result = openAIToAntigravityBody({
+			model: "gemini-3-flash",
+			messages: [{ role: "user", content: "Inspect this schema" }],
+			tools: [{ type: "function", function: { name: "inspect", parameters: schema } }],
+		});
+		const parameters = (result.request as any).tools[0].functionDeclarations[0].parameters;
+
+		assert.equal(parameters.deprecated, undefined);
+		assert.equal(parameters["x-google-identifier"], undefined);
+		assert.equal(parameters.properties.state.deprecated, undefined);
+		assert.equal(parameters.properties.state["x-google-enum-descriptions"], undefined);
+		assert.equal(parameters.properties.items.items["x-vendor-extra"], undefined);
+		assert.equal(parameters.anyOf[0].properties.nested["x-google-extra"], undefined);
+		assert.equal(parameters.anyOf[1]["x-google-null"], undefined);
+	});
+
+	it("strips vendor extensions but preserves Claude JSON Schema keywords", () => {
+		const result = anthropicToAntigravityBody({
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "Inspect this schema" }],
+			tools: [{
+				name: "inspect",
+				input_schema: {
+					type: "object",
+					deprecated: true,
+					"x-google-identifier": "root",
+					properties: {
+						value: { type: "string", minimum: 3, pattern: "^[a-z]+$", "x-google-extra": true },
+					},
+				},
+			}],
+		});
+		const parameters = (result.request as any).tools[0].functionDeclarations[0].parameters;
+
+		assert.equal(parameters.deprecated, undefined);
+		assert.equal(parameters["x-google-identifier"], undefined);
+		assert.equal(parameters.properties.value["x-google-extra"], undefined);
+		assert.equal(parameters.properties.value.minimum, 3);
+		assert.equal(parameters.properties.value.pattern, "^[a-z]+$");
+	});
+
+	it("accepts assistant tool calls without content but rejects missing content elsewhere", () => {
+		const toolCall = {
+			id: "call_123",
+			type: "function",
+			function: { name: "get_weather", arguments: "{}" },
+		};
+
+		assert.equal(validateMessages([{ role: "assistant", tool_calls: [toolCall] }]), true);
+		assert.equal(validateMessages([{ role: "user" }]), false);
+		assert.equal(validateMessages([{ role: "tool", tool_calls: [toolCall] }]), false);
+		assert.equal(
+			validateMessages([{ role: "assistant", tool_calls: [{ ...toolCall, function: { arguments: "{}" } }] }]),
+			false,
+		);
 	});
 
 	it("converts multi-turn conversation with tool calls and tool responses", () => {

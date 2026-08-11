@@ -21,6 +21,11 @@ import { DEFAULT_PROVIDER, getProviderAdapter, getProviderForAccount } from "./p
 import { isRecord } from "./compat/schema-sanitizer.js";
 import type { ProviderAdapter, StreamAccumulator } from "./providers/adapter.js";
 import {
+  isCodeAssistAction,
+  validateCodeAssistPayload,
+  type CodeAssistAction,
+} from "./providers/google-antigravity/code-assist.js";
+import {
   forwardRequest,
   SseEventAccumulator,
   extractUsageFromSseEvent,
@@ -378,6 +383,7 @@ type UpstreamFailureExtra = Partial<
 
 type UpstreamActionHandlerOptions = {
   action: Exclude<UpstreamAction, { kind: "success" }>;
+  provider: ProviderAdapter;
   rotator: AccountRotator;
   account: AccountRuntime;
   model: string;
@@ -435,6 +441,7 @@ async function handleUpstreamAccountAction(
 ): Promise<UpstreamActionDecision> {
   const {
     action,
+    provider,
     rotator,
     account,
     model,
@@ -468,6 +475,26 @@ async function handleUpstreamAccountAction(
       429,
       `cooldownMs=${action.cooldownMs}${action.providerResourceExhausted ? " resourceExhausted=true" : ""} endpoint=${action.endpoint}`,
     );
+
+    if (
+      action.providerResourceExhausted &&
+      options.canRetry &&
+      provider.shouldRetryOnQuotaExhaustion(account, model, action.errorText)
+    ) {
+      const nextAccount = await rotateAndRelease();
+      if (nextAccount) {
+        writeLog(
+          `[${label}] RESOURCE_EXHAUSTED is account-scoped; retrying with the next eligible account`,
+          "warn",
+        );
+        return { kind: "retry" };
+      }
+      writeLog(
+        `[${label}] RESOURCE_EXHAUSTED has no eligible replacement account; returning the provider error`,
+        "warn",
+      );
+    }
+
     return buildFailureDecision(options, 429, action.errorText, {
       retryAfterMs: action.cooldownMs,
       providerResourceExhausted: action.providerResourceExhausted,
@@ -1141,11 +1168,16 @@ export async function withRotation<T>(
       }
 
       rotator.recordUpstreamAttempt(account);
-      const forwarded = await providerAdapterForModel(
+      const provider = providerAdapterForModel(
         account,
         model,
         rotator,
-      ).forwardRequest(account, { ...body }, originalHeaders);
+      );
+      const forwarded = await provider.forwardRequest(
+        account,
+        { ...body },
+        originalHeaders,
+      );
       const { response, endpoint } = forwarded;
       const context: RotationAttemptContext = {
         account,
@@ -1169,6 +1201,7 @@ export async function withRotation<T>(
       if (action.kind !== "success") {
         const decision = await handleUpstreamAccountAction({
           action,
+          provider,
           rotator,
           account,
           model,
@@ -1541,11 +1574,16 @@ async function handleProxyRequest(
         await sleep(totalDelayMs);
       }
       rotator.recordUpstreamAttempt(account);
-      const forwarded = await providerAdapterForModel(
+      const provider = providerAdapterForModel(
         account,
         body.model,
         rotator,
-      ).forwardRequest(account, { ...body }, flattenHeaders(req.headers));
+      );
+      const forwarded = await provider.forwardRequest(
+        account,
+        { ...body },
+        flattenHeaders(req.headers),
+      );
       const { response, endpoint } = forwarded;
       const context: RotationAttemptContext = {
         account,
@@ -1569,6 +1607,7 @@ async function handleProxyRequest(
       if (action.kind !== "success") {
         const decision = await handleUpstreamAccountAction({
           action,
+          provider,
           rotator,
           account,
           model: body.model,
@@ -1618,8 +1657,7 @@ async function handleProxyRequest(
           proxyLog,
           response.status,
           responseHeaders,
-          providerAdapterForModel(account, body.model, rotator)
-            .createStreamAccumulator(),
+          provider.createStreamAccumulator(),
         );
         const totalMs = Date.now() - requestStartMs;
         const ttfbMs = usage?.firstByteMs ?? totalMs;
@@ -1716,6 +1754,104 @@ async function handleProxyRequest(
     res.writeHead(502, { "Content-Type": "application/json" });
   }
   res.end(JSON.stringify({ error: "All retry attempts failed" }));
+}
+
+const CODE_ASSIST_ROUTING_MODEL = "gemini-3-flash";
+
+async function handleCodeAssistPassthrough(
+  req: IncomingMessage,
+  res: ServerResponse,
+  rotator: AccountRotator,
+  action: CodeAssistAction,
+): Promise<void> {
+  let bodyBuffer: Buffer;
+  try {
+    bodyBuffer = await readLimitedBody(req);
+  } catch (err) {
+    if (err instanceof PayloadTooLargeError) {
+      res.writeHead(413, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Payload too large", limitBytes: err.limitBytes }));
+      return;
+    }
+    throw err;
+  }
+
+  let body: unknown;
+  try {
+    body = JSON.parse(bodyBuffer.toString("utf-8")) as unknown;
+    validateCodeAssistPayload(action, body);
+  } catch (err) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      error: err instanceof Error ? err.message : "Invalid Code Assist request",
+    }));
+    return;
+  }
+
+  const provider = getProviderAdapter(DEFAULT_PROVIDER);
+  if (!provider.forwardCodeAssistRequest) {
+    res.writeHead(501, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Code Assist passthrough is unavailable" }));
+    return;
+  }
+
+  const maxRetries = getStreamRecoveryMaxRetries(rotator);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let account: AccountRuntime | null;
+    try {
+      account = await rotator.getActiveAccount(CODE_ASSIST_ROUTING_MODEL);
+    } catch {
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Account token refresh failed" }));
+      return;
+    }
+    if (!account) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "All Google accounts exhausted or disabled" }));
+      return;
+    }
+
+    try {
+      // getActiveAccount performs the normal account lifecycle check, but the
+      // explicit provider call is required for dual Google+Ollama accounts.
+      await provider.ensureValidToken(account);
+      rotator.recordUpstreamAttempt(account);
+      const forwarded = await provider.forwardCodeAssistRequest(
+        account,
+        action,
+        body,
+        flattenHeaders(req.headers),
+      );
+      const responseBody = await forwarded.response.text();
+      res.writeHead(forwarded.response.status, {
+        "Content-Type": forwarded.response.headers.get("content-type") || "application/json",
+      });
+      res.end(responseBody);
+      return;
+    } catch (err) {
+      if (!isFetchTransportError(err) || attempt >= maxRetries) {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Code Assist upstream request failed" }));
+        return;
+      }
+      const nextAccount = await rotator.rotateToNext(CODE_ASSIST_ROUTING_MODEL);
+      if (nextAccount) {
+        rotator.finishRequest(
+          nextAccount,
+          resolveQuotaModelKey(CODE_ASSIST_ROUTING_MODEL) ?? undefined,
+        );
+        continue;
+      }
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "No replacement Google account available" }));
+      return;
+    } finally {
+      rotator.finishRequest(
+        account,
+        resolveQuotaModelKey(CODE_ASSIST_ROUTING_MODEL) ?? undefined,
+      );
+    }
+  }
 }
 
 export function flattenHeaders(
@@ -2264,6 +2400,27 @@ export function startProxy(
 
     // Proxy route (native Antigravity v1internal)
     if (method === "POST" && url.includes("v1internal")) {
+      const operation = pathname.split(":").pop() || "";
+      if (isCodeAssistAction(operation)) {
+        handleCodeAssistPassthrough(req, res, rotator, operation).catch(
+          (err) => {
+            log(`Unhandled Code Assist passthrough error: ${err}`, rotator, "error");
+            if (!res.headersSent) {
+              res.writeHead(500, { "Content-Type": "application/json" });
+            }
+            res.end(JSON.stringify({ error: "Internal Code Assist proxy error" }));
+          },
+        );
+        return;
+      }
+      if (
+        operation !== "streamGenerateContent" &&
+        operation !== "generateContent"
+      ) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Unsupported v1internal operation" }));
+        return;
+      }
       handleProxyRequest(req, res, rotator, scheduleSseBroadcast).catch(
         (err) => {
           log(`Unhandled error: ${err}`, rotator, "error");

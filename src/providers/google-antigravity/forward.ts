@@ -13,6 +13,8 @@ import type { AccountRuntime } from "../../types.js";
 import type { RequestBody, ForwardedResponse } from "../../proxy.js";
 import { logger } from "../../logger.js";
 import type { TokenUsage } from "../adapter.js";
+import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
+import type { RequestInitWithDispatcher } from "../../fetch-with-retry.js";
 
 const forwardLogger = logger.child("google-forward");
 
@@ -383,7 +385,8 @@ export async function forwardRequest(
         headers: forwardHeaders,
         body: requestBody,
         signal: requestSignal,
-      });
+        dispatcher: getAccountProxyDispatcher(account, "google-antigravity"),
+      } as RequestInitWithDispatcher);
       if (timeout) clearTimeout(timeout);
 
       if (

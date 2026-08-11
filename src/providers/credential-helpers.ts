@@ -10,6 +10,7 @@ export interface CredentialEntry {
   refreshToken?: string;
   projectId?: string;
   projectSource?: "google" | "manual";
+  proxyUrl?: string;
 }
 
 export interface AccountLike {
@@ -19,6 +20,7 @@ export interface AccountLike {
   refreshToken?: string;
   projectId?: string;
   projectSource?: "google" | "manual";
+  proxyUrl?: string;
 }
 
 export function primaryProviderId(account: AccountLike): string {
@@ -49,7 +51,22 @@ export function getCredential(
     if (account.refreshToken !== undefined) legacy.refreshToken = account.refreshToken;
     if (account.projectId !== undefined) legacy.projectId = account.projectId;
     if (account.projectSource !== undefined) legacy.projectSource = account.projectSource;
+    if (account.proxyUrl !== undefined) legacy.proxyUrl = account.proxyUrl;
     return legacy;
   }
+  return undefined;
+}
+
+/**
+ * Resolve the egress proxy configured for one provider credential. Incoming
+ * request headers are deliberately not consulted here; proxy selection is
+ * always an account/configuration concern.
+ */
+export function getProviderProxyUrl(
+  account: AccountLike,
+  providerId: string,
+): string | undefined {
+  const credential = getCredential(account, providerId);
+  if (credential?.proxyUrl !== undefined) return credential.proxyUrl;
   return undefined;
 }

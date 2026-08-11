@@ -6,8 +6,8 @@ Run `pi-antigravity-rotator login` (or `npm run login` from source) once per Goo
 
 1. A Google OAuth URL is printed to the terminal — open it in your browser
 2. Complete the sign-in and grant permissions
-3. The browser redirects to a `localhost` URL that won't load — this is expected
-4. Copy the **full URL** from the browser's address bar and paste it into the terminal
+3. With the default loopback redirect, the CLI receives the callback automatically and the browser page can close itself
+4. Set `TUXEVIL_OPEN_BROWSER=1` to open the URL automatically. If the loopback port is unavailable, the CLI falls back to pasting the **full URL** from the browser's address bar
 
 The tool automatically:
 - Creates or updates the account store with the account credentials
@@ -98,8 +98,36 @@ The dashboard (`/dashboard`) provides a full account management UI:
 | `refreshToken` | OAuth refresh token (auto-filled by login) |
 | `projectId` | Cloud project ID discovered during login |
 | `projectSource` | `google` (auto-discovered) or `manual` (hand-edited) |
+| `credentials[].proxyUrl` | Optional provider-scoped egress proxy: `http://`, `https://`, `socks5://`, or `socks5h://`. Credentials may be embedded in the URL. |
 | `label` | Display name on the dashboard (defaults to email username) |
 | `tier` | Optional: `ultra`, `pro`, `plus`, `free`, or `unknown` |
+
+For accounts that use more than one provider, configure the proxy on the matching
+credential so network identities stay separate:
+
+```json
+{
+  "email": "user@gmail.com",
+  "credentials": [
+    {
+      "provider": "google-antigravity",
+      "refreshToken": "1//...",
+      "projectId": "project-abc123",
+      "proxyUrl": "socks5h://proxy-user:proxy-password@127.0.0.1:1080"
+    },
+    {
+      "provider": "ollama",
+      "apiKey": "ollama-key",
+      "proxyUrl": "http://127.0.0.1:8080"
+    }
+  ]
+}
+```
+
+Dispatchers are reused per configured proxy URL and closed during graceful shutdown.
+The proxy is selected from stored account configuration only; incoming request headers
+cannot choose or override it. The implementation opens ordinary HTTP/SOCKS5 egress
+connections and does not install a CA, intercept TLS, or expose a MITM endpoint.
 
 ## Token Auto-Refresh
 

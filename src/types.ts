@@ -16,7 +16,9 @@ export type RoutingPolicy =
   | "timer-first"
   | "tier-first"
   | "quota-first"
-  | "hybrid";
+  | "hybrid"
+  | "sequential-quota"
+  | "sticky-quota";
 
 export type RoutingRejectionReason =
   | "disabled"
@@ -50,6 +52,8 @@ export interface ProviderCredential {
   projectId?: string;
   // How the projectId was obtained.
   projectSource?: "google" | "manual";
+  /** Optional HTTP(S) or SOCKS5 egress proxy for this provider credential. */
+  proxyUrl?: string;
 }
 
 export interface AccountConfig {
@@ -77,6 +81,8 @@ export interface AccountConfig {
   projectId?: string;
   /** @deprecated migrated into credentials. */
   projectSource?: "google" | "manual";
+  /** @deprecated use credentials[].proxyUrl for provider-scoped routing. */
+  proxyUrl?: string;
   label?: string;
   // Optional - pro/free is detected dynamically from quota API reset times
   type?: AccountType;
@@ -378,6 +384,8 @@ export interface AccountRuntime {
 // Per-model rotation state tracked by the rotator
 export interface ModelRotationState {
   activeAccountIndex: number;
+  /** Preferred account for quota-aware policies while a temporary fallback is active. */
+  stickyAccountIndex?: number;
   quotaAtRotationStart: number; // quota % when this account became active for this model
   requestsOnActiveAccount: number;
 }
@@ -400,6 +408,8 @@ export interface PersistedState {
   modelAccounts: Record<string, number>;
   // Per-model request count on the active account
   modelRequestCounts?: Record<string, number>;
+  // Per-model preferred account for quota-aware sticky/sequential fallback
+  modelStickyAccounts?: Record<string, number>;
   // Legacy fallback
   currentIndex?: number;
   protectivePauseUntil?: number;

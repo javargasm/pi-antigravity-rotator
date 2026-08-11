@@ -1,7 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { buildOllamaPayload } from "../src/providers/ollama/forward.js";
+import { googleAntigravityAdapter } from "../src/providers/google-antigravity/index.js";
+import { ollamaAdapter } from "../src/providers/ollama/index.js";
+import type { AccountRuntime } from "../src/types.js";
 import type { RequestBody } from "../src/proxy.js";
+
+const quotaTestAccount = {} as AccountRuntime;
 
 function bodyWithMessages(
   messages: Array<Record<string, unknown>>,
@@ -14,6 +19,25 @@ function bodyWithMessages(
 }
 
 describe("buildOllamaPayload content normalization (port of ollama-rotator ec5fa5a)", () => {
+	it("declares account-scoped quota recovery for Google and Ollama", () => {
+		assert.equal(
+			googleAntigravityAdapter.shouldRetryOnQuotaExhaustion(
+				quotaTestAccount,
+				"gemini-3-flash",
+				"RESOURCE_EXHAUSTED",
+			),
+			true,
+		);
+		assert.equal(
+			ollamaAdapter.shouldRetryOnQuotaExhaustion(
+				quotaTestAccount,
+				"gpt-oss:20b",
+				"RESOURCE_EXHAUSTED",
+			),
+			true,
+		);
+	});
+
 	it("flattens text content arrays to a plain string", () => {
 		const payload = buildOllamaPayload(
 			bodyWithMessages([{ role: "user", content: [{ type: "text", text: "hello" }] }]),

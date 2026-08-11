@@ -56,6 +56,12 @@ export const ollamaAdapter: ProviderAdapter = {
     return `Bearer ${getOllamaApiKey(account.config) ?? ""}`;
   },
 
+  shouldRetryOnQuotaExhaustion(): boolean {
+    // Ollama Cloud usage is tied to the API-key account, so another account
+    // can be attempted without treating the pool as globally exhausted.
+    return true;
+  },
+
   async fetchQuota(
     account: AccountRuntime,
     ctx,

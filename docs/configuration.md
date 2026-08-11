@@ -31,6 +31,7 @@ pi-antigravity-rotator start --config-dir /path/to/config
 | `ANTIGRAVITY_CLIENT_ID` | Your Google OAuth client ID (see [OAuth Setup](#oauth-client-credentials)) |
 | `ANTIGRAVITY_CLIENT_SECRET` | Your Google OAuth client secret |
 | `ANTIGRAVITY_REDIRECT_URI` | OAuth callback URI for hosted login (default: `http://localhost:51121/oauth-callback`) |
+| `TUXEVIL_OPEN_BROWSER` | Set to `1`, `true`, or `yes` to open the CLI OAuth URL automatically. Disabled by default for headless environments. |
 
 ## OAuth Client Credentials
 
@@ -111,7 +112,7 @@ The main configuration file. Created automatically by the `login` command, and e
 |-------|---------|-------------|
 | `proxyPort` | `51200` | Port the proxy listens on |
 | `bindHost` | `0.0.0.0` | Interface to bind on. For local-only use, set to `127.0.0.1` |
-| `routingPolicy` | `timer-first` | Routing policy: `timer-first`, `tier-first`, `quota-first`, or `hybrid` |
+| `routingPolicy` | `timer-first` | Routing policy: `timer-first`, `tier-first`, `quota-first`, `hybrid`, `sequential-quota`, or `sticky-quota` |
 | `requestsPerRotation` | `5` | Max per-model requests before attempting request-count rotation |
 | `rotateOnQuotaDrop` | `20` | Rotate when a model's quota drops this many %. Set to `0` to disable |
 | `quotaPollIntervalMs` | `300000` | Quota poll interval in ms (5 minutes) |

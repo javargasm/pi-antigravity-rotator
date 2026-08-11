@@ -86,6 +86,16 @@ export interface ProviderAdapter {
   /** Auth header value for outgoing upstream requests. */
   getAuthHeader(account: AccountRuntime): string;
 
+  /**
+   * Whether a provider's RESOURCE_EXHAUSTED response is scoped to this
+   * account and can safely be retried with another credential.
+   */
+  shouldRetryOnQuotaExhaustion(
+    account: AccountRuntime,
+    model: string,
+    errorText: string,
+  ): boolean;
+
   // --- Quota / usage telemetry ---
   /** Poll current quota/usage and write it into account.quota. */
   fetchQuota(account: AccountRuntime, ctx: QuotaFetchContext): Promise<void>;
@@ -95,6 +105,14 @@ export interface ProviderAdapter {
   forwardRequest(
     account: AccountRuntime,
     body: RequestBody,
+    originalHeaders: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<ForwardedResponse>;
+  /** Forward one allowlisted non-generation Code Assist operation. */
+  forwardCodeAssistRequest?(
+    account: AccountRuntime,
+    action: string,
+    body: unknown,
     originalHeaders: Record<string, string>,
     signal?: AbortSignal,
   ): Promise<ForwardedResponse>;

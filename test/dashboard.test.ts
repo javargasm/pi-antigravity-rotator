@@ -104,6 +104,8 @@ describe("dashboard", () => {
     assert.match(html, /configEditorModal/);
     assert.match(html, /routingInspectorModal/);
     assert.match(html, /Routing Inspector/);
+    assert.match(html, /sequential-quota/);
+    assert.match(html, /sticky-quota/);
     assert.match(js, /\/api\/config/);
     assert.match(js, /openConfigEditorModal/);
     assert.match(js, /openRoutingInspectorModal/);
