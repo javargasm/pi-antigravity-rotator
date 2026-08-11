@@ -122,10 +122,8 @@ export function providerAdapterForModel(
   }
   if (creds.length > 0) {
     const onlyOllama = creds.every((c) => c.provider === "ollama");
-    const onlyCodex = creds.every((c) => c.provider === "openai-codex");
     const onlyGoogle = creds.every((c) => c.provider === DEFAULT_PROVIDER);
     if (onlyOllama) return getProviderAdapter("ollama");
-    if (onlyCodex) return getProviderAdapter("openai-codex");
     if (onlyGoogle) return getProviderAdapter(DEFAULT_PROVIDER);
   }
   let isOllamaModel = false;
@@ -140,7 +138,13 @@ export function providerAdapterForModel(
   if (isOllamaModel) {
     return getProviderAdapter("ollama");
   }
-  return getProviderForAccount(account.config);
+  if (creds.some((credential) => credential.provider === DEFAULT_PROVIDER)) {
+    return getProviderAdapter(DEFAULT_PROVIDER);
+  }
+  const fallback = getProviderForAccount(account.config);
+  return fallback.id === "openai-codex"
+    ? getProviderAdapter(DEFAULT_PROVIDER)
+    : fallback;
 }
 
 function routingModelKey(rotator: AccountRotator, model: string): string {
