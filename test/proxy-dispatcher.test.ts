@@ -150,14 +150,17 @@ describe("account proxy dispatchers", () => {
 			res.writeHead(200, { "content-type": "text/plain" });
 			res.end("upstream-via-http-proxy");
 		});
+		let upstreamPort = 0;
 		const proxy = createServer((req, res) => {
 			if (!req.url) {
 				res.writeHead(400);
 				res.end();
 				return;
 			}
-			const target = new URL(req.url);
-			const forwarded = request(target, {
+			const forwarded = request({
+				hostname: "127.0.0.1",
+				port: upstreamPort,
+				path: req.url,
 				method: req.method,
 				headers: req.headers,
 			}, (response: IncomingMessage) => {
@@ -172,7 +175,7 @@ describe("account proxy dispatchers", () => {
 		});
 		const servers = [upstream, proxy];
 		try {
-			const upstreamPort = await listen(upstream);
+			upstreamPort = await listen(upstream);
 			const proxyPort = await listen(proxy);
 			const dispatcher = getAccountProxyDispatcher(
 				account(`http://127.0.0.1:${proxyPort}`),
