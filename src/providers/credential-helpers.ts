@@ -9,6 +9,7 @@ export interface CredentialEntry {
   apiKey?: string;
   refreshToken?: string;
   projectId?: string;
+  providerAccountId?: string;
   projectSource?: "google" | "manual";
   proxyUrl?: string;
 }
@@ -19,6 +20,8 @@ export interface AccountLike {
   apiKey?: string;
   refreshToken?: string;
   projectId?: string;
+  codexRefreshToken?: string;
+  codexAccountId?: string;
   projectSource?: "google" | "manual";
   proxyUrl?: string;
 }
@@ -50,6 +53,10 @@ export function getCredential(
     if (account.apiKey !== undefined) legacy.apiKey = account.apiKey;
     if (account.refreshToken !== undefined) legacy.refreshToken = account.refreshToken;
     if (account.projectId !== undefined) legacy.projectId = account.projectId;
+    if (providerId === "openai-codex") {
+      if (account.codexRefreshToken !== undefined) legacy.refreshToken = account.codexRefreshToken;
+      if (account.codexAccountId !== undefined) legacy.providerAccountId = account.codexAccountId;
+    }
     if (account.projectSource !== undefined) legacy.projectSource = account.projectSource;
     if (account.proxyUrl !== undefined) legacy.proxyUrl = account.proxyUrl;
     return legacy;

@@ -60,8 +60,8 @@ Originally built as a multi-account rotator for Google Antigravity. It now gener
 
 ## v2.7 Highlights
 
-- **Multi-Provider Support**: The rotator now routes through two provider families. Google Antigravity accounts (OAuth, default) and Ollama Cloud accounts (static API keys, `login --provider ollama`) coexist in one account store, with per-provider model catalog resolution.
-- **Ollama Cloud Compatibility (B2)**: `POST /v1/chat/completions`, `/v1/responses`, and `/v1/messages` translate requests to Ollama's native `api/chat` NDJSON protocol for Ollama models; streaming deltas (including `tool_calls` and `usage`) are converted to SSE in both OpenAI and Anthropic formats. `GET /v1/models` lists the Ollama catalog (`owned_by: "ollama"`), and the native `POST /api/chat` endpoint routes Ollama models to Ollama accounts.
+- **Multi-Provider Support**: The rotator routes through Google Antigravity, Ollama Cloud, and an isolated OpenAI Codex OAuth pool, with per-provider model catalog resolution and no automatic cross-provider fallback.
+- **Provider Compatibility**: Ollama models use native `api/chat` NDJSON, while Codex models use native Responses HTTP/SSE with explicit Chat Completions conversion. `GET /v1/models` marks provider ownership for both catalogs.
 - **Legacy Account Migration**: On startup, Ollama Cloud accounts from `~/.ollama-rotator/accounts.json` (the predecessor product, overridable via `OLLAMA_ROTATOR_DIR`) are imported automatically and merged onto the matching email — `provider: "ollama"`, preserving `label`/`tier`/`type`. Re-import is idempotent.
 - **Flat-shape compatibility**: Existing configs with the legacy flat field layout (`apiKey`/`refreshToken` at the top level) are still accepted and normalized on load to the parent-account credential model.
 
@@ -144,6 +144,7 @@ Existing `enc:v1` records remain decryptable during migration; newly written rec
 npm install -g tuxevil-rotator
 tuxevil-rotator login                  # Google Antigravity (default)
 tuxevil-rotator login --provider ollama  # Ollama Cloud (static API key)
+tuxevil-rotator login --provider openai-codex  # ChatGPT OAuth (isolated Codex pool)
 tuxevil-rotator start
 ```
 
@@ -174,6 +175,7 @@ cd tuxevil-rotator
 npm install
 npm run login                       # Google Antigravity
 npm run login -- --provider ollama  # Ollama Cloud
+npm run login -- --provider openai-codex  # OpenAI Codex OAuth
 npm start
 ```
 

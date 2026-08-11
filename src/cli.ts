@@ -46,8 +46,28 @@ switch (command) {
       providerFlag >= 0 && process.argv[providerFlag + 1]
         ? process.argv[providerFlag + 1]
         : undefined;
-    const { runLogin } = await import("./login.js");
-    await runLogin(providerId);
+    const importFlag = process.argv.indexOf("--import");
+    if (providerId === "openai-codex" && importFlag >= 0) {
+      const importPath = process.argv[importFlag + 1];
+      if (!importPath || importPath.startsWith("--")) {
+        console.error("Usage: tuxevil-rotator login --provider openai-codex --import <auth.json>");
+        process.exitCode = 1;
+        break;
+      }
+      const { addAccountToConfig } = await import("./account-store.js");
+      const { importCodexAuthFile } = await import("./providers/openai-codex/login.js");
+      try {
+        const imported = await importCodexAuthFile(importPath);
+        const { isNew } = await addAccountToConfig(imported.account);
+        console.log(`  ${isNew ? "Added" : "Updated"} ${imported.account.email} in Codex provider credentials`);
+      } catch (err) {
+        console.error(`Codex import failed: ${err instanceof Error ? err.message : "invalid auth.json"}`);
+        process.exitCode = 1;
+      }
+    } else {
+      const { runLogin } = await import("./login.js");
+      await runLogin(providerId);
+    }
     break;
   }
   case "import": {
@@ -255,7 +275,8 @@ switch (command) {
     console.log();
     console.log("Usage:");
     console.log("  tuxevil-rotator start     Start the proxy (default)");
-    console.log("  tuxevil-rotator login     Add a Google account (login --provider ollama for Ollama Cloud)");
+    console.log("  tuxevil-rotator login     Add an account (use --provider openai-codex for Codex OAuth)");
+    console.log("  tuxevil-rotator login --provider openai-codex --import <auth.json>");
     console.log(
       "  tuxevil-rotator import    Import Google/Pi accounts from JSON (default: ~/.config/antigravity/accounts.json)",
     );

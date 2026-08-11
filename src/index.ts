@@ -211,6 +211,7 @@ export async function main(): Promise<void> {
 
   const rotator = new AccountRotator(config);
   await rotator.primeOllamaCatalog();
+  await rotator.primeCodexCatalog();
 
   // ── Telemetry (anonymous, opt-out via TUXEVIL_ROTATOR_TELEMETRY=off) ──
   const telemetry = new TelemetryReporter(() => {

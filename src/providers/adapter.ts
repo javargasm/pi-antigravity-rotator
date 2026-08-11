@@ -42,6 +42,17 @@ export interface QuotaFetchContext {
     statusCode: number,
     errorText: string,
   ): void;
+  /** Provider-scoped invalidation/cooldown hooks; never affect sibling providers. */
+  markProviderInvalid?(
+    account: AccountRuntime,
+    providerId: string,
+    reason: string,
+  ): void;
+  setProviderCooldown?(
+    account: AccountRuntime,
+    providerId: string,
+    durationMs: number,
+  ): void;
 }
 
 export type CredentialValidationResult =

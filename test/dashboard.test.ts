@@ -65,7 +65,7 @@ describe("dashboard", () => {
 
   it("assigns distinct family colors for token graph (Claude: Red, Gemini: Blue, Ollama: Green)", () => {
     const js = readDashboardJs();
-    const sandbox = {
+    const sandbox: Record<string, unknown> = {
       window: { location: { search: "" } } as Record<string, unknown>,
       URLSearchParams: globalThis.URLSearchParams,
       EventSource: function () {},

@@ -30,6 +30,23 @@ export function normalizeAccountConfig(account: AccountConfig): AccountConfig {
       }],
     };
   }
+  if (
+    provider === "openai-codex" ||
+    typeof account.codexRefreshToken === "string" ||
+    typeof account.codexAccountId === "string"
+  ) {
+    return {
+      ...account,
+      credentials: [
+        {
+          provider: "openai-codex",
+          refreshToken: account.codexRefreshToken ?? account.refreshToken,
+          providerAccountId: account.codexAccountId,
+          proxyUrl: account.proxyUrl,
+        },
+      ],
+    };
+  }
   if (provider !== "ollama" && (account.refreshToken !== undefined || account.projectId !== undefined)) {
     return {
       ...account,

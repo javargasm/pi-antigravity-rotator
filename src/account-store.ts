@@ -43,6 +43,7 @@ export const MAX_LABEL_LENGTH = 100;
 export const MAX_PROJECT_ID_LENGTH = 100;
 export const MAX_REFRESH_TOKEN_LENGTH = 4096;
 export const MAX_PROXY_URL_LENGTH = 2048;
+export const MAX_PROVIDER_ACCOUNT_ID_LENGTH = 256;
 
 function validateAccountConfigLengths(entry: AccountConfig): void {
   const checks: Array<[string, number]> = [
@@ -50,6 +51,8 @@ function validateAccountConfigLengths(entry: AccountConfig): void {
     ["label", MAX_LABEL_LENGTH],
     ["projectId", MAX_PROJECT_ID_LENGTH],
     ["refreshToken", MAX_REFRESH_TOKEN_LENGTH],
+    ["codexRefreshToken", MAX_REFRESH_TOKEN_LENGTH],
+    ["codexAccountId", MAX_PROVIDER_ACCOUNT_ID_LENGTH],
     ["proxyUrl", MAX_PROXY_URL_LENGTH],
   ];
   for (const [field, max] of checks) {
@@ -81,6 +84,9 @@ function validateCredentialLengths(
     if (typeof cred.proxyUrl === "string" && cred.proxyUrl.length > MAX_PROXY_URL_LENGTH) {
       throw new Error(`Credential proxyUrl for ${cred.provider} exceeds maximum length`);
     }
+    if (typeof cred.providerAccountId === "string" && cred.providerAccountId.length > MAX_PROVIDER_ACCOUNT_ID_LENGTH) {
+      throw new Error(`Credential providerAccountId for ${cred.provider} exceeds maximum length`);
+    }
   }
 }
 
@@ -91,13 +97,36 @@ function mergeCredentials(
   incoming: AccountConfig["credentials"] | undefined,
 ): AccountConfig["credentials"] {
   const out: NonNullable<AccountConfig["credentials"]> = [];
+  const incomingByProvider = new Map((incoming ?? []).map((cred) => [cred.provider, cred]));
   const seen = new Set<string>();
-  for (const cred of [...(existing ?? []), ...(incoming ?? [])]) {
+  for (const cred of existing ?? []) {
     if (seen.has(cred.provider)) continue;
     seen.add(cred.provider);
-    out.push(cred);
+    const incomingCredential = incomingByProvider.get(cred.provider);
+    out.push(incomingCredential ? { ...cred, ...incomingCredential } : cred);
+    incomingByProvider.delete(cred.provider);
   }
+  for (const cred of incomingByProvider.values()) out.push(cred);
   return out;
+}
+
+function assertCodexIdentityCompatible(
+  existing: AccountConfig,
+  incoming: AccountConfig,
+): void {
+  const existingCredential = normalizeAccountConfig(existing).credentials?.find(
+    (credential) => credential.provider === "openai-codex",
+  );
+  const incomingCredential = incoming.credentials?.find(
+    (credential) => credential.provider === "openai-codex",
+  );
+  const oldId = existingCredential?.providerAccountId;
+  const newId = incomingCredential?.providerAccountId;
+  if (oldId && newId && oldId !== newId) {
+    throw new Error(
+      `Codex credential conflict for ${incoming.email}: the email is already bound to a different providerAccountId; refusing to overwrite it`,
+    );
+  }
 }
 
 export async function addAccountToConfig(
@@ -106,8 +135,11 @@ export async function addAccountToConfig(
   validateAccountConfigLengths(entry);
   const entryNorm = normalizeAccountConfig(entry);
   const config = loadOrCreateAccountsConfig();
-  const existing = config.accounts.find((a) => a.email === entryNorm.email);
+  const existing = config.accounts.find(
+    (a) => a.email === entryNorm.email || a.email.toLowerCase() === entryNorm.email.toLowerCase(),
+  );
   if (existing) {
+    assertCodexIdentityCompatible(existing, entryNorm);
     validateCredentialLengths(entryNorm.credentials);
     config.accounts[config.accounts.indexOf(existing)] = {
       ...normalizeAccountConfig(existing),
