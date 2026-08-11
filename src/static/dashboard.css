@@ -667,6 +667,7 @@
   .operator-item.operator-yellow { border-left: 4px solid var(--yellow); }
   .operator-item.operator-gray { border-left: 4px solid var(--text-dim); }
   .operator-item.operator-orange { border-left: 4px solid #f97316; }
+  .operator-item.operator-green { border-left: 4px solid #22c55e; }
 
   .operator-icon {
     width: 24px;
@@ -678,6 +679,7 @@
   .operator-yellow .operator-icon { color: var(--yellow); }
   .operator-gray .operator-icon { color: var(--text-dim); }
   .operator-orange .operator-icon { color: #f97316; }
+  .operator-green .operator-icon { color: #22c55e; }
 
   .operator-content {
     flex: 1;

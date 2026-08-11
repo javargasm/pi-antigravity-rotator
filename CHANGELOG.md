@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.8.11] - 2026-08-11
+
+### Fixed
+- **"Free tier model access" attention item is now informational (green)**: `renderAttentionItem` had no `info` type, so the item fell through to the orange warning style even though it is purely informational. Ported the `info` branch (info icon + `operator-green` border/icon, `#22c55e`) from ollama-rotator, matching how the attention modal renders it there.
+
 ## [2.8.10] - 2026-08-11
 
 ### Fixed
