@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.8.12] - 2026-08-11
+
+### Added
+- **`/login-cli` now supports adding Ollama Cloud accounts alongside Google (Antigravity)**. The page has provider tabs: the existing Google OAuth paste-the-redirect-URL flow stays, and a new Ollama panel (ported from ollama-rotator) validates the API key against ollama.com before saving. `handleCliLoginApi` dispatches on `provider` (`google-antigravity` default / `ollama`), reusing `validateApiKey` and `defaultAccountEmail` from the Ollama provider layer.
+
 ## [2.8.11] - 2026-08-11
 
 ### Fixed

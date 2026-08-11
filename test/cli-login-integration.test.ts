@@ -1,7 +1,8 @@
-import { describe, it } from "node:test";
+import { describe, it, after, before } from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import { serveCliLogin, handleCliLoginApi } from "../src/onboarding.js";
+import { removeAccountFromConfig } from "../src/account-store.js";
 
 function mockRes() {
 	const state = { body: "", statusCode: 200, headers: {} as Record<string, string> };
@@ -105,5 +106,101 @@ describe("CLI login integration", () => {
 		await handleCliLoginApi(req1, r1, dummyRotator);
 		assert.equal(s1.statusCode, 400);
 		assert.match(JSON.parse(s1.body).error, /No authorization code found/);
+	});
+});
+
+describe("CLI login Ollama provider", () => {
+	const originalFetch = globalThis.fetch;
+	const originalRotator = {} as any;
+	const recordingRotator = {
+		async addOrUpdateAccount(entry: unknown) {
+			recordingRotator.lastEntry = entry;
+		},
+		lastEntry: undefined as unknown,
+	};
+
+	before(async () => {
+		const { initDb } = await import("../src/db-store.js");
+		await initDb();
+	});
+
+	function stubFetch(status: number, body: string) {
+		globalThis.fetch = (async () => ({
+			ok: status >= 200 && status < 300,
+			status,
+			text: async () => body,
+		})) as any;
+	}
+
+	after(() => {
+		globalThis.fetch = originalFetch;
+		removeAccountFromConfig("key-abcdef@ollama.local").catch(() => undefined);
+	});
+
+	it("serves both provider panels on the login page", () => {
+		const { res, state } = mockRes();
+		serveCliLogin(res);
+		assert.match(state.body, /id="panel-google"/);
+		assert.match(state.body, /id="panel-ollama"/);
+		assert.match(state.body, /Create a key at https:\/\/ollama.com\/settings\/keys/);
+	});
+
+	it("rejects missing apiKey", async () => {
+		const req = mockReq({ provider: "ollama", email: "me@example.com" });
+		const { res, state } = mockRes();
+		await handleCliLoginApi(req, res, originalRotator);
+		assert.equal(state.statusCode, 400);
+		const parsed = JSON.parse(state.body);
+		assert.equal(parsed.ok, false);
+		assert.match(parsed.error, /Missing apiKey/);
+	});
+
+	it("rejects an unknown provider", async () => {
+		const req = mockReq({ provider: "nope", apiKey: "ollama-abc" });
+		const { res, state } = mockRes();
+		await handleCliLoginApi(req, res, originalRotator);
+		assert.equal(state.statusCode, 400);
+		const parsed = JSON.parse(state.body);
+		assert.equal(parsed.ok, false);
+		assert.match(parsed.error, /Unknown provider/);
+	});
+
+	it("rejects an API key rejected by ollama.com", async () => {
+		stubFetch(401, "Unauthorized");
+		const req = mockReq({ provider: "ollama", email: "me@example.com", apiKey: "ollama-bad" });
+		const { res, state } = mockRes();
+		await handleCliLoginApi(req, res, originalRotator);
+		assert.equal(state.statusCode, 400);
+		const parsed = JSON.parse(state.body);
+		assert.equal(parsed.ok, false);
+		assert.match(parsed.error, /Key rejected \(401\)/);
+	});
+
+	it("adds the account when the key validates and defaultAccountEmail is used without email", async () => {
+		stubFetch(200, "");
+		recordingRotator.lastEntry = undefined;
+		const req = mockReq({ provider: "ollama", apiKey: "ollama-abcdef" });
+		const { res, state } = mockRes();
+		await handleCliLoginApi(req, res, recordingRotator);
+		assert.equal(state.statusCode, 200);
+		const parsed = JSON.parse(state.body);
+		assert.equal(parsed.ok, true);
+		assert.equal(parsed.email, "key-abcdef@ollama.local");
+		assert.equal(parsed.isNew, true);
+		assert.equal((recordingRotator.lastEntry as any).apiKey, "ollama-abcdef");
+		assert.equal((recordingRotator.lastEntry as any).email, "key-abcdef@ollama.local");
+	});
+
+	it("uses the provided email as label when given", async () => {
+		stubFetch(200, "");
+		recordingRotator.lastEntry = undefined;
+		const req = mockReq({ provider: "ollama", email: "me@example.com", apiKey: "ollama-abcdef" });
+		const { res, state } = mockRes();
+		await handleCliLoginApi(req, res, recordingRotator);
+		assert.equal(state.statusCode, 200);
+		const parsed = JSON.parse(state.body);
+		assert.equal(parsed.ok, true);
+		assert.equal(parsed.email, "me@example.com");
+		assert.equal((recordingRotator.lastEntry as any).label, "me@example.com");
 	});
 });
