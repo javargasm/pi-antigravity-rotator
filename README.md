@@ -24,6 +24,8 @@
 
 **Production-ready OpenAI-compatible gateway for multiple free-tier LLM providers.**
 
+> **Container migration notice:** `ghcr.io/tuxevil/pi-antigravity-rotator` is deprecated. Use [`ghcr.io/tuxevil/tuxevil-rotator:latest`](https://github.com/tuxevil/tuxevil-rotator/pkgs/container/tuxevil-rotator) for new deployments. The legacy image remains available as a frozen compatibility reference; see the [migration guide](docs/migrating-from-pi-antigravity-rotator.md).
+
 Multi-account load balancing, per-model quota routing, account health scoring, access control with Virtual Keys, and cost auditing — via a single local endpoint that any agent can use. Even with a single account.
 
 Originally built as a multi-account rotator for Google Antigravity. It now generalizes that rotation layer across any free-tier LLM provider with per-account credentials: today Google Antigravity and Ollama Cloud, designed so the next free-tier provider slots in without forking the engine.

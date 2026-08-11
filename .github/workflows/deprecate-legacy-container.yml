@@ -1,0 +1,29 @@
+name: Deprecate Legacy Container Image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deprecate:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create deprecated legacy tag
+        run: >-
+          docker buildx imagetools create
+          --tag ghcr.io/tuxevil/pi-antigravity-rotator:deprecated
+          --annotation
+          'index:org.opencontainers.image.description=DEPRECATED: This image was renamed to ghcr.io/tuxevil/tuxevil-rotator. Use ghcr.io/tuxevil/tuxevil-rotator:latest for new deployments. Migration guide: https://github.com/tuxevil/tuxevil-rotator/blob/main/docs/migrating-from-pi-antigravity-rotator.md'
+          ghcr.io/tuxevil/pi-antigravity-rotator:2.6.3
