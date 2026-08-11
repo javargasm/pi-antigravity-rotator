@@ -8,7 +8,7 @@ pi-antigravity-rotator has full support for the OpenAI Responses API (`/v1/respo
 
 ```bash
 export OPENAI_BASE_URL=http://localhost:51200/v1
-export OPENAI_API_KEY=antigravity   # or your rk-... Virtual Key
+export OPENAI_API_KEY=tuxevil   # or your rk-... Virtual Key
 ```
 
 Then launch Codex normally. All requests will route through the rotator.
@@ -18,7 +18,7 @@ Then launch Codex normally. All requests will route through the rotator.
 ```json
 {
   "codex.openai.apiBase": "http://localhost:51200/v1",
-  "codex.openai.apiKey": "antigravity"
+  "codex.openai.apiKey": "tuxevil"
 }
 ```
 
@@ -27,7 +27,7 @@ Or set in VS Code's `settings.json`:
 ```json
 {
   "openai.baseURL": "http://localhost:51200/v1",
-  "openai.apiKey": "antigravity"
+  "openai.apiKey": "tuxevil"
 }
 ```
 

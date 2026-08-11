@@ -168,7 +168,7 @@ Dashboard opens at `http://localhost:51200/dashboard`
 
 ## Connect Your Agent
 
-Point any OpenAI-compatible agent to `http://localhost:51200/v1` with API key `antigravity` (or a [Virtual Key](docs/virtual-keys.md)):
+Point any OpenAI-compatible agent to `http://localhost:51200/v1` with API key `tuxevil` (or a [Virtual Key](docs/virtual-keys.md)):
 
 | Agent | Guide |
 |-------|-------|

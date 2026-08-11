@@ -8,7 +8,7 @@ Connect Open WebUI to pi-antigravity-rotator to use Google Antigravity models fr
 2. Go to **Admin Settings** → **Connections** → **OpenAI** section
 3. Click **+ (Add Connection)**
 4. Set **URL**: `http://localhost:51200/v1`
-5. Set **API Key**: `antigravity` (or your `rk-...` Virtual Key)
+5. Set **API Key**: `tuxevil` (or your `rk-...` Virtual Key)
 6. If model auto-discovery doesn't work, manually add model IDs:
    - Type the model name (e.g. `gemini-3.6-flash-high`) and click **+**
 7. Click **Save**
@@ -19,7 +19,7 @@ Connect Open WebUI to pi-antigravity-rotator to use Google Antigravity models fr
 
 ```bash
 OPENAI_API_BASE_URL=http://localhost:51200/v1
-OPENAI_API_KEY=antigravity
+OPENAI_API_KEY=tuxevil
 ```
 
 For Docker Compose:
@@ -32,7 +32,7 @@ services:
       - "3000:8080"
     environment:
       OPENAI_API_BASE_URL: "http://host.docker.internal:51200/v1"
-      OPENAI_API_KEY: "antigravity"
+      OPENAI_API_KEY: "tuxevil"
       ENABLE_OLLAMA_API: "false"
     extra_hosts:
       - "host.docker.internal:host-gateway"

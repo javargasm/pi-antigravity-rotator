@@ -8,7 +8,7 @@ Connect Cline (VS Code extension) to pi-antigravity-rotator using the OpenAI Com
 2. Click the **gear/settings icon** at the top of the Cline panel
 3. In the **API Provider** dropdown, select **"OpenAI Compatible"**
 4. Set **Base URL**: `http://localhost:51200/v1`
-5. Set **API Key**: `antigravity` (or your `rk-...` Virtual Key)
+5. Set **API Key**: `tuxevil` (or your `rk-...` Virtual Key)
 6. Set **Model ID**: e.g. `gemini-3.6-flash-high`
 7. Click **Verify** to test the connection
 

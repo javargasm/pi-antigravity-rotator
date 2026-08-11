@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.8.8] - 2026-08-10
+
+### Changed
+- **Default API key placeholder rebranded**: documentation now instructs agents to use API key `tuxevil` instead of `antigravity` (open mode when no Virtual Keys are configured). Updated in README and all integration guides (aider, claude-code, cline, codex, continue, cursor, hermes, open-webui, openclaw, roo-code). Provider IDs and `antigravity/gemini-...` model paths are untouched.
+
 ## [2.8.7] - 2026-08-10
 
 ### Added

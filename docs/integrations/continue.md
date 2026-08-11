@@ -16,7 +16,7 @@ models:
     provider: openai
     model: gemini-3.6-flash-high
     apiBase: http://localhost:51200/v1
-    apiKey: antigravity
+    apiKey: tuxevil
     roles:
       - chat
       - edit
@@ -29,7 +29,7 @@ models:
     provider: openai
     model: gemini-3.1-pro-low
     apiBase: http://localhost:51200/v1
-    apiKey: antigravity
+    apiKey: tuxevil
     roles:
       - chat
 
@@ -37,7 +37,7 @@ models:
     provider: openai
     model: claude-sonnet-4-6
     apiBase: http://localhost:51200/v1
-    apiKey: antigravity
+    apiKey: tuxevil
     roles:
       - chat
       - edit
@@ -59,7 +59,7 @@ Edit `~/.continue/config.json`:
       "provider": "openai",
       "model": "gemini-3.6-flash-high",
       "apiBase": "http://localhost:51200/v1",
-      "apiKey": "antigravity",
+      "apiKey": "tuxevil",
       "contextLength": 200000
     },
     {
@@ -67,7 +67,7 @@ Edit `~/.continue/config.json`:
       "provider": "openai",
       "model": "claude-sonnet-4-6",
       "apiBase": "http://localhost:51200/v1",
-      "apiKey": "antigravity",
+      "apiKey": "tuxevil",
       "contextLength": 200000
     }
   ]
@@ -86,7 +86,7 @@ schema: v1
 proxy_defaults: &proxy
   provider: openai
   apiBase: http://localhost:51200/v1
-  apiKey: antigravity
+  apiKey: tuxevil
 
 models:
   - name: Flash High
@@ -106,6 +106,6 @@ models:
 ## Notes
 
 - The `provider` must be `openai` for any OpenAI-compatible endpoint
-- `apiKey` can be `antigravity` (open mode) or your `rk-...` Virtual Key
+- `apiKey` can be `tuxevil` (open mode) or your `rk-...` Virtual Key
 - Use `AUTODETECT` as the model value to have Continue query `/v1/models` and list all available models automatically (JSON format only)
 - Declare `capabilities: [tool_use, image_input]` explicitly if Continue doesn't auto-detect them for your model
