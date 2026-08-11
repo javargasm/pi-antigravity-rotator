@@ -127,8 +127,8 @@ export const openaiCodexAdapter: ProviderAdapter = {
     return {
       body: {
         project: "",
-        model: "gpt-5-codex",
-        request: { model: "gpt-5-codex", input: "Reply with one word.", stream: true, store: false },
+        model: "gpt-5.6-luna",
+        request: { model: "gpt-5.6-luna", input: "Reply with one word.", stream: true, store: false },
       },
       parseUsage(raw: string) {
         const usage = extractCodexUsage(raw);

@@ -25,6 +25,7 @@ import {
   codexQuotaRows,
   parseCodexUsageResponse,
 } from "../src/providers/openai-codex/quota.js";
+import { CODEX_BASE_MODELS, isCodexModel } from "../src/providers/openai-codex/catalog.js";
 import type { AccountRuntime } from "../src/types.js";
 
 const originalFetch = globalThis.fetch;
@@ -34,6 +35,15 @@ afterEach(() => {
 });
 
 describe("openai-codex OAuth", () => {
+  it("uses the current GPT-5.6 Codex catalog", () => {
+    assert.deepEqual(
+      CODEX_BASE_MODELS.map((model) => model.id),
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    );
+    assert.equal(isCodexModel("gpt-5.6-luna"), true);
+    assert.equal(isCodexModel("gpt-5-codex"), false);
+  });
+
   it("generates S256 PKCE and a state-bound URL", () => {
     const { verifier, challenge } = generatePKCE();
     assert.ok(verifier.length >= 40);
@@ -108,13 +118,13 @@ describe("openai-codex import and payload", () => {
 
   it("defaults store=false and strips persistent references and inherited auth", () => {
     const body = buildCodexPayload({
-      model: "gpt-5-codex",
+      model: "gpt-5.6-luna",
       project: "",
       request: { input: "hello", previous_response_id: "resp_1", conversation: "conv_1", stream: true },
     });
     assert.equal(body.store, false);
     assert.equal(body.previous_response_id, undefined);
-    const request = sanitizeCodexResponsesRequest({ store: true, input_items: ["old"], background: true }, "gpt-5-codex");
+    const request = sanitizeCodexResponsesRequest({ store: true, input_items: ["old"], background: true }, "gpt-5.6-luna");
     assert.equal(request.store, true);
     assert.equal(request.input_items, undefined);
     assert.equal(request.background, undefined);
@@ -150,7 +160,7 @@ describe("openai-codex import and payload", () => {
     try {
       await forwardCodexRequest(
         account,
-        { project: "", model: "gpt-5-codex", request: { input: "hello", stream: false } },
+        { project: "", model: "gpt-5.6-luna", request: { input: "hello", stream: false } },
         { authorization: "Bearer inherited-google", "x-goog-api-key": "google-secret", "x-ollama-key": "ollama-secret" },
       );
     } finally {
@@ -167,7 +177,7 @@ describe("openai-codex import and payload", () => {
 
   it("converts Chat tools and Responses output back without losing arguments", () => {
     const converted = chatToCodexResponsesRequest({
-      model: "gpt-5-codex",
+      model: "gpt-5.6-luna",
       messages: [
         { role: "user", content: [{ type: "text", text: "Call the tool" }] },
         { role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: '{"q":"x"}' } }] },

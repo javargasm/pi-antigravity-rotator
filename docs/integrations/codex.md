@@ -69,7 +69,8 @@ SSE streaming and keeps upstream Responses events intact. `/v1/chat/completions`
 uses an explicit Chat ↔ Responses conversion for multimodal input, tools,
 reasoning, usage, and SSE chunks.
 
-The safe base catalog contains `gpt-5-codex`. Authenticated discovery from
+The safe base catalog contains the current Codex variants `gpt-5.6-sol`,
+`gpt-5.6-terra`, and `gpt-5.6-luna`. Authenticated discovery from
 `/backend-api/codex/models` can add validated IDs; a discovery failure leaves
 the base catalog in place. Prices are not fabricated for subscription quota
 models.
@@ -98,7 +99,7 @@ tokens:
 curl http://127.0.0.1:51200/v1/models
 curl http://127.0.0.1:51200/v1/responses \
   -H 'content-type: application/json' \
-  -d '{"model":"gpt-5-codex","input":"Reply with one word.","store":false}'
+  -d '{"model":"gpt-5.6-luna","input":"Reply with one word.","store":false}'
 ```
 
 Check that the response header identifies a Codex account and that the model

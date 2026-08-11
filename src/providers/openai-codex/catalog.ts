@@ -15,8 +15,11 @@ export interface CodexModel {
 
 // Only models validated by the initial unauthenticated/public spike are in the
 // safe base list. Authenticated discovery can add provider-reported IDs.
+const CODEX_CONTEXT_WINDOW = 272_000;
 export const CODEX_BASE_MODELS: readonly CodexModel[] = [
-  { id: "gpt-5-codex", contextWindow: 400_000, reasoning: true, multimodal: true, tools: true, source: "allowlist" },
+  { id: "gpt-5.6-sol", contextWindow: CODEX_CONTEXT_WINDOW, reasoning: true, multimodal: true, tools: true, source: "allowlist" },
+  { id: "gpt-5.6-terra", contextWindow: CODEX_CONTEXT_WINDOW, reasoning: true, multimodal: true, tools: true, source: "allowlist" },
+  { id: "gpt-5.6-luna", contextWindow: CODEX_CONTEXT_WINDOW, reasoning: true, multimodal: true, tools: true, source: "allowlist" },
 ];
 
 let discoveredModels: CodexModel[] = [];
@@ -49,7 +52,7 @@ function isSafeModelId(value: unknown): value is string {
 function parseModel(value: unknown): CodexModel | null {
   if (typeof value === "string") {
     return isSafeModelId(value)
-      ? { id: value, contextWindow: 400_000, reasoning: true, multimodal: true, tools: true, source: "discovered" }
+      ? { id: value, contextWindow: CODEX_CONTEXT_WINDOW, reasoning: true, multimodal: true, tools: true, source: "discovered" }
       : null;
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -60,7 +63,7 @@ function parseModel(value: unknown): CodexModel | null {
     .find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0);
   return {
     id,
-    contextWindow: typeof contextWindow === "number" ? Math.min(contextWindow, 2_000_000) : 400_000,
+    contextWindow: typeof contextWindow === "number" ? Math.min(contextWindow, 2_000_000) : CODEX_CONTEXT_WINDOW,
     reasoning: record.reasoning !== false,
     multimodal: record.multimodal !== false && record.vision !== false,
     tools: record.tools !== false && record.tool_calling !== false,
