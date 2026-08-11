@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { normalizeAccountConfig } from "../src/config-normalize.js";
 
 process.env.TUXEVIL_ROTATOR_DIR = mkdtempSync(join(tmpdir(), "tuxevil-import-"));
 
@@ -74,6 +75,39 @@ describe("importAccountsToConfig", () => {
 
 		assert.equal(result.added, 1);
 		assert.equal(loadConfig().accounts.find((entry) => entry.email === "nested@example.com")?.projectId, "project-nested");
+	});
+
+	it("repairs legacy Google fields when Codex and Ollama credentials already exist", () => {
+		const normalized = normalizeAccountConfig({
+			email: "codex-google-legacy@example.com",
+			provider: "openai-codex",
+			refreshToken: "legacy-google-refresh",
+			projectId: "legacy-google-project",
+			credentials: [
+				{
+					provider: "openai-codex",
+					refreshToken: "codex-refresh",
+					providerAccountId: "codex-account",
+				},
+				{ provider: "ollama", apiKey: "ollama-key" },
+			],
+		});
+
+		assert.deepEqual(
+			normalized.credentials?.map((credential) => credential.provider),
+			["openai-codex", "ollama", "google-antigravity"],
+		);
+		const google = normalized.credentials?.find(
+			(credential) => credential.provider === "google-antigravity",
+		);
+		assert.equal(google?.refreshToken, "legacy-google-refresh");
+		assert.equal(google?.projectId, "legacy-google-project");
+		assert.equal(
+			normalized.credentials?.find(
+				(credential) => credential.provider === "openai-codex",
+			)?.refreshToken,
+			"codex-refresh",
+		);
 	});
 
 	it("merges Google before an existing Ollama credential and is idempotent", async () => {
