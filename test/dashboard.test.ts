@@ -63,6 +63,72 @@ describe("dashboard", () => {
     assert.doesNotThrow(() => new Script(js));
   });
 
+  it("assigns distinct family colors for token graph (Claude: Red, Gemini: Blue, Ollama: Green)", () => {
+    const js = readDashboardJs();
+    const sandbox = {
+      window: { location: { search: "" } } as Record<string, unknown>,
+      URLSearchParams: globalThis.URLSearchParams,
+      EventSource: function () {},
+      setInterval: () => {},
+      clearInterval: () => {},
+      setTimeout: () => {},
+      clearTimeout: () => {},
+      localStorage: {
+        getItem: () => null,
+        setItem: () => {},
+      },
+      document: {
+        getElementById: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener: () => {},
+      },
+    };
+    const script = new Script(js + "\nthis.getModelColor = getModelColor; this.TOKEN_MODEL_COLORS = TOKEN_MODEL_COLORS;");
+    script.runInNewContext(sandbox);
+
+    const getModelColor = sandbox.getModelColor as (m: string) => string;
+
+    // Claude Pool (Red spectrum)
+    const opusColor = getModelColor("claude-opus-4-6-thinking");
+    const sonnetColor = getModelColor("claude-sonnet-4-6");
+    const gptOssAntigravity = getModelColor("gpt-oss-120b-medium");
+
+    assert.equal(opusColor, "#b91c1c");
+    assert.equal(sonnetColor, "#ef4444");
+    assert.equal(gptOssAntigravity, "#f87171");
+
+    // Gemini Pool (Blue spectrum)
+    const gemini31High = getModelColor("gemini-3.1-pro-high");
+    const gemini31Low = getModelColor("gemini-3.1-pro-low");
+    const gemini35High = getModelColor("gemini-3.5-flash-high");
+    const gemini35Low = getModelColor("gemini-3.5-flash-low");
+    const gemini36High = getModelColor("gemini-3.6-flash-high");
+    const gemini36Low = getModelColor("gemini-3.6-flash-low");
+    const gemini3Flash = getModelColor("gemini-3-flash");
+
+    // Same family must share same color
+    assert.equal(gemini31High, gemini31Low);
+    assert.equal(gemini35High, gemini35Low);
+    assert.equal(gemini36High, gemini36Low);
+
+    // Different families must have distinct colors
+    assert.notEqual(gemini31High, gemini35High);
+    assert.notEqual(gemini35High, gemini36High);
+    assert.notEqual(gemini36High, gemini3Flash);
+
+    // Ollama Pool (Green spectrum)
+    const kimi = getModelColor("kimi-k3");
+    const qwen = getModelColor("qwen3.5:397b");
+    const glm = getModelColor("glm-5.2");
+    const gptOss20b = getModelColor("gpt-oss:20b");
+
+    assert.equal(kimi, "#047857");
+    assert.equal(qwen, "#0f766e");
+    assert.equal(glm, "#10b981");
+    assert.equal(gptOss20b, "#dcfce7");
+  });
+
   it("includes optional admin-token client support", () => {
     const js = readDashboardJs();
     assert.match(js, /X-Rotator-Admin-Token/);

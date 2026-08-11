@@ -1032,22 +1032,89 @@ function renderAttentionItem(title, description, tags, type) {
 }
 
 var TOKEN_MODEL_COLORS = {
-  "claude-opus-4-6-thinking": "#ef4444", // Rojo
-  "claude-sonnet-4-6": "#f97316", // Naranja
-  "gemini-3.1-pro-high": "#3b82f6", // Azul
-  "gemini-3.1-pro-low": "#38bdf8", // Celeste
-  "gemini-3-flash": "#4ade80", // Verde
-  "gemini-3.5-flash-low": "#a3e635", // Lime (legacy alias)
-  "gemini-3.5-flash-medium": "#a3e635", // Lime
-  "gemini-3.5-flash-high": "#84cc16", // Darker Lime
-  "gemini-3.5-flash": "#84cc16",
-  "gemini-3.1-pro": "#fb923c", // Fallback genérico
-  "gpt-oss-120b-medium": "#a855f7", // Purpura
-  __other__: "#6b7280",
+  // Claude Pool (Rojos) — de más caro a más barato
+  "claude-opus-4-6-thinking": "#b91c1c", // Opus (Rojo intenso/oscuro)
+  "claude-opus-4-5-thinking": "#b91c1c",
+  "claude-opus-4-5": "#b91c1c",
+  "claude-sonnet-4-6": "#ef4444", // Sonnet (Rojo vivo)
+  "claude-sonnet-4-6-thinking": "#ef4444",
+  "claude-sonnet-4-5": "#ef4444",
+  "claude-sonnet-4-5-thinking": "#ef4444",
+  "gpt-oss-120b-medium": "#f87171", // GPT-OSS Antigravity (Rojo claro/coral)
+  "gpt-oss-120b": "#f87171",
+
+  // Gemini Pool (Azules) — de más caro a más barato
+  "gemini-3.1-pro": "#1d4ed8", // Gemini 3.1 Pro (Azul rey oscuro/intenso)
+  "gemini-3.1-pro-high": "#1d4ed8",
+  "gemini-3.1-pro-low": "#1d4ed8",
+  "gemini-3-pro-high": "#1d4ed8",
+  "gemini-3-pro-low": "#1d4ed8",
+  "gemini-3.5-flash": "#2563eb", // Gemini 3.5 Flash (Azul rey medio)
+  "gemini-3.5-flash-high": "#2563eb",
+  "gemini-3.5-flash-medium": "#2563eb",
+  "gemini-3.5-flash-low": "#2563eb",
+  "gemini-3-flash-agent": "#2563eb",
+  "gemini-3.6-flash": "#38bdf8", // Gemini 3.6 Flash (Azul cielo brillante)
+  "gemini-3.6-flash-high": "#38bdf8",
+  "gemini-3.6-flash-medium": "#38bdf8",
+  "gemini-3.6-flash-low": "#38bdf8",
+  "gemini-3.6-flash-tiered": "#38bdf8",
+  "gemini-3-flash": "#93c5fd", // Gemini 3 Flash (Azul pastel claro)
+
+  // Ollama Pool (Verdes) — de más caro a más barato por familia
+  "kimi-k3": "#047857", // Familia Kimi (Verde bosque/esmeralda oscuro)
+  "kimi-k2.7-code": "#047857",
+  "kimi-k2.6": "#047857",
+  "qwen3.5:397b": "#0f766e", // Familia Qwen (Verde pino/teal oscuro)
+  "glm-5.2": "#10b981", // Familia GLM (Verde esmeralda)
+  "glm-5.1": "#10b981",
+  "nemotron-3-ultra": "#15803d", // Nemotron Super/Ultra (Verde intenso)
+  "nemotron-3-super": "#15803d",
+  "mistral-large-3:675b": "#22c55e", // Mistral / Nemotron Nano (Verde brillante)
+  "nemotron-3-nano:30b": "#22c55e",
+  "gemma4:31b": "#65a30d", // Gemma 4 (Verde oliva/lima)
+  "minimax-m3": "#84cc16", // Familia MiniMax (Verde lima)
+  "minimax-m2.7": "#84cc16",
+  "deepseek-v4-pro": "#2dd4bf", // DeepSeek Pro (Verde menta/teal claro)
+  "gpt-oss:120b": "#86efac", // GPT-OSS 120B Ollama (Verde claro)
+  "deepseek-v4-flash:preview": "#5eead4", // DeepSeek Flash (Verde menta suave)
+  "deepseek-v4-flash:0731": "#5eead4",
+  "gpt-oss:20b": "#dcfce7", // GPT-OSS 20B Ollama (Verde pastel muy claro)
+
+  __other__: "#10b981",
 };
 
 function getModelColor(model) {
-  return TOKEN_MODEL_COLORS[model] || TOKEN_MODEL_COLORS["__other__"];
+  if (!model) return TOKEN_MODEL_COLORS["__other__"];
+  if (TOKEN_MODEL_COLORS[model]) return TOKEN_MODEL_COLORS[model];
+
+  var lower = model.toLowerCase();
+  // Family fallback resolution
+  // Claude pool (Rojos)
+  if (lower.indexOf("opus") !== -1) return "#b91c1c";
+  if (lower.indexOf("sonnet") !== -1 || lower.indexOf("claude") !== -1) return "#ef4444";
+  if (lower === "gpt-oss-120b" || lower === "gpt-oss-120b-medium") return "#f87171";
+
+  // Gemini pool (Azules)
+  if (lower.indexOf("3.1-pro") !== -1 || lower.indexOf("3-pro") !== -1) return "#1d4ed8";
+  if (lower.indexOf("3.5-flash") !== -1) return "#2563eb";
+  if (lower.indexOf("3.6-flash") !== -1) return "#38bdf8";
+  if (lower.indexOf("gemini") !== -1 || lower.indexOf("3-flash") !== -1) return "#93c5fd";
+
+  // Ollama pool (Verdes)
+  if (lower.indexOf("kimi") !== -1) return "#047857";
+  if (lower.indexOf("qwen") !== -1) return "#0f766e";
+  if (lower.indexOf("glm") !== -1) return "#10b981";
+  if (lower.indexOf("nemotron-3-super") !== -1 || lower.indexOf("nemotron-3-ultra") !== -1) return "#15803d";
+  if (lower.indexOf("mistral") !== -1 || lower.indexOf("nemotron") !== -1) return "#22c55e";
+  if (lower.indexOf("gemma") !== -1) return "#65a30d";
+  if (lower.indexOf("minimax") !== -1) return "#84cc16";
+  if (lower.indexOf("deepseek-v4-pro") !== -1) return "#2dd4bf";
+  if (lower.indexOf("deepseek") !== -1) return "#5eead4";
+  if (lower.indexOf("gpt-oss:120b") !== -1) return "#86efac";
+  if (lower.indexOf("gpt-oss") !== -1) return "#dcfce7";
+
+  return "#10b981";
 }
 
 function formatTokenCount(n) {
