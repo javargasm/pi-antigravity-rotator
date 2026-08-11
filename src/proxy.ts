@@ -458,7 +458,12 @@ async function handleUpstreamAccountAction(
       action.cooldownMs,
       action.errorText.slice(0, 300),
     );
-    rotator.recordProvider429(account, model, action.cooldownMs);
+    rotator.recordProvider429(
+      account,
+      model,
+      action.cooldownMs,
+      action.providerResourceExhausted,
+    );
     logRequestEnd(
       429,
       `cooldownMs=${action.cooldownMs}${action.providerResourceExhausted ? " resourceExhausted=true" : ""} endpoint=${action.endpoint}`,

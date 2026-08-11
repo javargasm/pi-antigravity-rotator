@@ -388,4 +388,108 @@ describe("v2 routing and status", () => {
         reason.indexOf("quota is exhausted for this model"),
     );
   });
+
+  it("keeps dual accounts (google + ollama) eligible for google pools", () => {
+    const config = makeConfig();
+    config.accounts = [
+      {
+        email: "dual@example.com",
+        credentials: [
+          { provider: "google-antigravity", refreshToken: "g" },
+          { provider: "ollama", apiKey: "o" },
+        ],
+        projectId: "pd",
+        tier: "free",
+      },
+      {
+        email: "google-only@example.com",
+        provider: "google-antigravity",
+        refreshToken: "g2",
+        projectId: "pg",
+        tier: "free",
+      },
+      {
+        email: "ollama-only@example.com",
+        provider: "ollama",
+        apiKey: "o2",
+        projectId: "po",
+        tier: "free",
+      },
+    ];
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+
+    function quota(modelKey: string) {
+      return [
+        {
+          modelKey,
+          displayName: modelKey,
+          percentRemaining: 100,
+          resetTime: null,
+          timerType: "7d",
+        },
+      ];
+    }
+    for (const account of rotator.accounts) {
+      account.quota = [...quota("claude"), ...quota("session")];
+      account.healthScore = 1;
+    }
+
+    function allowed(modelKey: string): string | null {
+      const available = rotator.accounts
+        .filter((a: any) => rotator.isProviderEligibleForKey(a, modelKey))
+        .map((a: any) => a.config.email);
+      return available[0] ?? null;
+    }
+
+    const now = Date.now();
+    const claudeBest = rotator.pickBestModelAccount("claude", now, -1);
+    assert.equal(allowed("claude"), "dual@example.com");
+    assert.equal(claudeBest?.config.email, "dual@example.com");
+
+    const sessionBest = rotator.pickBestModelAccount("session", now, -1);
+    assert.equal(sessionBest?.config.email, "dual@example.com");
+    assert.equal(allowed("session"), "dual@example.com");
+  });
+
+  it("arms the model breaker on plain 429s but not on quota exhaustion", () => {
+    const config = makeConfig();
+    config.accounts.push({
+      email: "c@example.com",
+      refreshToken: "c",
+      projectId: "pc",
+      tier: "free",
+    });
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+    const now = Date.now();
+    const cooldownMs = 60_000;
+
+    rotator.recordProvider429(rotator.accounts[0], "claude", cooldownMs, true);
+    rotator.recordProvider429(rotator.accounts[1], "claude", cooldownMs, true);
+    assert.equal(
+      rotator.modelBreakers["claude"] ?? 0,
+      0,
+      "quota exhaustion must not arm the model breaker",
+    );
+
+    rotator.recordProvider429(rotator.accounts[0], "claude", cooldownMs, false);
+    rotator.recordProvider429(
+      rotator.accounts[1],
+      "claude",
+      cooldownMs * 2,
+      false,
+    );
+    assert.equal(
+      rotator.modelBreakers["claude"] ?? 0,
+      0,
+      "below threshold must not arm the breaker",
+    );
+
+    rotator.recordProvider429(rotator.accounts[2], "claude", cooldownMs, false);
+    assert.ok(
+      rotator.modelBreakers["claude"] > now,
+      "3 unique accounts with plain 429 must arm the model breaker",
+    );
+  });
 });

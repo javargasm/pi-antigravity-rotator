@@ -21,6 +21,7 @@ export type RoutingPolicy =
 export type RoutingRejectionReason =
   | "disabled"
   | "flagged"
+  | "provider-ineligible"
   | "account-concurrency"
   | "project-concurrency"
   | "cooldown"

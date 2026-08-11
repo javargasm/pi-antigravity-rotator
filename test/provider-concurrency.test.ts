@@ -65,70 +65,58 @@ function makeAccount(
 }
 
 describe("AccountRotator concurrency rules per provider", () => {
-  it("Ollama session pool ignores per-account concurrency limit", () => {
-    const acc = makeAccount("ollama", "session", 5);
-    const rotator = new AccountRotator([acc], {
+  function makeRotator(acc: AccountRuntime): any {
+    const rotator = new AccountRotator({
+      proxyPort: 51200,
+      rotateOnQuotaDrop: 20,
       routingPolicy: "timer-first",
       quotaPollIntervalMs: 300000,
       requestsPerRotation: 5,
       maxConcurrentRequestsPerAccount: 1,
       maxConcurrentRequestsPerProjectModel: 1,
+      accounts: [acc.config],
     });
+    rotator.stopQuotaPolling();
+    return rotator;
+  }
+
+  it("Ollama session pool ignores per-account concurrency limit", () => {
+    const acc = makeAccount("ollama", "session", 5);
+    const rotator = makeRotator(acc);
     const now = Date.now();
     assert.equal(
       rotator.isAvailableForModel(acc, "session", now),
       true,
       "Ollama session pool must stay available regardless of inFlight count",
     );
-    (rotator as unknown as { stopQuotaPolling?: () => void }).stopQuotaPolling?.();
   });
 
   it("Antigravity claude pool enforces per-account concurrency limit", () => {
     const acc = makeAccount("google-antigravity", "claude", 5);
-    const rotator = new AccountRotator([acc], {
-      routingPolicy: "timer-first",
-      quotaPollIntervalMs: 300000,
-      requestsPerRotation: 5,
-      maxConcurrentRequestsPerAccount: 1,
-      maxConcurrentRequestsPerProjectModel: 1,
-    });
+    const rotator = makeRotator(acc);
     const now = Date.now();
     assert.equal(
       rotator.isAvailableForModel(acc, "claude", now),
       false,
       "Antigravity claude pool must reject when inFlight >= maxConcurrentRequestsPerAccount",
     );
-    (rotator as unknown as { stopQuotaPolling?: () => void }).stopQuotaPolling?.();
   });
 
   it("Antigravity gemini pool enforces per-account concurrency limit", () => {
     const acc = makeAccount("google-antigravity", "gemini", 5);
-    const rotator = new AccountRotator([acc], {
-      routingPolicy: "timer-first",
-      quotaPollIntervalMs: 300000,
-      requestsPerRotation: 5,
-      maxConcurrentRequestsPerAccount: 1,
-      maxConcurrentRequestsPerProjectModel: 1,
-    });
+    const rotator = makeRotator(acc);
     const now = Date.now();
     assert.equal(
       rotator.isAvailableForModel(acc, "gemini", now),
       false,
       "Antigravity gemini pool must reject when inFlight >= maxConcurrentRequestsPerAccount",
     );
-    (rotator as unknown as { stopQuotaPolling?: () => void }).stopQuotaPolling?.();
   });
 
   it("startRequest does not track in-flight for the Ollama session pool", () => {
     const acc = makeAccount("ollama", "session", 0);
     acc.inFlightByModel = {};
-    const rotator = new AccountRotator([acc], {
-      routingPolicy: "timer-first",
-      quotaPollIntervalMs: 300000,
-      requestsPerRotation: 5,
-      maxConcurrentRequestsPerAccount: 1,
-      maxConcurrentRequestsPerProjectModel: 1,
-    });
+    const rotator = makeRotator(acc);
     rotator.startRequest(acc, "session");
     assert.deepEqual(
       acc.inFlightByModel,
@@ -140,19 +128,12 @@ describe("AccountRotator concurrency rules per provider", () => {
       0,
       "Ollama session pool must not increment inFlightRequests",
     );
-    (rotator as unknown as { stopQuotaPolling?: () => void }).stopQuotaPolling?.();
   });
 
   it("startRequest/finishRequest do not track raw Ollama model names", () => {
     const acc = makeAccount("ollama", "session", 0);
     acc.inFlightByModel = {};
-    const rotator = new AccountRotator([acc], {
-      routingPolicy: "timer-first",
-      quotaPollIntervalMs: 300000,
-      requestsPerRotation: 5,
-      maxConcurrentRequestsPerAccount: 1,
-      maxConcurrentRequestsPerProjectModel: 1,
-    });
+    const rotator = makeRotator(acc);
     rotator.setOllamaModels(["gemma4:31b"]);
     rotator.startRequest(acc, "gemma4:31b");
     rotator.finishRequest(acc, "gemma4:31b");
@@ -162,18 +143,11 @@ describe("AccountRotator concurrency rules per provider", () => {
       "Raw Ollama model names must not be tracked as in-flight",
     );
     assert.equal(acc.inFlightRequests, 0);
-    (rotator as unknown as { stopQuotaPolling?: () => void }).stopQuotaPolling?.();
   });
 
   it("Antigravity models still track in-flight through startRequest", () => {
     const acc = makeAccount("google-antigravity", "claude", 0);
-    const rotator = new AccountRotator([acc], {
-      routingPolicy: "timer-first",
-      quotaPollIntervalMs: 300000,
-      requestsPerRotation: 5,
-      maxConcurrentRequestsPerAccount: 1,
-      maxConcurrentRequestsPerProjectModel: 1,
-    });
+    const rotator = makeRotator(acc);
     rotator.startRequest(acc, "claude");
     assert.equal(
       acc.inFlightByModel["claude"],
@@ -188,6 +162,5 @@ describe("AccountRotator concurrency rules per provider", () => {
       "Antigravity claude pool must decrement on finishRequest",
     );
     assert.equal(acc.inFlightRequests, 0);
-    (rotator as unknown as { stopQuotaPolling?: () => void }).stopQuotaPolling?.();
   });
 });

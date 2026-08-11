@@ -49,6 +49,7 @@ import { UsagePredictor, type ExhaustionPrediction } from "./providers/ollama/pr
 import { fetchWithRetry } from "./fetch-with-retry.js";
 import { getOllamaApiKey } from "./providers/ollama/credentials.js";
 import {
+  DEFAULT_PROVIDER,
   getProviderAdapter,
   getProviderForAccount,
   hasCredential,
@@ -1059,6 +1060,11 @@ export class AccountRotator {
       return { reason: "disabled", detail: "account disabled" };
     if (account.flagged)
       return { reason: "flagged", detail: "account quarantined or flagged" };
+    if (!this.isProviderEligibleForKey(account, modelKey))
+      return {
+        reason: "provider-ineligible",
+        detail: "account lacks a credential for this provider pool",
+      };
     const defaultCooldown = account.cooldownsByModel["__default__"] ?? 0;
     if (defaultCooldown > now)
       return { reason: "cooldown", detail: "default cooldown active" };
@@ -1121,6 +1127,7 @@ export class AccountRotator {
       "token-bucket-empty",
       "fresh-window-blocked",
       "quota-zero",
+      "provider-ineligible",
       "flagged",
       "disabled",
     ];
@@ -2180,8 +2187,16 @@ export class AccountRotator {
     account: AccountRuntime,
     model: string | undefined,
     cooldownMs: number,
+    providerResourceExhausted = false,
   ): void {
     const now = Date.now();
+    if (providerResourceExhausted) {
+      // Account-level daily/weekly quota exhaustion is not a model outage:
+      // the account already gets an individual cooldown from markExhausted,
+      // so it must not arm the project or model circuit breaker and block
+      // healthy accounts that still have quota.
+      return;
+    }
     const modelKey = model
       ? (resolveQuotaModelKey(model) ?? "__default__")
       : "__default__";
@@ -2553,8 +2568,12 @@ export class AccountRotator {
     account: AccountRuntime,
     modelKey: string,
   ): boolean {
-    const isOllama = hasCredential(account.config, "ollama");
-    return modelKey === "session" ? isOllama : !isOllama;
+    if (modelKey === "session") {
+      return hasCredential(account.config, "ollama");
+    }
+    // Google pools (claude/gemini) require a google credential. A dual
+    // account (google + ollama) must stay eligible here — it can serve both.
+    return hasCredential(account.config, DEFAULT_PROVIDER);
   }
 
   /** Public pool-key resolution for quota routing display/logging. */
