@@ -18,6 +18,7 @@ import {
   type TokenUsageData,
   type TokenUsageTiered,
   MODEL_PRICING,
+  MODEL_TIER_ACCESS,
   QUOTA_USER_AGENT,
   REQUEST_GOOG_API_CLIENT,
   REQUEST_CLIENT_METADATA,
@@ -2786,6 +2787,11 @@ export class AccountRotator {
       notifications: getNotifications(),
       hostedOAuthConfigured: isHostedOAuthConfigured(),
       ollamaModels: this.getOllamaModels(),
+      modelTierAccess: this.accounts.some((a) =>
+        hasCredential(a.config, "ollama"),
+      )
+        ? MODEL_TIER_ACCESS
+        : undefined,
       predictions: this.getPredictionSummary(),
     };
   }

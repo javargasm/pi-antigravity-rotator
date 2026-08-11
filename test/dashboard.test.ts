@@ -78,6 +78,19 @@ describe("dashboard", () => {
     assert.match(js, /function toggleMask\(\)/);
   });
 
+  it("renders the free tier model access attention item", () => {
+    const js = readDashboardJs();
+    const start = js.indexOf("var freeTierAccounts = accounts.filter");
+    assert.ok(start > 0, "free tier accounts filter missing");
+    const item = js.slice(start, js.indexOf("if (items.length === 0)", start));
+    assert.match(item, /Free tier model access/);
+    assert.match(item, /modelTierAccess/);
+    assert.match(item, /HTTP 403/);
+    assert.match(item, /requires a subscription/);
+    assert.match(item, /✓/);
+    assert.match(item, /✗/);
+  });
+
   it("includes a plus tier option in account controls", () => {
     const js = readDashboardJs();
     assert.match(js, /'plus'/);

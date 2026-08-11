@@ -930,6 +930,36 @@ function renderAttentionPanel(data) {
     );
   }
 
+  var freeTierAccounts = accounts.filter(function (a) {
+    return a.tier === "free" || a.tier === "unknown";
+  });
+  var modelTierAccess = data.modelTierAccess || null;
+  if (freeTierAccounts.length > 0 && modelTierAccess) {
+    var freeModels = [];
+    var paidModels = [];
+    Object.keys(modelTierAccess).forEach(function (model) {
+      if (modelTierAccess[model] === "free") freeModels.push(model);
+      else paidModels.push(model);
+    });
+    items.push(
+      renderAttentionItem(
+        "Free tier model access",
+        freeTierAccounts.length +
+          " account(s) are configured on the free tier (or unset). Only the ✓ models below respond on that tier; the ✗ ones return HTTP 403 \u201crequires a subscription\u201d until an account is upgraded.",
+        freeModels
+          .map(function (m) {
+            return "\u2713 " + m;
+          })
+          .concat(
+            paidModels.map(function (m) {
+              return "\u2717 " + m;
+            }),
+          ),
+        "info",
+      ),
+    );
+  }
+
   if (items.length === 0) {
     panel.innerHTML =
       '<div class="modal-empty">No operator action items right now.</div>';

@@ -465,6 +465,8 @@ export interface StatusResponse {
   };
   routingDiagnostics: Record<string, RoutingModelDiagnostics>;
   ollamaModels: string[];
+  // Present only when at least one account carries an ollama credential.
+  modelTierAccess?: Record<string, ModelTierAccess>;
   predictions: Record<string, ExhaustionPrediction>;
   circuitBreakers: {
     model: Record<string, { until: number; remainingMs: number }>;
@@ -731,6 +733,33 @@ export const MODEL_PRICING: Record<
   "nemotron-3-nano:30b":         { inputPer1M: 0.50,   outputPer1M: 1.50 },
   "nemotron-3-super":            { inputPer1M: 0.60,   outputPer1M: 1.80 },
   "nemotron-3-ultra":            { inputPer1M: 0.60,   outputPer1M: 1.80 },
+};
+
+// Which Ollama Cloud models respond on which subscription tiers, verified
+// 2026-08-09 with minimal /api/chat probes against free-tier accounts
+// (HTTP 200 vs 403). "free" = served on the free tier; "subscription" =
+// the API returns "this model requires a subscription" until the account
+// is upgraded. Sourced from ~/ollama-rotator.
+export type ModelTierAccess = "free" | "subscription";
+export const MODEL_TIER_ACCESS: Record<string, ModelTierAccess> = {
+  "gpt-oss:20b":                  "free",
+  "gpt-oss:120b":                 "free",
+  "gemma4:31b":                   "free",
+  "minimax-m3":                   "free",
+  "nemotron-3-nano:30b":          "free",
+  "nemotron-3-super":             "free",
+  "nemotron-3-ultra":             "free",
+  "deepseek-v4-flash:0731":       "subscription",
+  "deepseek-v4-flash:preview":    "subscription",
+  "deepseek-v4-pro":              "subscription",
+  "glm-5.1":                      "subscription",
+  "glm-5.2":                      "subscription",
+  "kimi-k2.6":                    "subscription",
+  "kimi-k2.7-code":               "subscription",
+  "kimi-k3":                      "subscription",
+  "minimax-m2.7":                 "subscription",
+  "mistral-large-3:675b":         "subscription",
+  "qwen3.5:397b":                 "subscription",
 };
 
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";

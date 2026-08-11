@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.8.7] - 2026-08-10
+
+### Added
+- **"Free tier model access" attention notice for Ollama accounts**: ported `MODEL_TIER_ACCESS` from `~/ollama-rotator` (verified 2026-08-09 probes: `gpt-oss`, `gemma4:31b`, `minimax-m3`, `nemotron-3-*` are free-tier; the rest require a subscription). `getStatus()` now exposes `modelTierAccess` only when at least one account carries an `ollama` credential, and the dashboard attention panel shows the ✓/✗ model list with the HTTP 403 "requires a subscription" explainer for accounts on the free tier (or unset), exactly like ollama-rotator.
+
 ## [2.8.6] - 2026-08-10
 
 ### Changed
