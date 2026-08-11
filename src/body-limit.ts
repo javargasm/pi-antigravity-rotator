@@ -10,7 +10,8 @@ export class PayloadTooLargeError extends Error {
 }
 
 export function getMaxBodyBytes(env: NodeJS.ProcessEnv = process.env): number {
-	const raw = env.PI_ROTATOR_MAX_BODY_BYTES;
+	const raw =
+		env.TUXEVIL_ROTATOR_MAX_BODY_BYTES ?? env.PI_ROTATOR_MAX_BODY_BYTES;
 	if (!raw) return DEFAULT_MAX_BODY_BYTES;
 	const parsed = Number(raw);
 	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_MAX_BODY_BYTES;

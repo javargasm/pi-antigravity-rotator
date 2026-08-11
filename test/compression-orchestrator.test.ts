@@ -4,7 +4,7 @@ import {
   applyPromptCompression,
   parseCompressionMode,
 } from "../src/compression/index.js";
-import type { ChatMessage } from "../src/compat/translators.js";
+import type { ChatMessage } from "../src/providers/google-antigravity/translators.js";
 
 describe("Compression Orchestrator", () => {
   it("parses compression modes from headers and config", () => {

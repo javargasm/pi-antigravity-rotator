@@ -1,22 +1,22 @@
 services:
-  pi-antigravity-rotator:
+  tuxevil-rotator:
     # Use pre-built multi-arch image from GHCR (recommended)
-    image: ghcr.io/tuxevil/pi-antigravity-rotator:latest
+    image: ghcr.io/tuxevil/tuxevil-rotator:latest
     # To build locally from source instead, comment out 'image' above and uncomment 'build' below:
     # build: .
-    container_name: pi-antigravity-rotator
+    container_name: tuxevil-rotator
     ports:
       - "127.0.0.1:51200:51200"
     environment:
-      PI_ROTATOR_DIR: /data
-      PI_ROTATOR_TELEMETRY: "on"
-      PI_ROTATOR_ADMIN_TOKEN: "${PI_ROTATOR_ADMIN_TOKEN:-}"
+      TUXEVIL_ROTATOR_DIR: /data
+      TUXEVIL_ROTATOR_TELEMETRY: "on"
+      TUXEVIL_ROTATOR_ADMIN_TOKEN: "${TUXEVIL_ROTATOR_ADMIN_TOKEN:-}"
       ANTIGRAVITY_CLIENT_ID: "${ANTIGRAVITY_CLIENT_ID:-}"
       ANTIGRAVITY_CLIENT_SECRET: "${ANTIGRAVITY_CLIENT_SECRET:-}"
       ANTIGRAVITY_REDIRECT_URI: "${ANTIGRAVITY_REDIRECT_URI:-}"
-      PI_ROTATOR_QUOTA_USER_AGENT: "${PI_ROTATOR_QUOTA_USER_AGENT:-}"
+      TUXEVIL_ROTATOR_QUOTA_USER_AGENT: "${TUXEVIL_ROTATOR_QUOTA_USER_AGENT:-}"
       # Uncomment to enable PostgreSQL for Virtual Keys & Spend Logging:
-      # PI_ROTATOR_DATABASE_URL: "${PI_ROTATOR_DATABASE_URL:-}"
+      # TUXEVIL_ROTATOR_DATABASE_URL: "${TUXEVIL_ROTATOR_DATABASE_URL:-}"
     volumes:
       - ./docker-data:/data
     restart: unless-stopped

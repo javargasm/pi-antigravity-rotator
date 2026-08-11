@@ -326,7 +326,7 @@ describe("warnIfInsecureTelemetryEndpoint", () => {
 			assert.equal(result, true);
 			assert.equal(lines.length, 1);
 			assert.match(lines[0], /plain HTTP/);
-			assert.match(lines[0], /PI_ROTATOR_TELEMETRY_URL/);
+			assert.match(lines[0], /PI_ROTATOR_TELEMETRY_URL|TUXEVIL_ROTATOR_TELEMETRY_URL/);
 		} finally {
 			restoreLog(originalWriter);
 		}

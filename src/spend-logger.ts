@@ -1,18 +1,19 @@
 import randomBytes from "node:crypto";
 import { MODEL_PRICING, type SpendLog, type DailySpend } from "./types.js";
 import { isDbConfigured, queryDb } from "./db-store.js";
+import { rotatorEnv } from "./env.js";
 
 const FLUSH_INTERVAL_MS = 5_000;
 const MAX_QUEUE_SIZE = 50;
 const DEFAULT_KEY_HASH_LABEL = "unauthenticated";
 
 const storeMessagesConfig =
-  process.env.PI_ROTATOR_LOG_MESSAGES !== "false" &&
-  process.env.PI_ROTATOR_LOG_MESSAGES !== "0";
+  rotatorEnv("LOG_MESSAGES") !== "false" &&
+  rotatorEnv("LOG_MESSAGES") !== "0";
 
 const storeResponsesConfig =
-  process.env.PI_ROTATOR_LOG_RESPONSES !== "false" &&
-  process.env.PI_ROTATOR_LOG_RESPONSES !== "0";
+  rotatorEnv("LOG_RESPONSES") !== "false" &&
+  rotatorEnv("LOG_RESPONSES") !== "0";
 
 let queue: SpendLog[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -635,7 +636,7 @@ const RETENTION_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let retentionTimer: ReturnType<typeof setTimeout> | null = null;
 
 function getLogRetentionDays(): number {
-  const env = process.env.PI_ROTATOR_LOG_RETENTION_DAYS;
+  const env = rotatorEnv("LOG_RETENTION_DAYS");
   if (env) {
     const n = parseInt(env, 10);
     if (!isNaN(n) && n > 0) return n;

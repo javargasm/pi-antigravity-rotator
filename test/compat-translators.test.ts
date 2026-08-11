@@ -5,7 +5,7 @@ import {
 	anthropicToAntigravityBody,
 	normalizeOpenAIChatCompletionRequest,
 	normalizeOpenAIResponsesRequest,
-} from "../src/compat/translators.js";
+} from "../src/providers/google-antigravity/translators.js";
 
 type AntigravityBodyWithRequest = ReturnType<typeof openAIToAntigravityBody> & {
 	request: {

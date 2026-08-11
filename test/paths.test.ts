@@ -1,8 +1,18 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join, sep } from "node:path";
 import { resolveSafeConfigDir } from "../src/paths.js";
+import { migrateLegacyConfig } from "../src/paths.js";
 
 describe("resolveSafeConfigDir", () => {
   it("accepts a normal absolute path", () => {
@@ -43,5 +53,42 @@ describe("resolveSafeConfigDir", () => {
     // '..foo' is a single directory name, not the parent reference.
     const out = resolveSafeConfigDir("/var/lib/..foo/rotator", "argv");
     assert.ok(out.endsWith(join("var", "lib", "..foo", "rotator")));
+  });
+});
+
+describe("migrateLegacyConfig", () => {
+  it("copies legacy files once, preserves permissions, and reports idempotent reruns", () => {
+    const root = mkdtempSync(join(tmpdir(), "tuxevil-migrate-"));
+    const legacyDir = join(root, "legacy");
+    const targetDir = join(root, "current");
+    mkdirSync(legacyDir);
+    writeFileSync(join(legacyDir, "accounts.json"), '{"accounts":[]}');
+    chmodSync(join(legacyDir, "accounts.json"), 0o600);
+
+    const first = migrateLegacyConfig(targetDir, [legacyDir]);
+    assert.deepEqual(first.copied, ["accounts.json"]);
+    assert.deepEqual(first.skipped, []);
+    assert.deepEqual(first.errors, []);
+    assert.equal(readFileSync(join(targetDir, "accounts.json"), "utf8"), '{"accounts":[]}');
+    assert.equal(statSync(join(targetDir, "accounts.json")).mode & 0o777, 0o600);
+
+    const second = migrateLegacyConfig(targetDir, [legacyDir]);
+    assert.deepEqual(second.copied, []);
+    assert.deepEqual(second.skipped, ["accounts.json"]);
+    assert.equal(existsSync(join(legacyDir, "accounts.json")), true);
+  });
+
+  it("does not overwrite files already present in the new directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "tuxevil-migrate-"));
+    const legacyDir = join(root, "legacy");
+    const targetDir = join(root, "current");
+    mkdirSync(legacyDir);
+    mkdirSync(targetDir);
+    writeFileSync(join(legacyDir, "accounts.json"), "legacy");
+    writeFileSync(join(targetDir, "accounts.json"), "current");
+
+    const report = migrateLegacyConfig(targetDir, [legacyDir]);
+    assert.deepEqual(report.skipped, ["accounts.json"]);
+    assert.equal(readFileSync(join(targetDir, "accounts.json"), "utf8"), "current");
   });
 });

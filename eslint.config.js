@@ -1,4 +1,4 @@
-// ESLint 9+ flat config for pi-antigravity-rotator.
+// ESLint 9+ flat config for tuxevil-rotator.
 // Conservative ruleset: catches real bugs, low noise.
 
 import js from "@eslint/js";

@@ -3,9 +3,9 @@
 ## Option A: npm (Global Install)
 
 ```bash
-npm install -g pi-antigravity-rotator
-pi-antigravity-rotator login
-pi-antigravity-rotator start
+npm install -g tuxevil-rotator
+tuxevil-rotator login
+tuxevil-rotator start
 ```
 
 The proxy starts on `http://0.0.0.0:51200` by default. Dashboard at `http://localhost:51200/dashboard`.
@@ -13,8 +13,8 @@ The proxy starts on `http://0.0.0.0:51200` by default. Dashboard at `http://loca
 ## Option B: Clone from Source
 
 ```bash
-git clone https://github.com/tuxevil/pi-antigravity-rotator.git
-cd pi-antigravity-rotator
+git clone https://github.com/tuxevil/tuxevil-rotator.git
+cd tuxevil-rotator
 npm install
 npm run login
 npm start
@@ -25,7 +25,7 @@ npm start
 **Pre-built image (recommended):**
 
 ```bash
-docker pull ghcr.io/tuxevil/pi-antigravity-rotator:latest
+docker pull ghcr.io/tuxevil/tuxevil-rotator:latest
 ```
 
 **Using Docker Compose:**
@@ -36,7 +36,7 @@ docker compose up -d
 ```
 
 The image is multi-arch (`linux/amd64`, `linux/arm64`). The compose file:
-- Pulls `ghcr.io/tuxevil/pi-antigravity-rotator:latest`
+- Pulls `ghcr.io/tuxevil/tuxevil-rotator:latest`
 - Persists data under `./docker-data` (mapped to `/data` in the container)
 - Publishes the proxy on `127.0.0.1:51200` only (secure by default)
 - Runs as non-root `node` user (UID/GID 1000)
@@ -45,11 +45,11 @@ To build locally from source instead, uncomment `build: .` in `docker-compose.ym
 
 **Enable Virtual Keys and Spend Logging inside Docker:**
 
-Add `PI_ROTATOR_DATABASE_URL` to your compose environment block:
+Add `TUXEVIL_ROTATOR_DATABASE_URL` to your compose environment block:
 
 ```yaml
 environment:
-  PI_ROTATOR_DATABASE_URL: "postgres://user:pass@postgres_host:5432/rotatordb"
+  TUXEVIL_ROTATOR_DATABASE_URL: "postgres://user:pass@postgres_host:5432/rotatordb"
 ```
 
 See [Setting up PostgreSQL](integrations/setup-postgresql.md) for a full setup guide.
@@ -70,21 +70,21 @@ sudo chown -R 1000:1000 docker-data
 
 ## Running as a systemd Service
 
-Create `/etc/systemd/system/pi-antigravity-rotator.service`:
+Create `/etc/systemd/system/tuxevil-rotator.service`:
 
 ```ini
 [Unit]
-Description=Pi Antigravity Rotator
+Description=Tuxevil Rotator
 After=network.target
 
 [Service]
 Type=simple
 User=your-user
-WorkingDirectory=/path/to/pi-antigravity-rotator
+WorkingDirectory=/path/to/tuxevil-rotator
 ExecStart=/usr/bin/npm start
 Restart=always
 RestartSec=5
-Environment=PI_ROTATOR_BIND_HOST=127.0.0.1
+Environment=TUXEVIL_ROTATOR_BIND_HOST=127.0.0.1
 
 [Install]
 WantedBy=multi-user.target
@@ -92,9 +92,9 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable pi-antigravity-rotator
-sudo systemctl start pi-antigravity-rotator
-sudo journalctl -u pi-antigravity-rotator -f
+sudo systemctl enable tuxevil-rotator
+sudo systemctl start tuxevil-rotator
+sudo journalctl -u tuxevil-rotator -f
 ```
 
 ---
@@ -149,7 +149,7 @@ The `proxy_buffering off` and long `proxy_read_timeout` are important for SSE st
 **npm install:**
 
 ```bash
-npm install -g pi-antigravity-rotator@latest
+npm install -g tuxevil-rotator@latest
 ```
 
 Or use the one-click update button in the dashboard (auto-update notifications appear when a newer version is available).

@@ -112,8 +112,8 @@ describe("token encryption", () => {
 
     // Encrypting config replaces plain tokens with enc:v2:... tokens
     const encryptedConfig = encryptAccountsInConfig(plainConfig, secret);
-    assert.ok(isEncryptedToken(encryptedConfig.accounts[0].refreshToken));
-    assert.ok(isEncryptedToken(encryptedConfig.accounts[1].refreshToken));
+    assert.ok(isEncryptedToken(encryptedConfig.accounts[0].refreshToken ?? ""));
+    assert.ok(isEncryptedToken(encryptedConfig.accounts[1].refreshToken ?? ""));
 
     // Decrypting encrypted config returns plain tokens and migrated: false
     const { config: restoredConfig, migrated: migrated2 } = decryptAccountsInConfig(encryptedConfig, secret);

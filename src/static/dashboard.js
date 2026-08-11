@@ -930,6 +930,36 @@ function renderAttentionPanel(data) {
     );
   }
 
+  var freeTierAccounts = accounts.filter(function (a) {
+    return a.tier === "free" || a.tier === "unknown";
+  });
+  var modelTierAccess = data.modelTierAccess || null;
+  if (freeTierAccounts.length > 0 && modelTierAccess) {
+    var freeModels = [];
+    var paidModels = [];
+    Object.keys(modelTierAccess).forEach(function (model) {
+      if (modelTierAccess[model] === "free") freeModels.push(model);
+      else paidModels.push(model);
+    });
+    items.push(
+      renderAttentionItem(
+        "Free tier model access",
+        freeTierAccounts.length +
+          " account(s) are configured on the free tier (or unset). Only the ✓ models below respond on that tier; the ✗ ones return HTTP 403 \u201crequires a subscription\u201d until an account is upgraded.",
+        freeModels
+          .map(function (m) {
+            return "\u2713 " + m;
+          })
+          .concat(
+            paidModels.map(function (m) {
+              return "\u2717 " + m;
+            }),
+          ),
+        "info",
+      ),
+    );
+  }
+
   if (items.length === 0) {
     panel.innerHTML =
       '<div class="modal-empty">No operator action items right now.</div>';
@@ -963,6 +993,10 @@ function renderAttentionItem(title, description, tags, type) {
     icon =
       '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1C19.37 8.45 20 10.15 20 12c0 4.42-3.58 8-8 8z"/></svg>';
     colorClass = "operator-gray";
+  } else if (type === "info") {
+    icon =
+      '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>';
+    colorClass = "operator-green";
   } else {
     icon =
       '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>';
@@ -1040,6 +1074,25 @@ var MODEL_PRICING_CLIENT = {
   "gemini-3.6-flash-low": { input: 1.5, output: 7.5 },
   "gemini-3.6-flash-tiered": { input: 1.5, output: 7.5 },
   "gpt-oss-120b-medium": { input: 2.0, output: 10.0 },
+  // Ollama Cloud models — mirrors MODEL_PRICING in src/types.ts
+  "gpt-oss:20b": { input: 0.075, output: 0.3 },
+  "gpt-oss:120b": { input: 0.15, output: 0.6 },
+  "deepseek-v4-flash:preview": { input: 0.14, output: 0.28 },
+  "deepseek-v4-flash:0731": { input: 0.14, output: 0.28 },
+  "deepseek-v4-pro": { input: 0.435, output: 0.87 },
+  "qwen3.5:397b": { input: 0.6, output: 3.6 },
+  "glm-5.1": { input: 0.8, output: 2.56 },
+  "glm-5.2": { input: 0.8, output: 2.56 },
+  "gemma4:31b": { input: 0.38, output: 1.15 },
+  "kimi-k2.6": { input: 0.95, output: 4.0 },
+  "kimi-k2.7-code": { input: 0.95, output: 4.0 },
+  "kimi-k3": { input: 0.95, output: 4.0 },
+  "minimax-m2.7": { input: 0.3, output: 1.2 },
+  "minimax-m3": { input: 0.3, output: 1.2 },
+  "mistral-large-3:675b": { input: 0.5, output: 1.5 },
+  "nemotron-3-nano:30b": { input: 0.5, output: 1.5 },
+  "nemotron-3-super": { input: 0.6, output: 1.8 },
+  "nemotron-3-ultra": { input: 0.6, output: 1.8 },
 };
 
 function getModelPricingClient(m) {
@@ -2275,7 +2328,7 @@ async function exportConfig() {
   var url = URL.createObjectURL(blob);
   var a = document.createElement("a");
   a.href = url;
-  a.download = "pi-antigravity-rotator-config.json";
+  a.download = "tuxevil-rotator-config.json";
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -2911,7 +2964,7 @@ document.addEventListener("keydown", function (event) {
 });
 
 function hideDonationModalPermanently() {
-  localStorage.setItem("hideDonationPopup", "true");
+  localStorage.setItem("hideDonationModal", "true");
   closeModal(null, "donationModal");
 }
 
@@ -2919,7 +2972,7 @@ refresh();
 connectSSE();
 setInterval(refresh, 15000); // fallback poll every 15s in case SSE drops
 
-if (!localStorage.getItem("hideDonationPopup")) {
+if (!localStorage.getItem("hideDonationModal")) {
   setTimeout(function () {
     openModal("donationModal");
   }, 1000);
@@ -2970,7 +3023,7 @@ function renderUpdateBanner(updateInfo) {
     escapeHtml(updateInfo.currentVersion) +
     ")</span>";
   actions.innerHTML =
-    '<a class="btn-update-link" href="https://github.com/tuxevil/pi-antigravity-rotator/releases" target="_blank">Changelog</a>' +
+    '<a class="btn-update-link" href="https://github.com/tuxevil/tuxevil-rotator/releases" target="_blank">Changelog</a>' +
     '<button class="btn-update" id="btnDoUpdate" onclick="doSelfUpdate()">Update Now</button>' +
     '<button class="btn-update-dismiss" onclick="dismissUpdate(\'' +
     escapeHtml(updateInfo.latestVersion) +

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// ── Pi Antigravity Rotator — Telemetry Receiver ──────────────────────
+// ── Tuxevil Rotator — Telemetry Receiver ──────────────────────
 //
 // Minimal HTTP server that receives anonymous telemetry events
 // and stores them as JSONL (one file per day).
@@ -338,6 +338,26 @@ const MODEL_PRICING = {
 	"gemini-3.6-flash-low":     { inputPer1M: 1.50,  outputPer1M: 7.50 },
 	"gemini-3.6-flash-tiered":  { inputPer1M: 1.50,  outputPer1M: 7.50 },
 	"gpt-oss-120b-medium":      { inputPer1M: 2.00,  outputPer1M: 10.00 },
+
+	// Ollama Cloud models — mirrors MODEL_PRICING in src/types.ts
+	"gpt-oss:20b":                 { inputPer1M: 0.075, outputPer1M: 0.30 },
+	"gpt-oss:120b":                { inputPer1M: 0.15,  outputPer1M: 0.60 },
+	"deepseek-v4-flash:preview":   { inputPer1M: 0.14,  outputPer1M: 0.28 },
+	"deepseek-v4-flash:0731":      { inputPer1M: 0.14,  outputPer1M: 0.28 },
+	"deepseek-v4-pro":             { inputPer1M: 0.435, outputPer1M: 0.87 },
+	"qwen3.5:397b":                { inputPer1M: 0.60,  outputPer1M: 3.60 },
+	"glm-5.1":                     { inputPer1M: 0.80,  outputPer1M: 2.56 },
+	"glm-5.2":                     { inputPer1M: 0.80,  outputPer1M: 2.56 },
+	"gemma4:31b":                  { inputPer1M: 0.38,  outputPer1M: 1.15 },
+	"kimi-k2.6":                   { inputPer1M: 0.95,  outputPer1M: 4.00 },
+	"kimi-k2.7-code":              { inputPer1M: 0.95,  outputPer1M: 4.00 },
+	"kimi-k3":                     { inputPer1M: 0.95,  outputPer1M: 4.00 },
+	"minimax-m2.7":                { inputPer1M: 0.30,  outputPer1M: 1.20 },
+	"minimax-m3":                  { inputPer1M: 0.30,  outputPer1M: 1.20 },
+	"mistral-large-3:675b":        { inputPer1M: 0.50,  outputPer1M: 1.50 },
+	"nemotron-3-nano:30b":         { inputPer1M: 0.50,  outputPer1M: 1.50 },
+	"nemotron-3-super":            { inputPer1M: 0.60,  outputPer1M: 1.80 },
+	"nemotron-3-ultra":            { inputPer1M: 0.60,  outputPer1M: 1.80 },
 };
 
 function getModelPricing(model) {
@@ -732,8 +752,8 @@ function buildPublicStatsHtml() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<meta name="description" content="Anonymous usage statistics for Pi Antigravity Rotator">
-<title>Pi Rotator Stats</title>
+<meta name="description" content="Anonymous usage statistics for Tuxevil Rotator">
+<title>Tuxevil Rotator Stats</title>
 <style>
 :root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f1117;color:#e2e8f0}
 *{box-sizing:border-box}
@@ -761,7 +781,7 @@ h1{margin:10px 0 12px;color:#fff;font-size:clamp(32px,6vw,56px);letter-spacing:-
 </head>
 <body>
 <main>
-  <div class="eyebrow">Pi Antigravity Rotator</div>
+  <div class="eyebrow">Tuxevil Rotator</div>
   <h1>Usage at a glance.</h1>
   <p class="intro">Anonymous aggregate telemetry from the community. Values refresh automatically every five minutes. <a href="/v1/public-stats">View the raw data</a>.</p>
   <section class="stats-grid" aria-label="Public usage statistics">
@@ -772,7 +792,7 @@ h1{margin:10px 0 12px;color:#fff;font-size:clamp(32px,6vw,56px);letter-spacing:-
     <article class="stat"><div class="stat-label">Output tokens</div><div class="stat-value" id="tokensOutput">-</div></article>
   </section>
   <div class="status" id="status" role="status" aria-live="polite">Loading live totals...</div>
-  <footer class="footer"><span>Updated from anonymous telemetry</span><a href="https://github.com/tuxevil/pi-antigravity-rotator">View the project on GitHub</a></footer>
+  <footer class="footer"><span>Updated from anonymous telemetry</span><a href="https://github.com/tuxevil/tuxevil-rotator">View the project on GitHub</a></footer>
 </main>
 <script>
 const REFRESH_MS = 5 * 60 * 1000;
@@ -847,7 +867,7 @@ function buildDashboardHtml() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Pi Rotator Telemetry</title>
+<title>Tuxevil Rotator Telemetry</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"><\/script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -974,7 +994,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;padd
   <div class="topbar-inner">
     <a class="brand" href="/">
       <span class="brand-mark" aria-hidden="true"></span>
-      <span><strong>Pi Rotator</strong><small>Operations</small></span>
+      <span><strong>Tuxevil Rotator</strong><small>Operations</small></span>
     </a>
     <nav class="nav" aria-label="Operator navigation">
       <a href="/notifications">Notifications</a>
@@ -1366,7 +1386,7 @@ function buildNotificationsAdminHtml() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Pi Rotator — Notification Manager</title>
+<title>Tuxevil Rotator — Notification Manager</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh}
@@ -1578,7 +1598,7 @@ a{color:inherit}
   <div class="topbar-inner">
     <a class="brand" href="/notifications">
       <span class="brand-mark" aria-hidden="true"></span>
-      <span><strong>Pi Rotator</strong><small>Operations</small></span>
+      <span><strong>Tuxevil Rotator</strong><small>Operations</small></span>
     </a>
     <nav class="nav" aria-label="Operator navigation">
       <a href="/">Telemetry</a>
@@ -1696,7 +1716,7 @@ a{color:inherit}
           </div>
         </div>
         <div class="preview-shell">
-          <div class="preview-chrome"><i></i><i></i><i></i><span>pi rotator / broadcast</span></div>
+          <div class="preview-chrome"><i></i><i></i><i></i><span>tuxevil rotator / broadcast</span></div>
           <div class="preview-card p-info" id="previewCard">
             <span class="preview-icon" id="previewIcon">i</span>
             <div class="preview-content">

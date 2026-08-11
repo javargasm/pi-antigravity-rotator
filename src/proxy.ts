@@ -12,16 +12,26 @@ import {
 } from "node:http";
 import { Readable } from "node:stream";
 import {
-  ANTIGRAVITY_ENDPOINTS,
-  REQUEST_CLIENT_METADATA,
-  REQUEST_GOOG_API_CLIENT,
-  REQUEST_USER_AGENT,
-  applyModelAlias,
   resolveQuotaModelKey,
   resolveDisplayModelKey,
 } from "./types.js";
 import type { AccountRuntime } from "./types.js";
 import type { AccountRotator } from "./rotator.js";
+import { DEFAULT_PROVIDER, getProviderAdapter, getProviderForAccount } from "./providers/registry.js";
+import { isRecord } from "./compat/schema-sanitizer.js";
+import type { ProviderAdapter, StreamAccumulator } from "./providers/adapter.js";
+import {
+  isCodeAssistAction,
+  validateCodeAssistPayload,
+  type CodeAssistAction,
+} from "./providers/google-antigravity/code-assist.js";
+import {
+  forwardRequest,
+  SseEventAccumulator,
+  extractUsageFromSseEvent,
+  GOOGLE_BENCHMARK_CONSTANTS,
+} from "./providers/google-antigravity/forward.js";
+export { forwardRequest, SseEventAccumulator, extractUsageFromSseEvent };
 import {
   serveDashboard,
   serveStatusApi,
@@ -73,6 +83,45 @@ import {
   type FlagPattern,
 } from "./telemetry.js";
 import type { FlagEventData } from "./telemetry.js";
+
+/**
+ * Provider adapter for a request on a (possibly multi-provider) account.
+ * The destination model decides the adapter: if the model is in the
+ * Ollama catalog (tracked on the rotator), it goes through the Ollama
+ * adapter; otherwise the account's primary provider is used. This avoids
+ * the broken heuristic of relying on `:` in the model name (some Ollama
+ * models like `minimax-m3`, `kimi-k3`, `glm-5.1` have no tag, and some
+ * Google model aliases do).
+ *
+ * The rotator is required only when it exposes `getOllamaModels()`; test
+ * stubs that omit it fall back to the credentials-only dispatch.
+ */
+function providerAdapterForModel(
+  account: AccountRuntime,
+  model: string | undefined,
+  rotator?: { getOllamaModels?: () => string[] },
+): ProviderAdapter {
+  const creds = account.config.credentials ?? [];
+  if (creds.length > 0) {
+    const onlyOllama = creds.every((c) => c.provider === "ollama");
+    const onlyGoogle = creds.every((c) => c.provider !== "ollama");
+    if (onlyOllama) return getProviderAdapter("ollama");
+    if (onlyGoogle) return getProviderAdapter(DEFAULT_PROVIDER);
+  }
+  let isOllamaModel = false;
+  try {
+    const ollamaList = rotator?.getOllamaModels?.() ?? [];
+    if (ollamaList.length > 0 && model) {
+      isOllamaModel = ollamaList.includes(model);
+    }
+  } catch {
+    // ignore — fall through to primary dispatch
+  }
+  if (isOllamaModel) {
+    return getProviderAdapter("ollama");
+  }
+  return getProviderForAccount(account.config);
+}
 import { startVersionChecker, performSelfUpdate } from "./version-check.js";
 import { startNotificationPoller } from "./notification-poller.js";
 import {
@@ -334,6 +383,7 @@ type UpstreamFailureExtra = Partial<
 
 type UpstreamActionHandlerOptions = {
   action: Exclude<UpstreamAction, { kind: "success" }>;
+  provider: ProviderAdapter;
   rotator: AccountRotator;
   account: AccountRuntime;
   model: string;
@@ -391,6 +441,7 @@ async function handleUpstreamAccountAction(
 ): Promise<UpstreamActionDecision> {
   const {
     action,
+    provider,
     rotator,
     account,
     model,
@@ -414,11 +465,36 @@ async function handleUpstreamAccountAction(
       action.cooldownMs,
       action.errorText.slice(0, 300),
     );
-    rotator.recordProvider429(account, model, action.cooldownMs);
+    rotator.recordProvider429(
+      account,
+      model,
+      action.cooldownMs,
+      action.providerResourceExhausted,
+    );
     logRequestEnd(
       429,
       `cooldownMs=${action.cooldownMs}${action.providerResourceExhausted ? " resourceExhausted=true" : ""} endpoint=${action.endpoint}`,
     );
+
+    if (
+      action.providerResourceExhausted &&
+      options.canRetry &&
+      provider.shouldRetryOnQuotaExhaustion(account, model, action.errorText)
+    ) {
+      const nextAccount = await rotateAndRelease();
+      if (nextAccount) {
+        writeLog(
+          `[${label}] RESOURCE_EXHAUSTED is account-scoped; retrying with the next eligible account`,
+          "warn",
+        );
+        return { kind: "retry" };
+      }
+      writeLog(
+        `[${label}] RESOURCE_EXHAUSTED has no eligible replacement account; returning the provider error`,
+        "warn",
+      );
+    }
+
     return buildFailureDecision(options, 429, action.errorText, {
       retryAfterMs: action.cooldownMs,
       providerResourceExhausted: action.providerResourceExhausted,
@@ -613,200 +689,6 @@ function isFetchTransportError(err: unknown): boolean {
   return false;
 }
 
-/** Max bytes kept in the SSE event buffer. A single event is rarely >1MB;
- *  if it is, we keep the last 1MB which is still enough to find usage. */
-const SSE_EVENT_BUFFER_MAX = 1024 * 1024;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Recursively search a parsed JSON value for the first usage block we recognise.
- *  Supports Gemini (usageMetadata), OpenAI (usage with prompt_tokens/completion_tokens),
- *  and Anthropic (usage with input_tokens/output_tokens). */
-function findUsageInJson(
-  value: unknown,
-): { inputTokens: number; outputTokens: number } | null {
-  if (!isRecord(value)) return null;
-  // Gemini format
-  const gemini = value.usageMetadata;
-  if (isRecord(gemini)) {
-    const input =
-      typeof gemini.promptTokenCount === "number" ? gemini.promptTokenCount : 0;
-    const output =
-      typeof gemini.candidatesTokenCount === "number"
-        ? gemini.candidatesTokenCount
-        : 0;
-    if (input > 0 || output > 0)
-      return { inputTokens: input, outputTokens: output };
-  }
-  // OpenAI / Anthropic format
-  const usage = value.usage;
-  if (isRecord(usage)) {
-    const input =
-      typeof usage.prompt_tokens === "number"
-        ? usage.prompt_tokens
-        : typeof usage.input_tokens === "number"
-          ? usage.input_tokens
-          : 0;
-    const output =
-      typeof usage.completion_tokens === "number"
-        ? usage.completion_tokens
-        : typeof usage.output_tokens === "number"
-          ? usage.output_tokens
-          : 0;
-    if (input > 0 || output > 0)
-      return { inputTokens: input, outputTokens: output };
-  }
-  // Recurse into common nesting locations.
-  for (const key of ["candidates", "output", "response", "message"]) {
-    const child = value[key];
-    if (Array.isArray(child)) {
-      for (const item of child) {
-        const found = findUsageInJson(item);
-        if (found) return found;
-      }
-    } else if (isRecord(child)) {
-      const found = findUsageInJson(child);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-/** Extract usage from a single complete SSE event (one or more `data:` lines
- *  separated by newlines, terminated by a blank line). The last successful
- *  extraction wins (callers should stop scanning once they find usage). */
-export function extractUsageFromSseEvent(
-  eventText: string,
-): { inputTokens: number; outputTokens: number } | null {
-  const dataLines: string[] = [];
-  for (const raw of eventText.split("\n")) {
-    if (raw.startsWith("data:")) {
-      dataLines.push(raw.slice(5).trim());
-    }
-  }
-  if (dataLines.length === 0) return null;
-  const payload = dataLines.join("\n");
-  if (payload === "[DONE]" || payload === "") return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(payload);
-  } catch {
-    // Fall back to regex on the raw event text. This handles non-standard
-    // streams that don't quite produce valid JSON per event.
-    const fallback = regexExtractUsage(payload);
-    return fallback;
-  }
-  return findUsageInJson(parsed);
-}
-
-/** Last-resort regex extraction for streams that don't yield parseable JSON. */
-function regexExtractUsage(
-  buffer: string,
-): { inputTokens: number; outputTokens: number } | null {
-  try {
-    const patterns = [
-      /"promptTokenCount"\s*:\s*(\d+).*?"candidatesTokenCount"\s*:\s*(\d+)/s,
-      /"input_tokens"\s*:\s*(\d+).*?"output_tokens"\s*:\s*(\d+)/s,
-    ];
-    for (const pattern of patterns) {
-      const match = buffer.match(pattern);
-      if (match) {
-        return {
-          inputTokens: parseInt(match[1], 10),
-          outputTokens: parseInt(match[2], 10),
-        };
-      }
-    }
-  } catch {
-    /* extraction failed */
-  }
-  return null;
-}
-
-/** State for the SSE event accumulator used by streamResponseBody. */
-class SseEventAccumulator {
-  private buffer = "";
-  private accumulatedText = "";
-  private readonly maxBytes: number;
-  constructor(maxBytes: number = SSE_EVENT_BUFFER_MAX) {
-    this.maxBytes = maxBytes;
-  }
-
-  /** Append a chunk, return any usage extracted from newly-completed events. */
-  append(
-    chunkText: string,
-  ): { inputTokens: number; outputTokens: number } | null {
-    this.buffer += chunkText;
-    if (this.buffer.length > this.maxBytes) {
-      this.buffer = this.buffer.slice(-this.maxBytes);
-    }
-    let extracted: { inputTokens: number; outputTokens: number } | null = null;
-    let boundary = this.buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-      const eventText = this.buffer.slice(0, boundary);
-      this.buffer = this.buffer.slice(boundary + 2);
-      const usage = extractUsageFromSseEvent(eventText);
-      if (usage && !extracted) extracted = usage;
-      const text = extractTextFromSseEvent(eventText);
-      if (text && this.accumulatedText.length < 100000) {
-        this.accumulatedText += text;
-      }
-      boundary = this.buffer.indexOf("\n\n");
-    }
-    return extracted;
-  }
-
-  getText(): string {
-    return this.accumulatedText;
-  }
-
-  /** Flush any partial event at end-of-stream. */
-  final(): { inputTokens: number; outputTokens: number } | null {
-    if (!this.buffer) return null;
-    const usage = extractUsageFromSseEvent(this.buffer);
-    const text = extractTextFromSseEvent(this.buffer);
-    if (text && this.accumulatedText.length < 100000) {
-      this.accumulatedText += text;
-    }
-    this.buffer = "";
-    return usage;
-  }
-}
-
-function extractTextFromSseEvent(eventText: string): string | null {
-  const dataLines: string[] = [];
-  for (const raw of eventText.split("\n")) {
-    if (raw.startsWith("data:")) {
-      dataLines.push(raw.slice(5).trim());
-    }
-  }
-  if (dataLines.length === 0) return null;
-  const payload = dataLines.join("\n");
-  if (payload === "[DONE]" || payload === "") return null;
-  try {
-    const parsed = JSON.parse(payload);
-    if (parsed && typeof parsed === "object") {
-      const p = parsed as Record<string, unknown>;
-      if (Array.isArray(p.candidates) && p.candidates[0] && typeof p.candidates[0] === "object") {
-        const cand = p.candidates[0] as Record<string, unknown>;
-        if (cand.content && typeof cand.content === "object") {
-          const content = cand.content as Record<string, unknown>;
-          if (Array.isArray(content.parts)) {
-            return content.parts
-              .map((part) => (part && typeof part === "object" && typeof (part as Record<string, unknown>).text === "string" ? (part as Record<string, unknown>).text : ""))
-              .join("");
-          }
-        }
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
-
 async function readJsonRequest(req: IncomingMessage): Promise<unknown> {
   const body = await readLimitedBody(req);
   return body.length === 0 ? {} : JSON.parse(body.toString("utf-8"));
@@ -820,6 +702,7 @@ async function streamResponseBody(
   proxyLog: (msg: string, level?: "info" | "warn" | "error") => void,
   responseStatus: number,
   responseHeaders: Record<string, string>,
+  accumulator: StreamAccumulator = new SseEventAccumulator(),
 ): Promise<{
   inputTokens: number;
   outputTokens: number;
@@ -837,7 +720,7 @@ async function streamResponseBody(
   const nodeStream = Readable.fromWeb(
     body as import("node:stream/web").ReadableStream,
   );
-  const eventAccumulator = new SseEventAccumulator();
+  const eventAccumulator = accumulator;
   let firstUsage: { inputTokens: number; outputTokens: number } | null = null;
   let streamError: string | undefined;
   const streamStartMs = Date.now();
@@ -982,167 +865,7 @@ async function streamResponseBody(
   }
 
   return usage;
-}
-
-/**
- * Forward a request to the real Antigravity endpoint with credential swapping.
- */
-export async function forwardRequest(
-  account: AccountRuntime,
-  body: RequestBody,
-  originalHeaders: Record<string, string>,
-  signal?: AbortSignal,
-): Promise<ForwardedResponse> {
-  // Swap credentials
-  body.project = account.config.projectId;
-
-  // Map internal display/compat names to Google upstream names (single source
-  // of truth: src/types.ts:applyModelAlias)
-  body.model = applyModelAlias(body.model);
-
-  const { displayModel: _displayModel, ...bodyToForward } = body;
-  const requestBody = JSON.stringify(bodyToForward);
-
-  // Build headers: keep originals but swap Authorization
-  const forwardHeaders: Record<string, string> = {
-    ...originalHeaders,
-    "Content-Type": "application/json",
-    Accept: "text/event-stream",
-  };
-  // Remove original authorization (any case), provider-set headers, and
-  // hop-by-hop headers per RFC 7230 §6.1. The hop-by-hop list prevents
-  // leaking client IP (X-Forwarded-For) and prevents IP spoofing in
-  // upstream logs (Via).
-  const HOP_BY_HOP = new Set([
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailers",
-    "transfer-encoding",
-    "upgrade",
-    // Forwarding / proxying artefacts that should never reach the upstream
-    "x-forwarded-for",
-    "x-forwarded-host",
-    "x-forwarded-proto",
-    "x-forwarded-port",
-    "x-real-ip",
-    "forwarded",
-    "via",
-  ]);
-  for (const key of Object.keys(forwardHeaders)) {
-    const lowerKey = key.toLowerCase();
-    if (
-      HOP_BY_HOP.has(lowerKey) ||
-      lowerKey === "authorization" ||
-      lowerKey === "user-agent" ||
-      lowerKey === "x-goog-api-client" ||
-      lowerKey === "client-metadata"
-    ) {
-      delete forwardHeaders[key];
-    }
-  }
-  forwardHeaders["Authorization"] = `Bearer ${account.accessToken}`;
-  forwardHeaders["User-Agent"] = REQUEST_USER_AGENT;
-  forwardHeaders["X-Goog-Api-Client"] = REQUEST_GOOG_API_CLIENT;
-  forwardHeaders["Client-Metadata"] = REQUEST_CLIENT_METADATA;
-  // Claude models on Cloud Code Assist (Antigravity) require this beta header to
-  // return interleaved thinking blocks. Mirrors pi-mono's needsClaudeThinkingBetaHeader.
-  if (/^claude-/i.test(body.model)) {
-    forwardHeaders["anthropic-beta"] = "interleaved-thinking-2025-05-14";
-  }
-  delete forwardHeaders["host"];
-  delete forwardHeaders["connection"];
-  delete forwardHeaders["transfer-encoding"];
-  delete forwardHeaders["content-length"];
-
-  // Try endpoints with cascade on 401/403/404
-  for (
-    let endpointIdx = 0;
-    endpointIdx < ANTIGRAVITY_ENDPOINTS.length;
-    endpointIdx++
-  ) {
-    const endpoint = ANTIGRAVITY_ENDPOINTS[endpointIdx];
-    const url = `${endpoint}/v1internal:streamGenerateContent?alt=sse`;
-    const isProd = endpointIdx === ANTIGRAVITY_ENDPOINTS.length - 1;
-
-    try {
-      const controller = !isProd ? new AbortController() : undefined;
-      const timeout = controller
-        ? setTimeout(() => controller.abort(), 10_000)
-        : undefined;
-      const requestSignal = controller?.signal && signal
-        ? AbortSignal.any([controller.signal, signal])
-        : signal ?? controller?.signal;
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: forwardHeaders,
-        body: requestBody,
-        signal: requestSignal,
-      });
-      if (timeout) clearTimeout(timeout);
-
-      if (
-        (response.status === 401 ||
-          response.status === 403 ||
-          response.status === 404) &&
-        endpointIdx < ANTIGRAVITY_ENDPOINTS.length - 1
-      ) {
-        log(`Endpoint ${endpoint} returned ${response.status}, cascading...`);
-        response.text().catch(() => {});
-        continue;
-      }
-
-      return { response, endpoint };
-    } catch (err) {
-      if (endpointIdx < ANTIGRAVITY_ENDPOINTS.length - 1) {
-        log(
-          `Endpoint ${endpoint} failed: ${err instanceof Error ? err.message : err}, cascading...`,
-        );
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  throw new Error("All endpoints failed");
-}
-
-const BENCHMARK_MODEL = "gemini-3-flash";
-const BENCHMARK_PROMPT = "Reply with exactly: OK";
-const BENCHMARK_MAX_OUTPUT_TOKENS = 16;
-const BENCHMARK_TIMEOUT_MS = 30_000;
-
-function benchmarkRequestBody(account: AccountRuntime): RequestBody {
-  return {
-    project: account.config.projectId,
-    model: BENCHMARK_MODEL,
-    request: {
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: BENCHMARK_PROMPT }],
-        },
-      ],
-      generationConfig: {
-        maxOutputTokens: BENCHMARK_MAX_OUTPUT_TOKENS,
-      },
-    },
-  };
-}
-
-function benchmarkUsage(raw: string): { outputTokens: number } | null {
-  let outputTokens = 0;
-  for (const event of raw.split(/\r?\n\r?\n/)) {
-    const usage = extractUsageFromSseEvent(event);
-    if (usage) outputTokens = usage.outputTokens;
-  }
-  return outputTokens > 0 ? { outputTokens } : null;
-}
-
-function benchmarkFailure(
+}function benchmarkFailure(
   account: AccountRuntime,
   startedAt: number,
   error: string,
@@ -1182,11 +905,12 @@ export async function benchmarkAccount(
     };
   }
 
-  rotator.startRequest(account, BENCHMARK_MODEL);
+  const benchmarkSpec = getProviderForAccount(account.config).getBenchmark(account);
+  rotator.startRequest(account, benchmarkSpec.body.model);
   const timeoutController = new AbortController();
   const timeout = setTimeout(
     () => timeoutController.abort(new Error("Benchmark timeout")),
-    BENCHMARK_TIMEOUT_MS,
+    GOOGLE_BENCHMARK_CONSTANTS.timeoutMs,
   );
   const signal = sharedSignal
     ? AbortSignal.any([timeoutController.signal, sharedSignal])
@@ -1195,12 +919,11 @@ export async function benchmarkAccount(
 
   try {
     await rotator.ensureValidToken(account);
-    const forwarded = await forwardRequest(
+    const forwarded = await providerAdapterForModel(
       account,
-      benchmarkRequestBody(account),
-      {},
-      signal,
-    );
+      benchmarkSpec.body.model,
+      rotator,
+    ).forwardRequest(account, benchmarkSpec.body, {}, signal);
     ttfbMs = Date.now() - startedAt;
     const raw = await forwarded.response.text();
     const latencyMs = Date.now() - startedAt;
@@ -1213,7 +936,7 @@ export async function benchmarkAccount(
       );
     }
 
-    const usage = benchmarkUsage(raw);
+    const usage = benchmarkSpec.parseUsage(raw);
     const outputTokens = usage?.outputTokens ?? Math.max(1, Math.ceil(raw.length / 4));
     return {
       account: label,
@@ -1227,7 +950,7 @@ export async function benchmarkAccount(
     return benchmarkFailure(account, startedAt, formatError(err), ttfbMs);
   } finally {
     clearTimeout(timeout);
-    rotator.finishRequest(account, BENCHMARK_MODEL);
+    rotator.finishRequest(account, benchmarkSpec.body.model);
   }
 }
 
@@ -1311,7 +1034,7 @@ export async function serveBenchmarkApi(
     writeBenchmarkEvent(res, {
       type: "start",
       total: accounts.length,
-      model: BENCHMARK_MODEL,
+      model: GOOGLE_BENCHMARK_CONSTANTS.model,
     });
     await Promise.all(
       accounts.map(async (account) => {
@@ -1445,7 +1168,12 @@ export async function withRotation<T>(
       }
 
       rotator.recordUpstreamAttempt(account);
-      const forwarded = await forwardRequest(
+      const provider = providerAdapterForModel(
+        account,
+        model,
+        rotator,
+      );
+      const forwarded = await provider.forwardRequest(
         account,
         { ...body },
         originalHeaders,
@@ -1473,6 +1201,7 @@ export async function withRotation<T>(
       if (action.kind !== "success") {
         const decision = await handleUpstreamAccountAction({
           action,
+          provider,
           rotator,
           account,
           model,
@@ -1589,6 +1318,7 @@ async function handleProxyRequest(
   res: ServerResponse,
   rotator: AccountRotator,
   onComplete?: () => void,
+  nativeOllamaChat = false,
 ): Promise<void> {
   let bodyBuffer: Buffer;
   try {
@@ -1607,24 +1337,58 @@ async function handleProxyRequest(
     throw err;
   }
   let body: RequestBody;
-  try {
-    const parsed: unknown = JSON.parse(bodyBuffer.toString("utf-8"));
-    const validation = validateProxyRequestBody(parsed);
-    if (!validation.ok || !validation.value) {
+  if (nativeOllamaChat) {
+    // Native /api/chat payload ({model, messages, stream, options}) is
+    // translated to the internal body shape; the internal validator expects
+    // the wrapped format, so parse the native shape first.
+    let raw: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(bodyBuffer.toString("utf-8"));
+      raw = isRecord(parsed) ? parsed : {};
+    } catch {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid JSON body" }));
+      return;
+    }
+    if (typeof raw.model !== "string" || raw.model === "") {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid request body: model required" }));
+      return;
+    }
+    if (!Array.isArray(raw.messages) || raw.messages.length === 0) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(
-        JSON.stringify({
-          error: "Invalid request body",
-          details: validation.errors,
-        }),
+        JSON.stringify({ error: "Invalid request body: messages required" }),
       );
       return;
     }
-    body = validation.value as RequestBody;
-  } catch {
-    res.writeHead(400, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Invalid JSON body" }));
-    return;
+    body = {
+      project: "",
+      model: raw.model,
+      request: raw,
+      displayModel: raw.model,
+      requestType: "ollama-chat",
+    };
+  } else {
+    try {
+      const parsed: unknown = JSON.parse(bodyBuffer.toString("utf-8"));
+      const validation = validateProxyRequestBody(parsed);
+      if (!validation.ok || !validation.value) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: "Invalid request body",
+            details: validation.errors,
+          }),
+        );
+        return;
+      }
+      body = validation.value as RequestBody;
+    } catch {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid JSON body" }));
+      return;
+    }
   }
 
   const auth = await authenticateVirtualKey(req, body.model);
@@ -1759,7 +1523,7 @@ async function handleProxyRequest(
     }
 
     const label = account.config.label || account.config.email;
-    const modelKey = resolveQuotaModelKey(body.model) ?? body.model; // quota routing
+    const modelKey = rotator.resolveQuotaModelKeyForDisplay(body.model) ?? body.model; // quota routing
     const displayModelKey = resolveDisplayModelKey(body.model); // metrics/logs
     const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
     proxyLog(
@@ -1810,7 +1574,12 @@ async function handleProxyRequest(
         await sleep(totalDelayMs);
       }
       rotator.recordUpstreamAttempt(account);
-      const forwarded = await forwardRequest(
+      const provider = providerAdapterForModel(
+        account,
+        body.model,
+        rotator,
+      );
+      const forwarded = await provider.forwardRequest(
         account,
         { ...body },
         flattenHeaders(req.headers),
@@ -1838,6 +1607,7 @@ async function handleProxyRequest(
       if (action.kind !== "success") {
         const decision = await handleUpstreamAccountAction({
           action,
+          provider,
           rotator,
           account,
           model: body.model,
@@ -1887,6 +1657,7 @@ async function handleProxyRequest(
           proxyLog,
           response.status,
           responseHeaders,
+          provider.createStreamAccumulator(),
         );
         const totalMs = Date.now() - requestStartMs;
         const ttfbMs = usage?.firstByteMs ?? totalMs;
@@ -1983,6 +1754,104 @@ async function handleProxyRequest(
     res.writeHead(502, { "Content-Type": "application/json" });
   }
   res.end(JSON.stringify({ error: "All retry attempts failed" }));
+}
+
+const CODE_ASSIST_ROUTING_MODEL = "gemini-3-flash";
+
+async function handleCodeAssistPassthrough(
+  req: IncomingMessage,
+  res: ServerResponse,
+  rotator: AccountRotator,
+  action: CodeAssistAction,
+): Promise<void> {
+  let bodyBuffer: Buffer;
+  try {
+    bodyBuffer = await readLimitedBody(req);
+  } catch (err) {
+    if (err instanceof PayloadTooLargeError) {
+      res.writeHead(413, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Payload too large", limitBytes: err.limitBytes }));
+      return;
+    }
+    throw err;
+  }
+
+  let body: unknown;
+  try {
+    body = JSON.parse(bodyBuffer.toString("utf-8")) as unknown;
+    validateCodeAssistPayload(action, body);
+  } catch (err) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      error: err instanceof Error ? err.message : "Invalid Code Assist request",
+    }));
+    return;
+  }
+
+  const provider = getProviderAdapter(DEFAULT_PROVIDER);
+  if (!provider.forwardCodeAssistRequest) {
+    res.writeHead(501, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Code Assist passthrough is unavailable" }));
+    return;
+  }
+
+  const maxRetries = getStreamRecoveryMaxRetries(rotator);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let account: AccountRuntime | null;
+    try {
+      account = await rotator.getActiveAccount(CODE_ASSIST_ROUTING_MODEL);
+    } catch {
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Account token refresh failed" }));
+      return;
+    }
+    if (!account) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "All Google accounts exhausted or disabled" }));
+      return;
+    }
+
+    try {
+      // getActiveAccount performs the normal account lifecycle check, but the
+      // explicit provider call is required for dual Google+Ollama accounts.
+      await provider.ensureValidToken(account);
+      rotator.recordUpstreamAttempt(account);
+      const forwarded = await provider.forwardCodeAssistRequest(
+        account,
+        action,
+        body,
+        flattenHeaders(req.headers),
+      );
+      const responseBody = await forwarded.response.text();
+      res.writeHead(forwarded.response.status, {
+        "Content-Type": forwarded.response.headers.get("content-type") || "application/json",
+      });
+      res.end(responseBody);
+      return;
+    } catch (err) {
+      if (!isFetchTransportError(err) || attempt >= maxRetries) {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Code Assist upstream request failed" }));
+        return;
+      }
+      const nextAccount = await rotator.rotateToNext(CODE_ASSIST_ROUTING_MODEL);
+      if (nextAccount) {
+        rotator.finishRequest(
+          nextAccount,
+          resolveQuotaModelKey(CODE_ASSIST_ROUTING_MODEL) ?? undefined,
+        );
+        continue;
+      }
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "No replacement Google account available" }));
+      return;
+    } finally {
+      rotator.finishRequest(
+        account,
+        resolveQuotaModelKey(CODE_ASSIST_ROUTING_MODEL) ?? undefined,
+      );
+    }
+  }
 }
 
 export function flattenHeaders(
@@ -2420,7 +2289,7 @@ export function startProxy(
 
     // OpenAI-compatible adapter route (additive; does not affect native v1internal route)
     if (method === "GET" && pathname === "/v1/models") {
-      serveOpenAIModels(res);
+      serveOpenAIModels(res, rotator);
       return;
     }
 
@@ -2515,8 +2384,43 @@ export function startProxy(
       return;
     }
 
-    // Proxy route
+    // Native Ollama chat route (additive; /api/chat payload shape)
+    if (method === "POST" && pathname === "/api/chat") {
+      handleProxyRequest(req, res, rotator, scheduleSseBroadcast, true).catch(
+        (err) => {
+          log(`Unhandled error: ${err}`, rotator, "error");
+          if (!res.headersSent) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+          }
+          res.end(JSON.stringify({ error: "Internal proxy error" }));
+        },
+      );
+      return;
+    }
+
+    // Proxy route (native Antigravity v1internal)
     if (method === "POST" && url.includes("v1internal")) {
+      const operation = pathname.split(":").pop() || "";
+      if (isCodeAssistAction(operation)) {
+        handleCodeAssistPassthrough(req, res, rotator, operation).catch(
+          (err) => {
+            log(`Unhandled Code Assist passthrough error: ${err}`, rotator, "error");
+            if (!res.headersSent) {
+              res.writeHead(500, { "Content-Type": "application/json" });
+            }
+            res.end(JSON.stringify({ error: "Internal Code Assist proxy error" }));
+          },
+        );
+        return;
+      }
+      if (
+        operation !== "streamGenerateContent" &&
+        operation !== "generateContent"
+      ) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Unsupported v1internal operation" }));
+        return;
+      }
       handleProxyRequest(req, res, rotator, scheduleSseBroadcast).catch(
         (err) => {
           log(`Unhandled error: ${err}`, rotator, "error");

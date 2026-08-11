@@ -20,7 +20,11 @@ import {
 import { startProxy } from "../src/proxy.js";
 import { stopNotificationPoller } from "../src/notification-poller.js";
 import { stopVersionChecker } from "../src/version-check.js";
-import { ANTIGRAVITY_ENDPOINTS, type AccountRuntime } from "../src/types.js";
+import {
+  ANTIGRAVITY_ENDPOINTS,
+  OLLAMA_CHAT_ENDPOINTS,
+  type AccountRuntime,
+} from "../src/types.js";
 import type { AccountRotator } from "../src/rotator.js";
 
 type RequestLogCapture = {
@@ -49,8 +53,17 @@ type ResponseStub = ServerResponse & {
 
 const endpointOverrides = ANTIGRAVITY_ENDPOINTS as unknown as string[];
 const originalEndpoints = [...endpointOverrides];
+const ollamaEndpointOverrides = OLLAMA_CHAT_ENDPOINTS as unknown as string[];
+const originalOllamaEndpoints = [...ollamaEndpointOverrides];
+let ollamaCatalog: string[] = [];
 
 afterEach(() => {
+  ollamaCatalog = [];
+  ollamaEndpointOverrides.splice(
+    0,
+    ollamaEndpointOverrides.length,
+    ...originalOllamaEndpoints,
+  );
   endpointOverrides.splice(0, endpointOverrides.length, ...originalEndpoints);
   resetResponsesStoreForTests();
   stopVersionChecker();
@@ -101,11 +114,52 @@ function createAccount(): AccountRuntime {
   };
 }
 
-function createRotatorStub(tracking: Tracking): AccountRotator {
-  const account = createAccount();
+function createOllamaAccount(): AccountRuntime {
+  return {
+    config: {
+      email: "ollama@example.com",
+      projectId: "ollama-project",
+      refreshToken: "ollama-refresh",
+      label: "ollama-account",
+      provider: "ollama",
+      apiKey: "ollama-key-test",
+    },
+    accessToken: "access-token",
+    tokenExpires: Date.now() + 60_000,
+    requestsSinceRotation: 0,
+    totalRequests: 0,
+    cooldownsByModel: {},
+    quotaExhaustedAt: 0,
+    quota: [],
+    lastQuotaPoll: 0,
+    lastUsed: 0,
+    lastError: null,
+    consecutiveErrors: 0,
+    disabled: false,
+    flagged: false,
+    inFlightRequests: 0,
+    inFlightByModel: {},
+    allowFreshWindowStartsOverride: false,
+    dailyRequestCount: 0,
+    dailyRequestDay: "2026-05-16",
+    healthScore: 1,
+    tokenBucket: {
+      tokens: 50,
+      lastRefillAt: Date.now(),
+    },
+  };
+}
+
+function createRotatorStub(
+  tracking: Tracking,
+  useOllamaAccount = false,
+): AccountRotator {
+  const account = useOllamaAccount ? createOllamaAccount() : createAccount();
   return {
     getActiveAccount: async () => account,
+    getOllamaModels: () => ollamaCatalog,
     getRetryAfterMs: () => 0,
+    resolveQuotaModelKeyForDisplay: () => "gemini-3.5-flash",
     rotateToNext: async () => null,
     finishRequest: () => {
       tracking.finishRequests++;
@@ -739,5 +793,235 @@ describe("compat observability", () => {
       input: "hold the stream open",
       stream: true,
     });
+  });
+
+  it("lists ollama models on /v1/models with owned_by ollama", async () => {
+    ollamaCatalog = ["gpt-oss:20b", "nemotron-nano:8b"];
+    const tracking = createTracking();
+    const rotator = createRotatorStub(tracking);
+    const proxy = await startTestProxy(rotator);
+    const port = (proxy.address() as AddressInfo).port;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/models`);
+      const payload = (await response.json()) as {
+        data: Array<Record<string, unknown>>;
+      };
+      assert.equal(response.status, 200);
+      const ids = payload.data.map((m) => m.id);
+      assert.ok(ids.includes("gpt-oss:20b"));
+      assert.ok(ids.includes("nemotron-nano:8b"));
+      const ollamaEntry = payload.data.find((m) => m.id === "gpt-oss:20b");
+      assert.equal(ollamaEntry?.owned_by, "ollama");
+    } finally {
+      await closeHttpServer(proxy);
+    }
+  });
+
+  it("translates openai chat completions to the ollama body and reads NDJSON responses", async () => {
+    let receivedBody: unknown = null;
+    const upstream = await listenServer((req, res) => {
+      const bodyChunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => bodyChunks.push(c));
+      req.on("end", () => {
+        try {
+          receivedBody = JSON.parse(Buffer.concat(bodyChunks).toString());
+        } catch {
+          // ignore malformed test payload
+        }
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        const chunks = [
+          { model: "gpt-oss:20b", message: { role: "assistant", content: "Hel" }, done: false },
+          { model: "gpt-oss:20b", message: { role: "assistant", content: "lo" }, done: false },
+          { model: "gpt-oss:20b", message: { role: "assistant", content: "" }, done: true, done_reason: "stop", prompt_eval_count: 11, eval_count: 7 },
+        ];
+        res.end(chunks.map((c) => JSON.stringify(c)).join("\n"));
+      });
+    });
+    ollamaEndpointOverrides.splice(0, ollamaEndpointOverrides.length, upstream.url);
+    ollamaCatalog = ["gpt-oss:20b"];
+
+    const tracking = createTracking();
+    const rotator = createRotatorStub(tracking, true);
+    const proxy = await startTestProxy(rotator);
+    const port = (proxy.address() as AddressInfo).port;
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${port}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "gpt-oss:20b",
+            stream: false,
+            temperature: 0.3,
+            max_tokens: 96,
+            messages: [
+              { role: "system", content: "Be brief" },
+              { role: "user", content: "ping" },
+            ],
+          }),
+        },
+      );
+      const payload = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      assert.equal(response.status, 200);
+      assert.equal(payload.choices?.[0]?.message?.content, "Hello");
+      assert.equal(payload.usage?.prompt_tokens, 11);
+      assert.equal(payload.usage?.completion_tokens, 7);
+
+      // Upstream received the translated ollama-native body.
+      const request = (receivedBody ?? {}) as Record<string, unknown>;
+      assert.equal(request.model, "gpt-oss:20b");
+      assert.equal(request.stream, false);
+      const messages = request.messages as Array<Record<string, unknown>>;
+      assert.deepEqual(messages, [
+        { role: "system", content: "Be brief" },
+        { role: "user", content: "ping" },
+      ]);
+      const options = request.options as Record<string, unknown>;
+      assert.equal(options.temperature, 0.3);
+      assert.equal(options.num_predict, 96);
+    } finally {
+      await closeHttpServer(proxy);
+      await closeServer(upstream.server);
+    }
+  });
+
+  it("streams ollama NDJSON deltas as openai chat completion chunks", async () => {
+    const upstream = await listenServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.write(
+          JSON.stringify({ model: "gpt-oss:20b", message: { role: "assistant", content: "Hel" }, done: false }) + "\n",
+        );
+        res.write(
+          JSON.stringify({ model: "gpt-oss:20b", message: { role: "assistant", content: "lo" }, done: false }) + "\n",
+        );
+        res.end(
+          JSON.stringify({ model: "gpt-oss:20b", message: { role: "assistant", content: "" }, done: true, done_reason: "stop", prompt_eval_count: 5, eval_count: 9 }) + "\n",
+        );
+      });
+    });
+    ollamaEndpointOverrides.splice(0, ollamaEndpointOverrides.length, upstream.url);
+    ollamaCatalog = ["gpt-oss:20b"];
+
+    const tracking = createTracking();
+    const rotator = createRotatorStub(tracking, true);
+    const proxy = await startTestProxy(rotator);
+    const port = (proxy.address() as AddressInfo).port;
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${port}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "gpt-oss:20b",
+            stream: true,
+            messages: [{ role: "user", content: "ping" }],
+          }),
+        },
+      );
+      assert.equal(response.status, 200);
+      const body = await response.text();
+      assert.match(body, /delta":\{[^}]*"content":"Hel"/);
+      assert.match(body, /"content":"lo"/);
+      assert.match(body, /finish_reason":"stop"/);
+      assert.match(body, /"usage":\{[^}]*"prompt_tokens":5/);
+      assert.match(body, /"completion_tokens":9/);
+      assert.ok(body.includes("data: [DONE]"));
+    } finally {
+      await closeHttpServer(proxy);
+      await closeServer(upstream.server);
+    }
+  });
+
+  it("streams ollama NDJSON deltas as anthropic message events", async () => {
+    const upstream = await listenServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.write(
+          JSON.stringify({ model: "gpt-oss:20b", message: { role: "assistant", content: "Sal" }, done: false }) + "\n",
+        );
+        res.end(
+          JSON.stringify({ model: "gpt-oss:20b", message: { role: "assistant", content: "ud" }, done: true, done_reason: "stop", prompt_eval_count: 3, eval_count: 4 }) + "\n",
+        );
+      });
+    });
+    ollamaEndpointOverrides.splice(0, ollamaEndpointOverrides.length, upstream.url);
+    ollamaCatalog = ["gpt-oss:20b"];
+
+    const tracking = createTracking();
+    const rotator = createRotatorStub(tracking, true);
+    const proxy = await startTestProxy(rotator);
+    const port = (proxy.address() as AddressInfo).port;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-oss:20b",
+          max_tokens: 128,
+          stream: true,
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      assert.equal(response.status, 200);
+      const body = await response.text();
+      assert.match(body, /event: content_block_start/);
+      assert.match(body, /event: content_block_delta/);
+      assert.match(body, /type":"text_delta","text":"Sal"/);
+      assert.match(body, /event: message_delta/);
+      assert.match(body, /event: message_stop/);
+    } finally {
+      await closeHttpServer(proxy);
+      await closeServer(upstream.server);
+    }
+  });
+
+  it("streams ollama NDJSON deltas as responses api output_text events", async () => {
+    const upstream = await listenServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.write(
+          JSON.stringify({ model: "gpt-oss:20b", message: { role: "assistant", content: "Re" }, done: false }) + "\n",
+        );
+        res.end(
+          JSON.stringify({ model: "gpt-oss:20b", message: { role: "assistant", content: "dy" }, done: true, done_reason: "stop", prompt_eval_count: 2, eval_count: 6 }) + "\n",
+        );
+      });
+    });
+    ollamaEndpointOverrides.splice(0, ollamaEndpointOverrides.length, upstream.url);
+    ollamaCatalog = ["gpt-oss:20b"];
+
+    const tracking = createTracking();
+    const rotator = createRotatorStub(tracking, true);
+    const proxy = await startTestProxy(rotator);
+    const port = (proxy.address() as AddressInfo).port;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-oss:20b",
+          stream: true,
+          input: "ping",
+        }),
+      });
+      assert.equal(response.status, 200);
+      const body = await response.text();
+      assert.match(body, /response.output_text.delta/);
+      assert.match(body, /"delta":"Re"/);
+      assert.match(body, /"delta":"dy"/);
+      assert.match(body, /response.completed/);
+    } finally {
+      await closeHttpServer(proxy);
+      await closeServer(upstream.server);
+    }
   });
 });

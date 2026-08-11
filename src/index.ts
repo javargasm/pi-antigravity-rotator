@@ -6,13 +6,13 @@ import { AccountRotator } from "./rotator.js";
 import { startProxy } from "./proxy.js";
 import { getConfigDir } from "./paths.js";
 import { TelemetryReporter, setActiveReporter } from "./telemetry.js";
-import { loadConfig as loadConfigFromStore } from "./account-store.js";
+import { loadConfig as loadConfigFromStore, importLegacyOllamaRotatorAccounts } from "./account-store.js";
 import {
   ensureAdminToken,
   getConfiguredAdminToken,
   setPersistedAdminToken,
 } from "./admin-auth.js";
-import { warnIfUsingFallbackOAuthCreds } from "./oauth.js";
+import { warnIfUsingFallbackOAuthCreds } from "./providers/google-antigravity/oauth.js";
 import { warnIfInsecureTelemetryEndpoint } from "./telemetry.js";
 import {
   setModelSpecsOverride,
@@ -26,6 +26,7 @@ import { runKeyMigrations } from "./key-migrations.js";
 import { flushSpendLogs, stopRetentionCleanup, startRetentionCleanup } from "./spend-logger.js";
 import { stopPendingSessionReaper } from "./onboarding.js";
 import { getProxyExposureWarning } from "./exposure.js";
+import { closeProxyDispatchers } from "./providers/proxy-dispatcher.js";
 
 function loadConfig(): Config {
   try {
@@ -33,7 +34,7 @@ function loadConfig(): Config {
 
     if (!config.accounts || config.accounts.length === 0) {
       console.error(
-        "No accounts configured. Run 'pi-antigravity-rotator login' to add one.",
+        "No accounts configured. Run 'tuxevil-rotator login' to add one.",
       );
       process.exit(1);
     }
@@ -87,8 +88,8 @@ async function maybeShowStarNudge(): Promise<void> {
 
   // Show it once
   console.log("  ╭──────────────────────────────────────────────────────────╮");
-  console.log("  │  ⭐ Enjoying pi-antigravity-rotator?                     │");
-  console.log("  │  github.com/tuxevil/pi-antigravity-rotator              │");
+  console.log("  │  ⭐ Enjoying tuxevil-rotator?                     │");
+  console.log("  │  github.com/tuxevil/tuxevil-rotator              │");
   console.log("  │  A star helps others find it. Thanks!                   │");
   console.log("  ╰──────────────────────────────────────────────────────────╯");
   console.log();
@@ -101,7 +102,7 @@ async function maybeShowStarNudge(): Promise<void> {
 }
 
 /**
- * Resolve the effective admin token at startup. If no PI_ROTATOR_ADMIN_TOKEN
+ * Resolve the effective admin token at startup. If no TUXEVIL_ROTATOR_ADMIN_TOKEN
  * env var is set and no persisted token exists, a new token is generated,
  * saved to the repository, and printed to the operator once. This ensures
  * admin routes are protected by default on first run.
@@ -143,12 +144,12 @@ async function bootstrapAdminToken(): Promise<void> {
 
 function maybeWarnAboutAdminExposure(config: Config): void {
   if (getConfiguredAdminToken()) return;
-  console.warn("WARNING: PI_ROTATOR_ADMIN_TOKEN is not configured.");
+  console.warn("WARNING: TUXEVIL_ROTATOR_ADMIN_TOKEN is not configured.");
   console.warn(
     `WARNING: Dashboard and /api/* routes are open on ${config.bindHost}:${config.proxyPort}.`,
   );
   console.warn(
-    "WARNING: For local-only use, prefer bindHost=127.0.0.1 or set PI_ROTATOR_ADMIN_TOKEN.",
+    "WARNING: For local-only use, prefer bindHost=127.0.0.1 or set TUXEVIL_ROTATOR_ADMIN_TOKEN.",
   );
   console.warn();
 }
@@ -158,17 +159,18 @@ function maybeWarnAboutProxyExposure(config: Config): void {
   if (!warning) return;
   console.warn(`WARNING: ${warning}`);
   console.warn(
-    "WARNING: PI_ROTATOR_ADMIN_TOKEN protects dashboard/admin APIs, but not the native or /v1 proxy routes.",
+    "WARNING: TUXEVIL_ROTATOR_ADMIN_TOKEN protects dashboard/admin APIs, but not the native or /v1 proxy routes.",
   );
   console.warn();
 }
 
 export async function main(): Promise<void> {
-  console.log("=== Pi Antigravity Rotator ===");
+  console.log("=== Tuxevil Rotator ===");
   console.log();
 
   await initDb();
   await runKeyMigrations();
+  await importLegacyOllamaRotatorAccounts();
   startRetentionCleanup();
 
   const config = loadConfig();
@@ -208,8 +210,9 @@ export async function main(): Promise<void> {
   void loadResponsesStore();
 
   const rotator = new AccountRotator(config);
+  await rotator.primeOllamaCatalog();
 
-  // ── Telemetry (anonymous, opt-out via PI_ROTATOR_TELEMETRY=off) ──
+  // ── Telemetry (anonymous, opt-out via TUXEVIL_ROTATOR_TELEMETRY=off) ──
   const telemetry = new TelemetryReporter(() => {
     const status = rotator.getStatus();
 
@@ -244,6 +247,7 @@ export async function main(): Promise<void> {
     await telemetry.shutdown();
     rotator.stopQuotaPolling();
     stopPendingSessionReaper();
+    await closeProxyDispatchers();
     const { closeDb } = await import("./db-store.js");
     await closeDb();
     process.exit(0);

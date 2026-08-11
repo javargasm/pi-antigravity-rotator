@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { discoverProject, getOAuthClientConfig, warnIfUsingFallbackOAuthCreds } from "../src/oauth.js";
+import { discoverProject, getOAuthClientConfig, warnIfUsingFallbackOAuthCreds } from "../src/providers/google-antigravity/oauth.js";
 import { CLIENT_ID, CLIENT_SECRET } from "../src/types.js";
 
 const originalFetch = globalThis.fetch;

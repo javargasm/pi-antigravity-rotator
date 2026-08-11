@@ -59,7 +59,14 @@ import {
   validateAnthropicMessagesRequest,
   buildResponsesResponse,
   saveResponsesEntry,
-} from "./compat/translators.js";
+  toolArgumentsToObject,
+  toolArgumentsToString,
+} from "./providers/google-antigravity/translators.js";
+import {
+  openAIToOllamaBody,
+  anthropicToOllamaBody,
+  parseOllamaNdjson,
+} from "./providers/ollama/translators.js";
 import type {
   ChatMessage,
   OpenAITool,
@@ -70,7 +77,7 @@ import type {
   AnthropicMessagesRequest,
   CompatCompletion,
   ResponsesConversionResult,
-} from "./compat/translators.js";
+} from "./providers/google-antigravity/translators.js";
 
 export {
   isRecord,
@@ -119,13 +126,13 @@ export function logValidationFailure(scope: string, payload: unknown): void {
   compatLogger.warn(`${scope}: ${clipped}`);
 }
 
-// Interfaces and types have been moved to src/compat/translators.ts
+// Interfaces and types have been moved to src/providers/google-antigravity/translators.ts
 
 // Response Output types
 
 // Cache and stores have been moved to src/compat/cache.ts
 
-// Helper and translation functions have been moved to src/compat/translators.ts
+// Helper and translation functions have been moved to src/providers/google-antigravity/translators.ts
 
 export function parseAntigravitySse(raw: string): CompatCompletion {
   let text = "";
@@ -395,6 +402,7 @@ async function streamCompatSse(
   context?: RotationAttemptContext,
   rotator?: AccountRotator,
   compressionStats?: CompressionStats | null,
+  upstream: "google" | "ollama" = "google",
 ): Promise<CompatCompletion> {
   const nodeStream = Readable.fromWeb(
     body as import("node:stream/web").ReadableStream,
@@ -450,6 +458,82 @@ async function streamCompatSse(
   let tailBuffer = "";
   let reqClosed = false;
   let streamError: string | undefined;
+  const emitOllamaLine = (line: string): void => {
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      if (parsed.done === true) {
+        if (typeof parsed.prompt_eval_count === "number")
+          inputTokens = parsed.prompt_eval_count;
+        if (typeof parsed.eval_count === "number")
+          outputTokens = parsed.eval_count;
+      }
+      const message = isRecord(parsed.message) ? parsed.message : null;
+      if (!message) return;
+      const deltaText =
+        typeof message.content === "string" ? message.content : "";
+      if (deltaText) {
+        text += deltaText;
+        if (format === "openai") {
+          res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content: deltaText }, finish_reason: null }] })}\n\n`);
+        } else {
+          if (anthropicActiveBlockType !== "text") {
+            if (anthropicActiveBlockType === "thinking") {
+              res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`);
+              anthropicActiveBlockIndex = 1;
+            } else {
+              anthropicActiveBlockIndex = 0;
+            }
+            anthropicActiveBlockType = "text";
+            res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: anthropicActiveBlockIndex, content_block: { type: "text", text: "" } })}\n\n`);
+          }
+          res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: anthropicActiveBlockIndex, delta: { type: "text_delta", text: deltaText } })}\n\n`);
+        }
+      }
+      if (Array.isArray(message.tool_calls)) {
+        for (const tc of message.tool_calls) {
+          if (!isRecord(tc) || !isRecord(tc.function)) continue;
+          const name =
+            typeof tc.function.name === "string" ? tc.function.name : "unknown";
+          const args =
+            typeof tc.function.arguments === "string"
+              ? tc.function.arguments
+              : JSON.stringify(tc.function.arguments ?? {});
+          const callId = `call_${Date.now().toString(36)}_${toolCallIndex++}`;
+          if (format === "openai") {
+            openaiToolCalls.push({
+              id: callId,
+              type: "function",
+              function: { name, arguments: args },
+            });
+            res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { tool_calls: [{ index: toolCallIndex - 1, id: callId, type: "function", function: { name, arguments: args } }] }, finish_reason: null }] })}\n\n`);
+          } else {
+            if (anthropicActiveBlockType !== null) {
+              res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`);
+              anthropicActiveBlockType = null;
+            }
+            anthropicActiveBlockIndex++;
+            anthropicHasToolUse = true;
+            anthropicToolCalls.push({
+              id: callId,
+              type: "function",
+              function: { name, arguments: args },
+            });
+            let parsedInput: unknown;
+            try {
+              parsedInput = JSON.parse(args);
+            } catch {
+              parsedInput = {};
+            }
+            res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: anthropicActiveBlockIndex, content_block: { type: "tool_use", id: callId, name, input: {} } })}\n\n`);
+            res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: anthropicActiveBlockIndex, delta: { type: "input_json_delta", partial_json: JSON.stringify(parsedInput) } })}\n\n`);
+            res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`);
+          }
+        }
+      }
+    } catch {
+      // Ignore malformed NDJSON lines
+    }
+  };
   const closeUpstreamForClient = (): void => {
     reqClosed = true;
     if (!nodeStream.destroyed) nodeStream.destroy();
@@ -474,6 +558,10 @@ async function streamCompatSse(
         const line = tailBuffer.slice(0, newlineIdx).trim();
         tailBuffer = tailBuffer.slice(newlineIdx + 1);
 
+        if (upstream === "ollama") {
+          if (line) emitOllamaLine(line);
+          continue;
+        }
         if (!line.startsWith("data:")) continue;
         const payload = line.slice(5).trim();
         if (!payload || payload === "[DONE]") continue;
@@ -710,7 +798,7 @@ async function streamCompatSse(
                   type: "tool_use",
                   id: tc.id,
                   name: tc.function.name,
-                  input: JSON.parse(tc.function.arguments || "{}"),
+                  input: toolArgumentsToObject(tc.function.arguments),
                 }))
               : []),
           ],
@@ -741,6 +829,7 @@ async function streamResponsesSse(
   context?: RotationAttemptContext,
   rotator?: AccountRotator,
   compressionStats?: CompressionStats | null,
+  upstream: "google" | "ollama" = "google",
 ): Promise<CompatCompletion> {
   const nodeStream = Readable.fromWeb(
     body as import("node:stream/web").ReadableStream,
@@ -820,6 +909,122 @@ async function streamResponsesSse(
   });
 
   let tailBuffer = "";
+  const emitOllamaLine = (line: string): void => {
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      if (parsed.done === true) {
+        if (typeof parsed.prompt_eval_count === "number")
+          inputTokens = parsed.prompt_eval_count;
+        if (typeof parsed.eval_count === "number")
+          outputTokens = parsed.eval_count;
+      }
+      const message = isRecord(parsed.message) ? parsed.message : null;
+      if (!message) return;
+      const deltaText =
+        typeof message.content === "string" ? message.content : "";
+      const closeReasoningIfOpen = (): void => {
+        if (reasoningOutputIndex !== -1 && !reasoningDone) {
+          reasoningDone = true;
+          writeResponsesEvent(res, {
+            type: "response.reasoning_summary_text.done",
+            item_id: reasoningItemId,
+            output_index: reasoningOutputIndex,
+            summary_index: 0,
+            text: thinkingText,
+          });
+          writeResponsesEvent(res, {
+            type: "response.output_item.done",
+            output_index: reasoningOutputIndex,
+            item: {
+              id: reasoningItemId,
+              type: "reasoning",
+              status: "completed",
+              summary: [{ type: "summary_text", text: thinkingText }],
+            },
+          });
+        }
+      };
+      if (deltaText) {
+        closeReasoningIfOpen();
+        if (messageOutputIndex === -1) {
+          messageOutputIndex = nextOutputIndex++;
+          messageItemId = makeCompatId("msg");
+          writeResponsesEvent(res, {
+            type: "response.output_item.added",
+            output_index: messageOutputIndex,
+            item: {
+              id: messageItemId,
+              type: "message",
+              status: "completed",
+              role: "assistant",
+              content: [
+                { type: "output_text", text: "", annotations: [] },
+              ],
+            },
+          });
+        }
+        text += deltaText;
+        writeResponsesEvent(res, {
+          type: "response.output_text.delta",
+          item_id: messageItemId,
+          output_index: messageOutputIndex,
+          content_index: 0,
+          delta: deltaText,
+        });
+      }
+      if (Array.isArray(message.tool_calls)) {
+        for (const tc of message.tool_calls) {
+          if (!isRecord(tc) || !isRecord(tc.function)) continue;
+          const name =
+            typeof tc.function.name === "string" ? tc.function.name : "unknown";
+          const args =
+            typeof tc.function.arguments === "string"
+              ? tc.function.arguments
+              : JSON.stringify(tc.function.arguments ?? {});
+          const callId = `call_${Date.now().toString(36)}_${toolCallIndex++}`;
+          closeReasoningIfOpen();
+          toolCalls.push({
+            id: callId,
+            type: "function",
+            function: { name, arguments: args },
+          });
+          const item = {
+            id: makeCompatId("fc"),
+            type: "function_call",
+            call_id: callId,
+            name,
+            arguments: args,
+            status: "completed",
+          };
+          const outputIndex = nextOutputIndex++;
+          writeResponsesEvent(res, {
+            type: "response.output_item.added",
+            output_index: outputIndex,
+            item,
+          });
+          writeResponsesEvent(res, {
+            type: "response.function_call_arguments.delta",
+            item_id: item.id,
+            output_index: outputIndex,
+            delta: args,
+          });
+          writeResponsesEvent(res, {
+            type: "response.function_call_arguments.done",
+            item_id: item.id,
+            output_index: outputIndex,
+            arguments: args,
+          });
+          writeResponsesEvent(res, {
+            type: "response.output_item.done",
+            output_index: outputIndex,
+            item,
+          });
+        }
+      }
+    } catch {
+      // Ignore malformed NDJSON lines
+    }
+  };
   try {
     for await (const chunk of nodeStream) {
       if (reqClosed) {
@@ -831,6 +1036,10 @@ async function streamResponsesSse(
       while ((newlineIdx = tailBuffer.indexOf("\n")) >= 0) {
         const line = tailBuffer.slice(0, newlineIdx).trim();
         tailBuffer = tailBuffer.slice(newlineIdx + 1);
+        if (upstream === "ollama") {
+          if (line) emitOllamaLine(line);
+          continue;
+        }
         if (!line.startsWith("data:")) continue;
         const payload = line.slice(5).trim();
         if (!payload || payload === "[DONE]") continue;
@@ -1153,6 +1362,9 @@ async function completeResponsesViaRotator(
         context,
         rotator,
         options?.compressionStats,
+        (rotator?.getOllamaModels?.() ?? []).includes(body.model)
+          ? "ollama"
+          : "google",
       );
       if (completion.inputTokens > 0 || completion.outputTokens > 0) {
         rotator.recordTokenUsage(
@@ -1223,6 +1435,8 @@ async function completeViaRotator(
   isDeduplicated?: boolean;
   compressionStats?: CompressionStats | null;
 }> {
+  const ollamaModels = rotator?.getOllamaModels?.() ?? [];
+  const isOllamaUpstream = (model: string): boolean => ollamaModels.includes(model);
   const cfg = typeof rotator?.getConfig === "function" ? rotator.getConfig() : undefined;
   const enabled = cfg?.idempotencyEnabled === true;
   const windowMs = cfg?.idempotencyWindowMs ?? 2000;
@@ -1237,7 +1451,9 @@ async function completeViaRotator(
       async (response, context) => {
         if (streamMode === "none") {
           const raw = await response.text();
-          const completion = parseAntigravitySse(raw);
+          const completion = isOllamaUpstream(body.model)
+            ? parseOllamaNdjson(raw)
+            : parseAntigravitySse(raw);
           if (completion.inputTokens > 0 || completion.outputTokens > 0) {
             rotator.recordTokenUsage(
               body.displayModel || body.model,
@@ -1265,6 +1481,7 @@ async function completeViaRotator(
             context,
             rotator,
             options?.compressionStats,
+            isOllamaUpstream(body.model) ? "ollama" : "google",
           );
           if (completion.inputTokens > 0 || completion.outputTokens > 0) {
             rotator.recordTokenUsage(
@@ -1351,7 +1568,7 @@ const MODEL_CATALOG = [
     id: "gemini-3.5-flash-medium",
     family: "gemini-3.5-flash",
     ctx: 1048576,
-    quotaPool: "gemini-3.5-flash",
+    quotaPool: "gemini",
     multimodal: true,
     tools: true,
   },
@@ -1359,7 +1576,7 @@ const MODEL_CATALOG = [
     id: "gemini-3.5-flash-high",
     family: "gemini-3.5-flash",
     ctx: 1048576,
-    quotaPool: "gemini-3.5-flash",
+    quotaPool: "gemini",
     multimodal: true,
     tools: true,
   },
@@ -1367,7 +1584,7 @@ const MODEL_CATALOG = [
     id: "gemini-3-flash",
     family: "gemini-3.5-flash",
     ctx: 1048576,
-    quotaPool: "gemini-3.5-flash",
+    quotaPool: "gemini",
     multimodal: true,
     tools: true,
   },
@@ -1375,7 +1592,7 @@ const MODEL_CATALOG = [
     id: "gemini-3.6-flash-high",
     family: "gemini-3.6-flash",
     ctx: 1048576,
-    quotaPool: "gemini-3.6-flash",
+    quotaPool: "gemini",
     multimodal: true,
     tools: true,
   },
@@ -1383,7 +1600,7 @@ const MODEL_CATALOG = [
     id: "gemini-3.6-flash-medium",
     family: "gemini-3.6-flash",
     ctx: 1048576,
-    quotaPool: "gemini-3.6-flash",
+    quotaPool: "gemini",
     multimodal: true,
     tools: true,
   },
@@ -1391,7 +1608,7 @@ const MODEL_CATALOG = [
     id: "gemini-3.6-flash-low",
     family: "gemini-3.6-flash",
     ctx: 1048576,
-    quotaPool: "gemini-3.6-flash",
+    quotaPool: "gemini",
     multimodal: true,
     tools: true,
   },
@@ -1399,7 +1616,7 @@ const MODEL_CATALOG = [
     id: "gemini-3.6-flash-tiered",
     family: "gemini-3.6-flash",
     ctx: 1048576,
-    quotaPool: "gemini-3.6-flash",
+    quotaPool: "gemini",
     multimodal: true,
     tools: true,
   },
@@ -1407,7 +1624,7 @@ const MODEL_CATALOG = [
     id: "gemini-3.1-pro-low",
     family: "gemini-3.1-pro",
     ctx: 1048576,
-    quotaPool: "gemini-3.1-pro",
+    quotaPool: "gemini",
     multimodal: true,
     tools: true,
   },
@@ -1415,7 +1632,7 @@ const MODEL_CATALOG = [
     id: "gemini-3.1-pro-high",
     family: "gemini-3.1-pro",
     ctx: 1048576,
-    quotaPool: "gemini-3.1-pro",
+    quotaPool: "gemini",
     multimodal: true,
     tools: true,
   },
@@ -1423,7 +1640,7 @@ const MODEL_CATALOG = [
     id: "claude-sonnet-4-6",
     family: "claude",
     ctx: 500000,
-    quotaPool: "claude-opus-4-6-thinking",
+    quotaPool: "claude",
     multimodal: true,
     tools: true,
   },
@@ -1431,7 +1648,7 @@ const MODEL_CATALOG = [
     id: "claude-opus-4-6-thinking",
     family: "claude",
     ctx: 500000,
-    quotaPool: "claude-opus-4-6-thinking",
+    quotaPool: "claude",
     multimodal: true,
     tools: true,
   },
@@ -1439,33 +1656,52 @@ const MODEL_CATALOG = [
     id: "gpt-oss-120b-medium",
     family: "gpt-oss",
     ctx: 131072,
-    quotaPool: "claude-opus-4-6-thinking",
+    quotaPool: "claude",
     multimodal: false,
     tools: true,
   },
 ] as const;
 
-export function serveOpenAIModels(res: ServerResponse): void {
-  writeJson(res, 200, {
-    object: "list",
-    data: MODEL_CATALOG.map(
-      ({ id, ctx, family, quotaPool, multimodal, tools }) => ({
-        id,
-        object: "model",
-        created: 0,
-        owned_by: "pi-antigravity-rotator",
-        context_window: ctx,
-        max_model_len: ctx,
-        meta: {
-          context_length: ctx,
-          family,
-          quota_pool: quotaPool,
-          multimodal,
-          tool_calling: tools,
-        },
-      }),
-    ),
-  });
+export function serveOpenAIModels(
+  res: ServerResponse,
+  rotator?: AccountRotator,
+): void {
+  const catalog: Array<Record<string, unknown>> = MODEL_CATALOG.map(
+    ({ id, ctx, family, quotaPool, multimodal, tools }) => ({
+      id,
+      object: "model",
+      created: 0,
+      owned_by: "tuxevil-rotator",
+      context_window: ctx,
+      max_model_len: ctx,
+      meta: {
+        context_length: ctx,
+        family,
+        quota_pool: quotaPool,
+        multimodal,
+        tool_calling: tools,
+      },
+    }),
+  );
+  const ollamaModels = rotator?.getOllamaModels?.() ?? [];
+  for (const id of ollamaModels) {
+    catalog.push({
+      id,
+      object: "model",
+      created: 0,
+      owned_by: "ollama",
+      context_window: 128000,
+      max_model_len: 128000,
+      meta: {
+        context_length: 128000,
+        family: "ollama-cloud",
+        quota_pool: "ollama-cloud",
+        multimodal: false,
+        tool_calling: true,
+      },
+    });
+  }
+  writeJson(res, 200, { object: "list", data: catalog });
 }
 
 export function serveGeminiModels(res: ServerResponse): void {
@@ -1476,7 +1712,7 @@ export function serveGeminiModels(res: ServerResponse): void {
         baseModelId: family,
         version: "v2.0",
         displayName: id,
-        description: `Pi Antigravity Rotator Gemini-compatible model entry for ${id}`,
+        description: `Tuxevil Rotator Gemini-compatible model entry for ${id}`,
         inputTokenLimit: ctx,
         outputTokenLimit: ctx,
         supportedGenerationMethods: [
@@ -1648,7 +1884,7 @@ export async function handleOpenAIChatCompletions(
     req,
     res,
     rotator,
-    openAIToAntigravityBody(chatReq),
+    (rotator?.getOllamaModels?.().includes(chatReq.model) ? openAIToOllamaBody(chatReq) : openAIToAntigravityBody(chatReq)),
     streamMode,
     {
       callType: "chat_completion",
@@ -1782,7 +2018,7 @@ export async function handleOpenAIResponsesCreate(
     ? { ...converted.chatRequest, messages: compRes.messages }
     : converted.chatRequest;
 
-  const requestBody = openAIToAntigravityBody(chatRequest);
+  const requestBody = (rotator?.getOllamaModels?.().includes(chatRequest.model) ? openAIToOllamaBody(chatRequest) : openAIToAntigravityBody(chatRequest));
   requestBody.requestId = responseId;
 
   if (validation.value.store !== false) {
@@ -2038,7 +2274,7 @@ export async function handleAnthropicMessages(
     req,
     res,
     rotator,
-    anthropicToAntigravityBody(anthropicReq),
+    (rotator?.getOllamaModels?.().includes(anthropicReq.model) ? anthropicToOllamaBody(anthropicReq) : anthropicToAntigravityBody(anthropicReq)),
     streamMode,
     {
       callType: "anthropic",
@@ -2078,12 +2314,7 @@ export async function handleAnthropicMessages(
   }
   if (result.completion.toolCalls && result.completion.toolCalls.length > 0) {
     for (const tc of result.completion.toolCalls) {
-      let parsedInput: unknown;
-      try {
-        parsedInput = JSON.parse(tc.function.arguments || "{}");
-      } catch {
-        parsedInput = {};
-      }
+      const parsedInput = toolArgumentsToObject(tc.function.arguments);
       contentBlocks.push({
         type: "tool_use",
         id: tc.id,

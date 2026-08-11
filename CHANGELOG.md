@@ -1,6 +1,111 @@
 # Changelog
 
+## [3.0.0] - 2026-08-11
+
+### Changed
+- **Project rebrand**: the project, CLI, repository, default config directory, environment-variable prefix, and GHCR image are now `tuxevil-rotator`.
+- **New npm package**: install `tuxevil-rotator` for the v3 release. The former `pi-antigravity-rotator` package remains available as a deprecated migration path.
+- **Guided migration**: `tuxevil-rotator migrate` safely copies legacy configuration files into `~/.tuxevil-rotator/` without deleting the original files.
+- **Multi-provider surface**: Google Antigravity and Ollama Cloud are exposed through one provider-agnostic rotator and CLI.
+
+### Compatibility
+- The legacy `pi-antigravity-rotator` command, `PI_ROTATOR_*` variables, old config directory, systemd unit fallback, virtual-key salt, and encryption context remain supported for migration.
+
+## [2.8.12] - 2026-08-11
+
+### Added
+- **`/login-cli` now supports adding Ollama Cloud accounts alongside Google (Antigravity)**. The page has provider tabs: the existing Google OAuth paste-the-redirect-URL flow stays, and a new Ollama panel (ported from ollama-rotator) validates the API key against ollama.com before saving. `handleCliLoginApi` dispatches on `provider` (`google-antigravity` default / `ollama`), reusing `validateApiKey` and `defaultAccountEmail` from the Ollama provider layer.
+
+## [2.8.11] - 2026-08-11
+
+### Fixed
+- **"Free tier model access" attention item is now informational (green)**: `renderAttentionItem` had no `info` type, so the item fell through to the orange warning style even though it is purely informational. Ported the `info` branch (info icon + `operator-green` border/icon, `#22c55e`) from ollama-rotator, matching how the attention modal renders it there.
+
+## [2.8.10] - 2026-08-11
+
+### Fixed
+- **Token Usage chart missed Ollama model savings**: the dashboard recomputes savings client-side from `MODEL_PRICING_CLIENT`, which only mirrored the Google-model prices. Ollama models (`gpt-oss:20b`, `gemma4:31b`, `deepseek-v4-flash:...`, `kimi-*`, etc.) had no pricing entry, so `calcSavingsFromBuckets` skipped them and the "Savings" total and per-model legend showed nothing for Ollama traffic even though the backend already priced it. The client table now mirrors `MODEL_PRICING` in `src/types.ts` for all Ollama Cloud models.
+
+## [2.8.9] - 2026-08-11
+
+### Fixed
+- **Dual google+ollama accounts were excluded from the `claude`/`gemini` pools**: `isProviderEligibleForKey` required the account to NOT have an `ollama` credential for Google pool keys, so every dual account (27 of 46, including the accounts at 100% claude quota) could never serve `claude` even with a full weekly bucket. Only the google-only accounts stayed eligible; once those drained, three unique 429s armed the 6-hour model circuit breaker and blocked every account — including healthy ones. Eligibility now checks for the `google-antigravity` credential itself, so dual accounts serve both the Ollama `session` pool and the Google pools.
+- **Routing diagnostics lied about the best route**: `buildRoutingDiagnostics` never applied provider eligibility, so it reported "Best route is dragontecuador@gmail.com" while `pickBestModelAccount` silently rejected that same account. `getRoutingRejectionForModel` now reports the new `provider-ineligible` reason, making the dashboard match the rotation decision.
+- **Account-level quota exhaustion no longer arms the circuit breakers**: a 429 with RESOURCE_EXHAUSTED ("Individual quota reached…") is per-account daily/weekly exhaustion, already handled by the account's own cooldown from `markExhausted`. `recordProvider429` ignored that distinction, so three drained accounts armed the pool-wide project/model breakers for hours and blocked accounts that still had quota. The proxy now passes `providerResourceExhausted` through and exhausted-account 429s skip breaker arming.
+
+## [2.8.8] - 2026-08-10
+
+### Changed
+- **Default API key placeholder rebranded**: documentation now instructs agents to use API key `tuxevil` instead of `antigravity` (open mode when no Virtual Keys are configured). Updated in README and all integration guides (aider, claude-code, cline, codex, continue, cursor, hermes, open-webui, openclaw, roo-code). Provider IDs and `antigravity/gemini-...` model paths are untouched.
+
+## [2.8.7] - 2026-08-10
+
+### Added
+- **"Free tier model access" attention notice for Ollama accounts**: ported `MODEL_TIER_ACCESS` from `~/ollama-rotator` (verified 2026-08-09 probes: `gpt-oss`, `gemma4:31b`, `minimax-m3`, `nemotron-3-*` are free-tier; the rest require a subscription). `getStatus()` now exposes `modelTierAccess` only when at least one account carries an `ollama` credential, and the dashboard attention panel shows the ✓/✗ model list with the HTTP 403 "requires a subscription" explainer for accounts on the free tier (or unset), exactly like ollama-rotator.
+
+## [2.8.6] - 2026-08-10
+
+### Changed
+- **Ollama models no longer activate in-flight tracking**: `startRequest`/`finishRequest` are now no-ops for the Ollama pool (key `"session"` and any model in the Ollama catalog). Until now every Ollama request went through `getActiveAccount` → `startRequest(account, "session")`, which incremented `inFlightByModel["session"]` — but the proxy's `finishRequest` calls pass `resolveQuotaModelKey(model) ?? undefined`, which resolves to `undefined` for Ollama models, so the decrement landed on `"__default__"` and the counter never came back down. Accounts stayed in-flight forever and the dashboard bars stuck at their peak. Ollama Cloud has no per-account concurrency limit, so tracking it was both broken and pointless; Antigravity (`claude`, `gemini`) counters are unaffected.
+
+## [2.8.5] - 2026-08-10
+
+### Fixed
+- **Quota bars duplicated across poll cycles**: `extractQuotas` and `extractUsagePools` already returned the canonical family pool entries (`claude`, `gemini` for Antigravity; `session`, `weekly` for Ollama), but the per-adapter merge into `account.quota` preserved every previous entry from the SAME provider alongside the new ones. Each quota poll therefore appended a fresh copy of each pool instead of replacing the previous one, so the dashboard's RAW POLL line kept growing the bars vertically across cycles (`[claude] [gemini] | ollama: [session] [weekly]` repeated 2×, 3×, …). The merge now keeps entries from the *other* provider and fully replaces this provider's entries every cycle, so each quota is reported exactly once.
+- **Ollama pool wedged on per-account concurrency**: Ollama Cloud imposes no per-account concurrency limit, but `isAvailableForModel` and `getRoutingRejectionForModel` rejected accounts whose `inFlightByModel["session"]` already reached `maxConcurrentRequestsPerAccount` (default 1), so any second concurrent Ollama request was forced to wait for the first to finish or retry on another account. The predecessor project dropped this check for Ollama for the same reason. The pool key `session` now skips the concurrency check; Antigravity (`claude`, `gemini`) keeps it.
+
+## [2.8.4] - 2026-08-10
+
+### Fixed
+- **Ollama tool-call `arguments` shape**: OpenAI-compat clients send `messages[].tool_calls[].function.arguments` as a JSON-encoded **string** (e.g. `"{\"q\":\"x\"}"`), while Ollama's native API expects a parsed **object**. The translator was passing the string through verbatim, so Ollama rejected every multi-turn request that included an `assistant` message with `tool_calls` (or a `tool` response) with `HTTP 400: Value looks like object, but can't find closing '}' symbol`. `openAIToOllamaBody` now parses `arguments` into an object via the new `toolArgumentsToObject` helper before forwarding, and the Responses-API output path serializes them back to a string via `toolArgumentsToString` so OpenAI-compat clients receive the canonical shape. `OpenAIToolCall.arguments` and `ResponseFunctionCallOutputItem.arguments` were widened from `string` to `unknown` to reflect both providers' shapes.
+
+## [2.8.3] - 2026-08-10
+
+### Fixed
+- **Provider dispatch for Ollama models without a `:` tag**: the proxy's `providerAdapterForModel` helper relied on `body.model.includes(":")` to recognize Ollama models. This misrouted models like `minimax-m3`, `kimi-k3`, `glm-5.1`, `glm-5.2`, `nemotron-3-super`, `nemotron-3-ultra`, and `deepseek-v4-pro` to the Antigravity adapter (no `:` in the name), where the Antigravity API rejected the OpenAI-style payload with `HTTP 400: Unknown name "messages" at 'request'`. The helper now consults `rotator.getOllamaModels()` (the source of truth populated from `/api/tags`) and only falls back to the credentials-only dispatch when that method is absent (e.g. test stubs).
+
+## [2.8.2] - 2026-08-10
+
+### Added
+- **Ollama Cloud model pricing in `MODEL_PRICING`**: `calculateCost()` previously returned `0` for every Ollama model because only the Antigravity models had price entries (claude + gemini variants). 18 entries were ported from `~/ollama-rotator/src/types.ts` (`gpt-oss:20b`, `gpt-oss:120b`, `deepseek-v4-flash:preview`, `deepseek-v4-flash:0731`, `deepseek-v4-pro`, `qwen3.5:397b`, `glm-5.1`, `glm-5.2`, `gemma4:31b`, `kimi-k2.6`, `kimi-k2.7-code`, `kimi-k3`, `minimax-m2.7`, `minimax-m3`, `mistral-large-3:675b`, `nemotron-3-nano:30b`, `nemotron-3-super`, `nemotron-3-ultra`). The dashboard spend summary now reports non-zero USD for Ollama traffic.
+
+## [2.8.1] - 2026-08-10
+
+### Changed
+- **Antigravity quota pools consolidated by family**: `QUOTA_MODEL_KEYS` is now `claude` (every Claude variant + gpt-oss) and `gemini` (every Gemini variant). `account.quota` carries at most one Antigravity entry per family instead of one per model, matching how Antigravity itself reports the shared bucket. `resolveQuotaModelKey` returns `"claude"` or `"gemini"` for any member of those families; `MODEL_CATALOG` `quotaPool` values follow suit. `resolveDisplayModelKey` and `MODEL_PRICING` are unchanged, so telemetry and pricing still distinguish variants.
+- **Consolidated RAW POLL log**: per quota cycle, each provider's adapter stashes its formatted pools into `account.lastPollByProvider` and the rotator emits a single `RAW POLL email -> google-antigravity: [...] | ollama: [...]` line, with Antigravity pools first and Ollama (session/weekly) last. Multi-provider accounts no longer log a separate line per provider.
+
+## [2.8.0] - 2026-08-10
+
+### Added
+- **Parent-Account Credential Model (F4)**: Each account is now identified by its email and can hold per-provider credentials (`credentials: [{provider, apiKey/refreshToken, projectId}]`). A single human with both a Google Antigravity OAuth token and an Ollama Cloud API key is stored as one account row instead of two. The dashboard, login flow, quota poll, kickstart, and rotation all key on the email — per-provider credentials are dispatched at request time. Legacy flat-shape configs (`provider`/`apiKey`/`refreshToken` at the top level) are still accepted and normalized on load. Migrate `login --provider <id>` to add credentials to an existing account rather than creating a duplicate row.
+
+### Changed
+- **Ollama Cloud Account Import**: the legacy importer now merges the `ollama` credential into any existing account with the same email (instead of skipping the email), so multi-provider identities are unified on first import. The import log now reports `M merged into existing account(s), N new account(s)`.
+
+### Fixed
+- **Ollama singleton-pool rotation threshold** (closed by `pi-antigravity-rotator-tuv`): with only one Ollama account, the persisted request-count threshold (`requestsPerRotation`) excluded the lone account from the pool after one request, producing `All accounts disabled or unavailable`. Resolved by F4: the Ollama pool now holds 28 accounts (27 dual + 1 Ollama-only), so rotation always has an alternative.
+
 ## [Unreleased]
+
+### Fixed
+- **Ollama Content Array Normalization**: message `content` arrays (OpenAI-style blocks, e.g. from multimodal requests) are flattened to plain strings and `image_url` blocks are moved to the native `images` field before forwarding to Ollama Cloud, whose Go API rejects `messages[].content` arrays with `cannot unmarshal array` errors. Ported from ollama-rotator `ec5fa5a`; applies to the native `/api/chat` route and all v1 compat adapters.
+- **Native `/api/chat` Payload Parsing**: the native route now parses the Ollama payload shape (`{model, messages, stream, options}`) before internal validation, which previously rejected every native request with `400 body.request is required`. Requires `model` and a non-empty `messages` array.
+- **Ollama Catalog at Startup**: the Ollama Cloud model catalog is fetched once at boot (previously only inside quota poll cycles, every ~5 min), so provider-aware routing and `GET /v1/models` see Ollama models immediately.
+
+## [2.7.0] - 2026-08-10
+
+### Added
+- **Multi-Provider Support**: The rotator now routes through two provider families. Google Antigravity accounts (OAuth, default) and Ollama Cloud accounts (static API keys, `login --provider ollama`) coexist in one account store, with per-provider model catalog resolution.
+- **Ollama Cloud Compatibility (B2)**: `POST /v1/chat/completions`, `/v1/responses`, and `/v1/messages` translate requests to Ollama's native `api/chat` NDJSON protocol for Ollama models; streaming deltas (including `tool_calls` and usage) are converted to SSE in both OpenAI and Anthropic formats. `GET /v1/models` lists the Ollama catalog (`owned_by: "ollama"`), and the native `/api/chat` endpoint routes Ollama models to Ollama accounts.
+- **Legacy Account Migration**: On startup, Ollama Cloud accounts from `~/.ollama-rotator/accounts.json` (the predecessor product, overridable via `OLLAMA_ROTATOR_DIR`) are imported automatically — tagged `provider: "ollama"`, preserving `label`/`tier`/`type`. Duplicate emails and entries without an API key are skipped.
+
+### Changed
+- `GET /v1/models` and the v1 translation layer are now provider-aware: Ollama models are no longer rejected with a `400` error; they are handled by the Ollama adapter.
+
+### Documentation
+- `docs/configuration.md`: new Providers section, provider-aware account fields table, and legacy migration notes.
+- `docs/adding-accounts.md`: Ollama Cloud login section and manual migration steps.
 
 ## [2.6.3] - 2026-08-05
 

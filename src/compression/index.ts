@@ -1,4 +1,4 @@
-import type { ChatMessage } from "../compat/translators.js";
+import type { ChatMessage } from "../providers/google-antigravity/translators.js";
 import { compressLite } from "./lite.js";
 import { compressRTK } from "./rtk/index.js";
 

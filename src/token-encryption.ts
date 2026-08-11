@@ -7,6 +7,7 @@ import {
 } from "node:crypto";
 import type { Config } from "./types.js";
 import { logger } from "./logger.js";
+import { rotatorEnv } from "./env.js";
 
 const V1_PREFIX = "enc:v1:";
 const V2_PREFIX = "enc:v2:";
@@ -24,11 +25,10 @@ const tokenLog = logger.child("token-encryption");
 
 /**
  * Returns the configured encryption key from environment variables.
- * Prefers PI_ROTATOR_ENCRYPTION_KEY, falls back to ENCRYPTION_KEY.
+ * Prefers TUXEVIL_ROTATOR_ENCRYPTION_KEY, falls back to ENCRYPTION_KEY.
  */
 export function getEncryptionKey(): string | undefined {
-  const key =
-    process.env.PI_ROTATOR_ENCRYPTION_KEY || process.env.ENCRYPTION_KEY;
+  const key = rotatorEnv("ENCRYPTION_KEY") || process.env.ENCRYPTION_KEY;
   return key && key.trim().length > 0 ? key.trim() : undefined;
 }
 
@@ -166,7 +166,7 @@ export function decryptAccountsInConfig(
       if (!key) {
         if (!missingKeyWarned) {
           tokenLog.warn(
-            `Found encrypted refresh token for ${acc.email} but PI_ROTATOR_ENCRYPTION_KEY is not set.`,
+            `Found encrypted refresh token for ${acc.email} but TUXEVIL_ROTATOR_ENCRYPTION_KEY is not set.`,
           );
           missingKeyWarned = true;
         }

@@ -1,6 +1,6 @@
 # OpenClaw
 
-Connect OpenClaw to pi-antigravity-rotator by adding a custom provider to `~/.openclaw/openclaw.json`.
+Connect OpenClaw to tuxevil-rotator by adding a custom provider to `~/.openclaw/openclaw.json`.
 
 ## Configuration
 
@@ -13,7 +13,7 @@ Edit `~/.openclaw/openclaw.json`:
     "providers": {
       "antigravity": {
         "baseUrl": "http://localhost:51200",
-        "apiKey": "antigravity",
+        "apiKey": "tuxevil",
         "api": "openai",
         "models": [
           {
@@ -67,7 +67,7 @@ For Claude models, you can alternatively use the Anthropic Messages API:
     "providers": {
       "antigravity-anthropic": {
         "baseUrl": "http://localhost:51200",
-        "apiKey": "antigravity",
+        "apiKey": "tuxevil",
         "api": "anthropic-messages",
         "models": [
           {
@@ -85,7 +85,7 @@ For Claude models, you can alternatively use the Anthropic Messages API:
 
 ## Virtual Key Authentication
 
-If you have Virtual Keys configured, replace `"antigravity"` in `apiKey` with your `rk-...` key.
+If you have Virtual Keys configured, replace `"tuxevil"` in `apiKey` with your `rk-...` key.
 
 You can also store keys in the auth profiles file at `~/.openclaw/agents/main/agent/auth-profiles.json`:
 

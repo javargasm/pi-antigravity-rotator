@@ -3,11 +3,11 @@
 // rotator service.
 //
 // The service is configured via systemd drop-ins such as:
-//   /etc/systemd/system/pi-antigravity-rotator.service
-//   /etc/systemd/system/pi-antigravity-rotator.service.d/database.conf
-//   /etc/systemd/system/pi-antigravity-rotator.service.d/oauth.conf
+//   /etc/systemd/system/tuxevil-rotator.service
+//   /etc/systemd/system/tuxevil-rotator.service.d/database.conf
+//   /etc/systemd/system/tuxevil-rotator.service.d/oauth.conf
 //
-// When invoked from a plain shell (e.g. `pi-antigravity-rotator login`) those
+// When invoked from a plain shell (e.g. `tuxevil-rotator login`) those
 // Environment=/EnvironmentFile= lines are NOT present in the CLI process, so
 // the CLI used to fall back to the on-disk FileSettingsRepository while the
 // service wrote to PostgreSQL. This module mirrors the service environment
@@ -17,7 +17,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /** Keys that are safe/meaningful to mirror from the systemd unit. */
-const MIRROR_PREFIXES = ["PI_ROTATOR_", "ANTIGRAVITY_"];
+const MIRROR_PREFIXES = ["TUXEVIL_ROTATOR_", "PI_ROTATOR_", "ANTIGRAVITY_", "OLLAMA_"];
 const MIRROR_EXACT = new Set(["DATABASE_URL", "ENCRYPTION_KEY"]);
 
 export interface SystemdEnvironmentSource {
@@ -166,7 +166,11 @@ export function loadSystemdEnvironment(
     "/usr/lib/systemd/system",
     "/lib/systemd/system",
   ];
-  const serviceName = source.serviceName ?? "pi-antigravity-rotator.service";
+  const serviceName =
+    source.serviceName ??
+    (findSystemdUnitFiles(unitDirs, "tuxevil-rotator.service").baseDir
+      ? "tuxevil-rotator.service"
+      : "pi-antigravity-rotator.service");
   const applied: string[] = [];
 
   const { baseDir, dropins } = findSystemdUnitFiles(unitDirs, serviceName);

@@ -1,4 +1,4 @@
-// Anonymous usage telemetry — opt-out via PI_ROTATOR_TELEMETRY=off
+// Anonymous usage telemetry — opt-out via TUXEVIL_ROTATOR_TELEMETRY=off
 //
 // What we collect (all anonymous):
 //   - Random install ID (UUID, not tied to any account)
@@ -14,7 +14,7 @@
 // Source IPs are not part of the JSON telemetry payload, but the receiver and
 // network path can observe them for transport and rate limiting.
 //
-// Docs: https://github.com/tuxevil/pi-antigravity-rotator#telemetry
+// Docs: https://github.com/tuxevil/tuxevil-rotator#telemetry
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -22,12 +22,13 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getConfigDir } from "./paths.js";
 import { logger } from "./logger.js";
+import { rotatorEnv } from "./env.js";
 
 const telemetryLogger = logger.child("telemetry");
 
 // ── Public telemetry endpoint (not a secret — anonymous data only) ───
 // Update this URL to your VPS before publishing to npm.
-// Can be overridden via PI_ROTATOR_TELEMETRY_URL.
+// Can be overridden via TUXEVIL_ROTATOR_TELEMETRY_URL.
 // HTTPS is preferred to avoid leaking the operator's IP in plaintext.
 const DEFAULT_TELEMETRY_ENDPOINT = "https://telemetry.tuxevil.com/v1/events";
 
@@ -41,13 +42,13 @@ export function resolveTelemetryEndpoint(raw: string | undefined): string {
 	} catch {
 		telemetryLogger.log(
 			"warn",
-			"Ignoring invalid PI_ROTATOR_TELEMETRY_URL; using the default HTTPS endpoint.",
+			"Ignoring invalid TUXEVIL_ROTATOR_TELEMETRY_URL; using the default HTTPS endpoint.",
 		);
 		return DEFAULT_TELEMETRY_ENDPOINT;
 	}
 }
 
-const TELEMETRY_ENDPOINT = resolveTelemetryEndpoint(process.env.PI_ROTATOR_TELEMETRY_URL);
+const TELEMETRY_ENDPOINT = resolveTelemetryEndpoint(rotatorEnv("TELEMETRY_URL"));
 
 const HEARTBEAT_INTERVAL_MS = 1 * 60 * 60 * 1000; // 1 hour
 const SEND_TIMEOUT_MS = 5000;
@@ -75,7 +76,7 @@ function getVersion(): string {
 
 // ── Opt-out check ────────────────────────────────────────────────────
 export function isTelemetryEnabled(): boolean {
-	const env = process.env.PI_ROTATOR_TELEMETRY?.toLowerCase();
+	const env = rotatorEnv("TELEMETRY")?.toLowerCase();
 	return env !== "off" && env !== "false" && env !== "0";
 }
 
@@ -85,7 +86,7 @@ let warnedAboutInsecureTelemetry = false;
 /**
  * Emit a one-time warning if the telemetry endpoint is plain HTTP, since that
  * leaks the operator's IP and network metadata to any on-path observer.
- * The warning can be silenced with PI_ROTATOR_TELEMETRY_INSECURE_OK=1.
+ * The warning can be silenced with TUXEVIL_ROTATOR_TELEMETRY_INSECURE_OK=1.
  *
  * The INSECURE_OK check runs before the once-flag so the operator's explicit
  * acknowledgement is always honored, even after a previous run warned.
@@ -95,13 +96,17 @@ export function warnIfInsecureTelemetryEndpoint(
 	env: NodeJS.ProcessEnv = process.env,
 ): boolean {
 	if (!/^http:\/\//i.test(endpoint)) return false;
-	if (env.PI_ROTATOR_TELEMETRY_INSECURE_OK === "1") return false;
+	if (
+		(env.TUXEVIL_ROTATOR_TELEMETRY_INSECURE_OK ??
+			env.PI_ROTATOR_TELEMETRY_INSECURE_OK) === "1"
+	)
+		return false;
 	if (warnedAboutInsecureTelemetry) return true;
 	warnedAboutInsecureTelemetry = true;
 	telemetryLogger.log(
 		"warn",
 		`Telemetry endpoint uses plain HTTP (${endpoint}). This leaks the operator's IP on every heartbeat. ` +
-		`Set PI_ROTATOR_TELEMETRY_URL to an https:// endpoint, or PI_ROTATOR_TELEMETRY_INSECURE_OK=1 to silence this warning.`,
+		`Set TUXEVIL_ROTATOR_TELEMETRY_URL to an https:// endpoint, or TUXEVIL_ROTATOR_TELEMETRY_INSECURE_OK=1 to silence this warning.`,
 	);
 	return true;
 }
@@ -154,8 +159,8 @@ function printTelemetryNotice(): void {
 	console.log("  │  Flag events help us improve the anti-flag algorithm     │");
 	console.log("  │  for everyone. Consider keeping telemetry on!            │");
 	console.log("  │                                                          │");
-	console.log("  │  Opt out anytime:  PI_ROTATOR_TELEMETRY=off              │");
-	console.log("  │  Details: github.com/tuxevil/pi-antigravity-rotator      │");
+	console.log("  │  Opt out anytime:  TUXEVIL_ROTATOR_TELEMETRY=off              │");
+	console.log("  │  Details: github.com/tuxevil/tuxevil-rotator      │");
 	console.log("  ╰──────────────────────────────────────────────────────────╯");
 	console.log();
 }

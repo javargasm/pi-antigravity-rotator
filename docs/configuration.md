@@ -2,35 +2,36 @@
 
 ## Config File Location
 
-Config files are stored in `~/.pi-antigravity-rotator/` by default. Override with:
+Config files are stored in `~/.tuxevil-rotator/` by default. Override with:
 
 ```bash
-export PI_ROTATOR_DIR=/path/to/config
+export TUXEVIL_ROTATOR_DIR=/path/to/config
 
 # Or CLI flag
-pi-antigravity-rotator start --config-dir /path/to/config
+tuxevil-rotator start --config-dir /path/to/config
 ```
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `PI_ROTATOR_DIR` | Config directory path (default: `~/.pi-antigravity-rotator/`) |
-| `PI_ROTATOR_DATABASE_URL` | PostgreSQL connection string for Virtual Keys and Spend Logging |
+| `TUXEVIL_ROTATOR_DIR` | Config directory path (default: `~/.tuxevil-rotator/`) |
 | `DATABASE_URL` | Fallback PostgreSQL connection string |
-| `PI_ROTATOR_ENCRYPTION_KEY` | Secret used to encrypt OAuth refresh tokens at rest. A 64-character hexadecimal key is recommended. `ENCRYPTION_KEY` is accepted as a fallback. |
-| `PI_ROTATOR_ADMIN_TOKEN` | Admin token for dashboard/API access. If unset, a secure token is auto-generated on first run and saved to `.admin-token` |
-| `PI_ROTATOR_BIND_HOST` | Network interface to bind on (default: `0.0.0.0`; set to `127.0.0.1` for local-only) |
-| `PI_ROTATOR_MAX_BODY_BYTES` | Max accepted proxy request body size in bytes (default: `26214400` = 25 MiB) |
-| `PI_ROTATOR_LOG_LEVEL` | Log verbosity: `debug`, `info`, `warn`, `error`, `silent` (default: `info`) |
-| `PI_ROTATOR_LOG_RETENTION_DAYS` | Spend log retention in days (default: `30`) |
-| `PI_ROTATOR_QUOTA_USER_AGENT` | Override the User-Agent for quota API fetches |
-| `PI_AI_ANTIGRAVITY_VERSION` | Override the Antigravity version in quota fetch UA (default: `1.107.0`) |
-| `PI_ROTATOR_TELEMETRY` | Set to `off`, `false`, or `0` to disable anonymous telemetry |
-| `PI_ROTATOR_TELEMETRY_URL` | Custom HTTPS endpoint for telemetry (self-hosted receiver) |
+| `TUXEVIL_ROTATOR_DATABASE_URL` | PostgreSQL connection string for Virtual Keys and Spend Logging |
+| `TUXEVIL_ROTATOR_ENCRYPTION_KEY` | Secret used to encrypt OAuth refresh tokens at rest. A 64-character hexadecimal key is recommended. `ENCRYPTION_KEY` is accepted as a fallback. |
+| `TUXEVIL_ROTATOR_ADMIN_TOKEN` | Admin token for dashboard/API access. If unset, a secure token is auto-generated on first run and saved to `.admin-token` |
+| `TUXEVIL_ROTATOR_BIND_HOST` | Network interface to bind on (default: `0.0.0.0`; set to `127.0.0.1` for local-only) |
+| `TUXEVIL_ROTATOR_MAX_BODY_BYTES` | Max accepted proxy request body size in bytes (default: `26214400` = 25 MiB) |
+| `TUXEVIL_ROTATOR_LOG_LEVEL` | Log verbosity: `debug`, `info`, `warn`, `error`, `silent` (default: `info`) |
+| `TUXEVIL_ROTATOR_LOG_RETENTION_DAYS` | Spend log retention in days (default: `30`) |
+| `TUXEVIL_ROTATOR_QUOTA_USER_AGENT` | Override the User-Agent for quota API fetches |
+| `TUXEVIL_ROTATOR_ANTIGRAVITY_VERSION` | Override the Antigravity version in quota fetch UA (default: `1.107.0`) |
+| `TUXEVIL_ROTATOR_TELEMETRY` | Set to `off`, `false`, or `0` to disable anonymous telemetry |
+| `TUXEVIL_ROTATOR_TELEMETRY_URL` | Custom HTTPS endpoint for telemetry (self-hosted receiver) |
 | `ANTIGRAVITY_CLIENT_ID` | Your Google OAuth client ID (see [OAuth Setup](#oauth-client-credentials)) |
 | `ANTIGRAVITY_CLIENT_SECRET` | Your Google OAuth client secret |
 | `ANTIGRAVITY_REDIRECT_URI` | OAuth callback URI for hosted login (default: `http://localhost:51121/oauth-callback`) |
+| `TUXEVIL_OPEN_BROWSER` | Set to `1`, `true`, or `yes` to open the CLI OAuth URL automatically. Disabled by default for headless environments. |
 
 ## OAuth Client Credentials
 
@@ -42,6 +43,28 @@ export ANTIGRAVITY_CLIENT_SECRET="your-client-secret"
 ```
 
 If either variable is missing, the rotator falls back to the legacy client and emits a one-time deprecation warning. Keep secrets in an environment manager or deployment secret store; do not commit them to the repository.
+
+## Providers
+
+The rotator routes through two provider families. Each account in `accounts.json`
+carries a `provider` field selecting its family (default when absent: `google-antigravity`,
+i.e. legacy configs).
+
+| Provider | ID | Credential | Add accounts |
+|----------|-----|------------|--------------|
+| Google Antigravity | `google-antigravity` | OAuth refresh token (auto-discovered project) | `tuxevil-rotator login` |
+| Ollama Cloud | `ollama` | Static API key from `ollama.com/settings/keys` (never expires) | `tuxevil-rotator login --provider ollama` |
+
+Ollama Cloud models are exposed on the standard OpenAI/Anthropic-compatible routes:
+
+- `POST /v1/chat/completions`, `/v1/responses`, and `/v1/messages` translate requests to
+  the Ollama native `api/chat` endpoint and stream NDJSON deltas back as SSE (including
+  `tool_calls` and usage in the final `[DONE]` chunk).
+- `GET /v1/models` lists the Ollama catalog (`owned_by: "ollama"`).
+- When the `ollama` provider is enabled, the native `POST /api/chat` endpoint routes to it.
+
+Model names are matched per provider: models in Ollama's cloud catalog go to Ollama
+accounts, everything else routes to Google Antigravity.
 
 ## accounts.json
 
@@ -89,7 +112,7 @@ The main configuration file. Created automatically by the `login` command, and e
 |-------|---------|-------------|
 | `proxyPort` | `51200` | Port the proxy listens on |
 | `bindHost` | `0.0.0.0` | Interface to bind on. For local-only use, set to `127.0.0.1` |
-| `routingPolicy` | `timer-first` | Routing policy: `timer-first`, `tier-first`, `quota-first`, or `hybrid` |
+| `routingPolicy` | `timer-first` | Routing policy: `timer-first`, `tier-first`, `quota-first`, `hybrid`, `sequential-quota`, or `sticky-quota` |
 | `requestsPerRotation` | `5` | Max per-model requests before attempting request-count rotation |
 | `rotateOnQuotaDrop` | `20` | Rotate when a model's quota drops this many %. Set to `0` to disable |
 | `quotaPollIntervalMs` | `300000` | Quota poll interval in ms (5 minutes) |
@@ -121,12 +144,33 @@ The main configuration file. Created automatically by the `login` command, and e
 
 | Field | Description |
 |-------|-------------|
-| `email` | Google account email (auto-filled by login) |
-| `refreshToken` | OAuth refresh token (auto-filled by login) |
-| `projectId` | Cloud project ID discovered from Google during login |
+| `email` | Account email (auto-filled by login) |
+| `provider` | `google-antigravity` (default/legacy) or `ollama` — selects the credential fields required and the upstream routing |
+| `refreshToken` | Google OAuth refresh token (auto-filled by `login`, Google accounts only) |
+| `projectId` | Google Cloud project ID discovered during login (Google accounts only) |
 | `projectSource` | Optional metadata: `google` when discovered from Google, `manual` if edited by hand |
+| `apiKey` | Ollama Cloud API key (Ollama accounts only; never expires, see `ollama.com/settings/keys`) |
 | `label` | Display name on the dashboard (auto-filled, defaults to email username) |
 | `tier` | Optional: `ultra`, `pro`, `plus`, `free`, or `unknown` — used by `tier-first` and `hybrid` routing policies |
+
+```json
+{
+  "email": "my-ollama-user@example.com",
+  "provider": "ollama",
+  "apiKey": "ok-...",
+  "label": "ollama-cloud"
+}
+```
+
+## Automatic Migration from the Legacy Rotator
+
+On startup, the rotator checks for the predecessor product's account store
+(`~/.ollama-rotator/accounts.json`, or the `OLLAMA_ROTATOR_DIR` override) and
+imports any Ollama Cloud accounts found there into the active account store —
+tagged `provider: "ollama"`, preserving `label`/`tier`/`type`. Accounts whose
+email already exists are skipped (never overwritten), and entries without an
+API key are ignored with a warning. The import runs before the account list is
+loaded, so migrated accounts are usable on the very first boot.
 
 ## Model Configuration Overrides
 

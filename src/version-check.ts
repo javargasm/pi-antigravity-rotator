@@ -16,7 +16,7 @@ export interface UpdateInfo {
 	checkedAt: number;
 }
 
-const PACKAGE_NAME = "pi-antigravity-rotator";
+const PACKAGE_NAME = "tuxevil-rotator";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 

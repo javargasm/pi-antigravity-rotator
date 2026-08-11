@@ -1,12 +1,12 @@
 <div align="center">
 
-[![npm version](https://img.shields.io/npm/v/pi-antigravity-rotator?logo=npm&label=version)](https://www.npmjs.com/package/pi-antigravity-rotator)
+[![npm version](https://img.shields.io/npm/v/tuxevil-rotator?logo=npm&label=version)](https://www.npmjs.com/package/tuxevil-rotator)
 [![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen?logo=node.js)](package.json)
-[![License](https://img.shields.io/github/license/tuxevil/pi-antigravity-rotator?logo=opensourceinitiative)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/tuxevil/pi-antigravity-rotator/ci.yml?logo=github&label=CI)](https://github.com/tuxevil/pi-antigravity-rotator/actions)
+[![License](https://img.shields.io/github/license/tuxevil/tuxevil-rotator?logo=opensourceinitiative)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/tuxevil/tuxevil-rotator/ci.yml?logo=github&label=CI)](https://github.com/tuxevil/tuxevil-rotator/actions)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Docker Image](https://img.shields.io/badge/ghcr.io-pi--antigravity--rotator-blue?logo=docker)](https://github.com/tuxevil/pi-antigravity-rotator/pkgs/container/pi-antigravity-rotator)
-[![Stars](https://img.shields.io/github/stars/tuxevil/pi-antigravity-rotator?style=social)](https://github.com/tuxevil/pi-antigravity-rotator/stargazers)
+[![Docker Image](https://img.shields.io/badge/ghcr.io-tuxevil--tuxevil--rotator-blue?logo=docker)](https://github.com/tuxevil/tuxevil-rotator/pkgs/container/tuxevil-rotator)
+[![Stars](https://img.shields.io/github/stars/tuxevil/tuxevil-rotator?style=social)](https://github.com/tuxevil/tuxevil-rotator/stargazers)
 
 [![Installations](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Ftelemetry.tuxevil.com%2Fv1%2Fpublic-stats&query=%24.installsFormatted&label=installations&color=6366f1)](https://telemetry.tuxevil.com/v1/public-stats)
 [![Requests Routed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Ftelemetry.tuxevil.com%2Fv1%2Fpublic-stats&query=%24.requestsFormatted&label=requests%20routed&color=10b981)](https://telemetry.tuxevil.com/v1/public-stats)
@@ -16,34 +16,52 @@
 
 [View live telemetry stats](https://telemetry.tuxevil.com/stats)
 
-![Pi Antigravity Rotator logo](./pi-antigravity-rotator_logo.png)
+![tuxevil-rotator logo](./tuxevil-rotator_logo.png)
 
 </div>
 
-# Pi Antigravity Rotator
+# tuxevil-rotator
 
-**Production-ready OpenAI-compatible gateway for Google Antigravity.**
+**Production-ready OpenAI-compatible gateway for multiple free-tier LLM providers.**
 
 Multi-account load balancing, per-model quota routing, account health scoring, access control with Virtual Keys, and cost auditing — via a single local endpoint that any agent can use. Even with a single account.
 
-> **⚠️ WARNING:** Using this proxy may put connected Google accounts at risk of Terms of Service enforcement, including restriction, suspension, or permanent bans. Use at your own risk.
+Originally built as a multi-account rotator for Google Antigravity. It now generalizes that rotation layer across any free-tier LLM provider with per-account credentials: today Google Antigravity and Ollama Cloud, designed so the next free-tier provider slots in without forking the engine.
+
+> **⚠️ WARNING:** Using this proxy may put connected accounts at risk of Terms of Service enforcement, including restriction, suspension, or permanent bans. Use at your own risk.
 
 <details>
 <summary><strong>⚠️ Terms of Service Warning — Read Before Installing</strong></summary>
 
 > [!CAUTION]
-> This is an unofficial tool and is not endorsed by Google. Routing traffic through this proxy may violate Google's Terms of Service or trigger automated abuse or policy enforcement systems.
+> This is an unofficial tool. Routing traffic through this proxy may violate a provider's Terms of Service or trigger automated abuse or policy enforcement systems.
 >
 > **By using this proxy, you acknowledge:**
 > - Your account may be restricted, suspended, shadow-banned, or permanently banned
 > - Multi-account rotation and proxying can increase account risk compared to normal interactive usage
 > - You assume all responsibility for the accounts and traffic routed through this tool
 >
-> **Recommendation:** Do not use your primary Google account. Prefer disposable or lower-risk accounts, and keep account exposure conservative.
+> **Recommendation:** Do not use your primary account on any provider. Prefer disposable or lower-risk accounts, and keep account exposure conservative.
 
 </details>
 
+> **Migrating from `pi-antigravity-rotator`?** Install the new `tuxevil-rotator` package. It includes the new CLI plus a legacy shim, automatically migrates legacy config files, and keeps old environment variables and paths working as fallbacks. See [Migration from pi-antigravity-rotator](docs/migrating-from-pi-antigravity-rotator.md).
+
 ---
+
+## v3.0 Highlights
+
+- **Parent-Account Credential Model**: Each account (email) is now the parent entity and may hold per-provider credentials — a single human with both a Google Antigravity OAuth token and an Ollama Cloud API key lives in one account row. Login (`login --provider <id>`) and the legacy importer merge credentials onto existing accounts instead of duplicating by email.
+- **Antigravity quota pools consolidated by family**: One quota bucket per family — `claude` (every Claude variant + gpt-oss) and `gemini` (every Gemini variant) — instead of one per model. The Antigravity quota API reports the same bucket for all of them, and the dashboard's consolidated RAW POLL line now shows both providers at once, with Antigravity pools first and Ollama last.
+- **Ollama model pricing in `MODEL_PRICING`**: Spend summaries now report real USD for Ollama traffic (18 entries ported from the predecessor project's catalog of paid prices). Unknown models still return 0.
+- **Routing robustness**: Dispatch for Ollama models now keys on the live catalog (`rotator.getOllamaModels()`), so models without `:` in the name (`minimax-m3`, `kimi-k3`, `glm-5.1`, `nemotron-3-super`, `deepseek-v4-pro`) no longer leak to the Antigravity adapter. Multi-turn tool-call requests now parse `function.arguments` to a real object before forwarding, since Ollama's Go API rejects OpenAI-style JSON-encoded strings.
+
+## v2.7 Highlights
+
+- **Multi-Provider Support**: The rotator now routes through two provider families. Google Antigravity accounts (OAuth, default) and Ollama Cloud accounts (static API keys, `login --provider ollama`) coexist in one account store, with per-provider model catalog resolution.
+- **Ollama Cloud Compatibility (B2)**: `POST /v1/chat/completions`, `/v1/responses`, and `/v1/messages` translate requests to Ollama's native `api/chat` NDJSON protocol for Ollama models; streaming deltas (including `tool_calls` and `usage`) are converted to SSE in both OpenAI and Anthropic formats. `GET /v1/models` lists the Ollama catalog (`owned_by: "ollama"`), and the native `POST /api/chat` endpoint routes Ollama models to Ollama accounts.
+- **Legacy Account Migration**: On startup, Ollama Cloud accounts from `~/.ollama-rotator/accounts.json` (the predecessor product, overridable via `OLLAMA_ROTATOR_DIR`) are imported automatically and merged onto the matching email — `provider: "ollama"`, preserving `label`/`tier`/`type`. Re-import is idempotent.
+- **Flat-shape compatibility**: Existing configs with the legacy flat field layout (`apiKey`/`refreshToken` at the top level) are still accepted and normalized on load to the parent-account credential model.
 
 ## v2.6 Highlights
 
@@ -63,7 +81,9 @@ Multi-account load balancing, per-model quota routing, account health scoring, a
 - **Virtual Keys & Scoped Access Control**: Generate scoped API keys (`rk-...`) with per-key model authorization rules and user tracking.
 - **Spend Logging & Audit Inspector**: PostgreSQL audit trail of all requests, token metrics, TTFB/Total duration, Base64 media sanitization, 6-decimal USD cost breakdown, and Request/Response payload viewer.
 - **Multi-page Web Dashboard**: Unified header navigation connecting Accounts, Virtual Keys, and Spend Logs, featuring customizable column visibility, search/filtering, and instant PII masking.
-- **PostgreSQL Persistence Backend**: Enable `PI_ROTATOR_DATABASE_URL` for high-concurrency key validation, persistent spend logging, and retention policies.
+- **PostgreSQL Persistence Backend**: Enable `TUXEVIL_ROTATOR_DATABASE_URL` for high-concurrency key validation, persistent spend logging, and retention policies.
+
+---
 
 ### Compression and token encryption
 
@@ -80,32 +100,37 @@ For a single request, send `X-Rotator-Compression: lite`, `rtk`, or `rtk+lite`. 
 To encrypt refresh tokens at rest, set a secret before starting the rotator. A 64-character hexadecimal key is recommended:
 
 ```bash
-export PI_ROTATOR_ENCRYPTION_KEY="$(openssl rand -hex 32)"
-pi-antigravity-rotator start
+export TUXEVIL_ROTATOR_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+tuxevil-rotator start
 ```
 
 Existing `enc:v1` records remain decryptable during migration; newly written records use `enc:v2`.
+
+> **Legacy env vars still work:** `PI_ROTATOR_ENCRYPTION_KEY` is honored as a fallback so existing setups keep working without changes.
 
 ---
 
 ## Features
 
-- **OpenAI-compatible gateway** — Drop-in replacement endpoint (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`) for any agent or tool
-- **Multi-account load balancing** — Distributes traffic across a pool of Google accounts with per-model independent routing
-- **One-command account setup** — `pi-antigravity-rotator login` auto-discovers (or provisions) the Cloud Code companion project for brand-new accounts and, on systemd-backed installs, writes to the same PostgreSQL store the service reads from
-- **Smart rotation & health scoring** — Four routing policies (`timer-first`, `tier-first`, `quota-first`, `hybrid`) with composite health scores per account
-- **Real-time quota monitoring** — Polls Google's quota API every 5 minutes with per-model, per-account tracking
+- **Multi-provider gateway** — OpenAI-compatible endpoint (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`) plus native Ollama (`/api/chat`) routes; any agent or tool can use either
+- **Google Antigravity accounts** — OAuth load balancing across a pool, with per-model independent routing
+- **Ollama Cloud accounts** — Static-API-key accounts (`login --provider ollama`) for the Ollama Cloud catalog (`gpt-oss`, `gemma4`, `kimi-k3`, `minimax-m3`, `qwen3.5`, `glm-5`, `mistral-large-3`, `nemotron-3`, `deepseek-v4`)
+- **Parent-account credentials** — One email, many providers; the same human with Google OAuth and an Ollama key is one row in `accounts.json`, with `credentials: [{provider, apiKey|refreshToken, projectId}]` instead of duplicate rows by email
+- **Provider-agnostic rotation** — The rotation engine treats Antigravity and Ollama uniformly. The next free-tier provider with a per-account credential and a quota API slots in as a new `--provider` value without forking the engine.
+- **Multi-account load balancing** — Distributes traffic across a pool of accounts with per-model independent routing
+- **One-command account setup** — `tuxevil-rotator login` auto-discovers (or provisions) the Cloud Code companion project for brand-new Google accounts; `login --provider ollama` adds an Ollama Cloud API key to an existing email or creates a new one
+- **Smart rotation & health scoring** — Six routing policies (`timer-first`, `tier-first`, `quota-first`, `hybrid`, `sequential-quota`, `sticky-quota`) with composite health scores per account
+- **Real-time quota monitoring** — Polls each provider's quota API on its own cadence; Antigravity quota pools are consolidated by family (`claude`, `gemini`) and Ollama reports session/weekly usage
 - **Infringement & abuse detection** — Flags accounts on enforcement signals and triggers protective pause to preserve the rest of the pool
 - **Virtual Keys & access control** — Issue scoped `rk-...` keys for teams, agents, or CI pipelines with per-key model restrictions
-- **Spend logging & audit inspector** — Full request/response audit trail with 6-decimal USD cost estimates (requires PostgreSQL)
+- **Spend logging & audit inspector** — Full request/response audit trail with 6-decimal USD cost estimates for both Antigravity and Ollama traffic (requires PostgreSQL)
+- **Legacy importer** — On startup, automatically merges Ollama Cloud accounts from `~/.ollama-rotator/accounts.json` (the predecessor product) onto existing accounts, idempotently
 - **Web dashboard** — Real-time routing state, quota bars, latency tracking (p50/p95), savings chart, activity heatmap, and routing inspector
 - **State persistence** — Survives restarts; routing assignments, cooldowns, and flags saved to disk or PostgreSQL
-- **Tool/function calling** — Fully supported in OpenAI and Anthropic formats, including multi-turn and parallel tool calls, with reliable function-name resolution for tool responses across turns
+- **Tool/function calling** — Fully supported in OpenAI and Anthropic formats, including multi-turn and parallel tool calls, with reliable function-name resolution for tool responses across turns. Ollama forwards `function.arguments` as a parsed object (OpenAI sends it as a JSON string and Ollama's Go API rejects that).
 - **Reasoning/thinking visibility** — Interleaved thinking blocks exposed as `reasoning_content` / `thinking_delta` in real time
 
 [Full feature list →](docs/how-it-works.md)
-
----
 
 ## Quick Start
 
@@ -114,10 +139,23 @@ Existing `enc:v1` records remain decryptable during migration; newly written rec
 ### Option A: npm
 
 ```bash
-npm install -g pi-antigravity-rotator
-pi-antigravity-rotator login
-pi-antigravity-rotator start
+npm install -g tuxevil-rotator
+tuxevil-rotator login                  # Google Antigravity (default)
+tuxevil-rotator login --provider ollama  # Ollama Cloud (static API key)
+tuxevil-rotator start
 ```
+
+Ollama Cloud accounts from a previous `~/ollama-rotator` install are imported automatically at startup — no manual step required.
+
+> **Coming from `pi-antigravity-rotator`?** Install the new package, then run the guided migration:
+>
+> ```bash
+> npm install -g tuxevil-rotator
+> tuxevil-rotator migrate
+> tuxevil-rotator doctor
+> ```
+>
+> The migration copies legacy config files without deleting them. The new package also keeps the old CLI as a deprecation shim and honors legacy environment variables and paths. See the [Migration guide](docs/migrating-from-pi-antigravity-rotator.md).
 
 ### Option B: Docker
 
@@ -129,9 +167,12 @@ docker compose up -d
 ### Option C: Source
 
 ```bash
-git clone https://github.com/tuxevil/pi-antigravity-rotator.git
-cd pi-antigravity-rotator
-npm install && npm run login && npm start
+git clone https://github.com/tuxevil/tuxevil-rotator.git
+cd tuxevil-rotator
+npm install
+npm run login                       # Google Antigravity
+npm run login -- --provider ollama  # Ollama Cloud
+npm start
 ```
 
 Dashboard opens at `http://localhost:51200/dashboard`
@@ -142,7 +183,7 @@ Dashboard opens at `http://localhost:51200/dashboard`
 
 ## Connect Your Agent
 
-Point any OpenAI-compatible agent to `http://localhost:51200/v1` with API key `antigravity` (or a [Virtual Key](docs/virtual-keys.md)):
+Point any OpenAI-compatible agent to `http://localhost:51200/v1` with API key `tuxevil` (or a [Virtual Key](docs/virtual-keys.md)):
 
 | Agent | Guide |
 |-------|-------|
@@ -165,16 +206,28 @@ Point any OpenAI-compatible agent to `http://localhost:51200/v1` with API key `a
 
 ```mermaid
 graph LR
-    A[Your Agent] -->|OpenAI / Anthropic API| B["pi-antigravity-rotator<br/>localhost:51200"]
+    A[Your Agent] -->|OpenAI / Anthropic API| B["tuxevil-rotator<br/>localhost:51200"]
     B -->|Smart Routing| C[Google Account 1]
     B -->|Smart Routing| D[Google Account 2]
-    B -->|Smart Routing| E[Google Account N]
-    C --> F[Google Antigravity]
-    D --> F
-    E --> F
+    B -->|Smart Routing| E[Ollama Cloud Account 1]
+    B -->|Smart Routing| F[Ollama Cloud Account 2]
+    B -->|Smart Routing| G[... up to N]
+    C --> H[Google Antigravity]
+    D --> H
+    E --> I[Ollama Cloud]
+    F --> I
+    G --> I
+
+    H -.Quota API<br/>every 5 min.-> B
+    I -.Usage API<br/>every 5 min.-> B
 ```
 
-Each model routes to its own best available account independently. Multiple agents using different models never interfere with each other's rotation.
+Each model routes to its own best available account independently. The same email can hold both a Google OAuth credential and an Ollama Cloud API key (parent-account model) — the rotator picks the right credential at request time based on the destination model.
+
+How model routing works:
+- **Antigravity pool** — Claude variants (`claude-opus-4-6-thinking`, `claude-sonnet-4-6`, `gpt-oss-120b`) share the `claude` quota bucket; Gemini variants share the `gemini` bucket.
+- **Ollama pool** — Any model returned by `https://ollama.com/api/tags` (e.g. `gemma4:31b`, `gpt-oss:20b`, `minimax-m3`, `kimi-k3`) routes to an Ollama credential.
+- The pool is selected by the destination model's provider; a single account with both credentials participates in both pools.
 
 [How it works in detail →](docs/how-it-works.md)
 
@@ -186,8 +239,8 @@ After starting the proxy, open `http://localhost:51200/dashboard`.
 
 The dashboard shows:
 - **Routing state** — real-time status, uptime, requests, protective pause timers
-- **Account cards** — quota bars, per-model timers, health scores, flagged alerts
-- **Token usage & savings** — interactive chart with time ranges and CSV/JSON export
+- **Account cards** — quota bars (Antigravity family buckets `claude` / `gemini`; Ollama session/weekly usage), per-model timers, health scores, flagged alerts
+- **Token usage & savings** — interactive chart with time ranges and CSV/JSON export (real USD for both providers)
 - **Latency (p50/p95)** — per-model TTFB and total duration
 - **Activity heatmap** — 60-day GitHub-style request intensity grid
 - **Quota forecast** — tier-weighted depletion predictions
@@ -197,18 +250,16 @@ The dashboard shows:
 
 [Dashboard reference →](docs/adding-accounts.md)
 
----
-
 ## Virtual Keys & Spend Logging
 
 With PostgreSQL, the gateway adds enterprise-grade access control and cost auditing.
 
 ```bash
 # Set up PostgreSQL (or paste the prompt in docs/integrations/setup-postgresql.md into your AI agent)
-export PI_ROTATOR_DATABASE_URL="postgres://user:pass@localhost:5432/rotatordb"
+export TUXEVIL_ROTATOR_DATABASE_URL="postgres://user:***@localhost:5432/rotatordb"
 
 # Generate a scoped key
-pi-antigravity-rotator keys generate --alias "cursor-agent" --models "gemini-3.6-flash-high"
+tuxevil-rotator keys generate --alias "cursor-agent" --models "gemini-3.6-flash-high"
 # → rk-a1b2c3d4...
 ```
 
@@ -227,19 +278,36 @@ pi-antigravity-rotator keys generate --alias "cursor-agent" --models "gemini-3.6
 | Compatibility Adapters | [docs/compatibility.md](docs/compatibility.md) |
 | Deployment | [docs/deployment.md](docs/deployment.md) |
 | Adding Accounts | [docs/adding-accounts.md](docs/adding-accounts.md) |
+| Migration from pi-antigravity-rotator | [docs/migrating-from-pi-antigravity-rotator.md](docs/migrating-from-pi-antigravity-rotator.md) |
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Telemetry | [docs/telemetry.md](docs/telemetry.md) |
 | PostgreSQL Setup | [docs/integrations/setup-postgresql.md](docs/integrations/setup-postgresql.md) |
 
 ---
 
+## Why its called "tuxevil-rotator" now?
+
+This project started as a focused, single-purpose rotator for pi coder agent and for Google Antigravity provider. As the rotation engine matured and the Ollama Cloud integration landed, the same engine applied cleanly to any free-tier provider with per-account credentials and a quota API. Renaming to `tuxevil-rotator` makes that generalization explicit: the provider is a plug-in, the rotation is the product.
+
+A few things shaped the decision concretely:
+
+- The original name (`pi-antigravity-rotator`) signaled "I only know one provider." That's no longer true.
+- The account store moved to a parent-account model where one email can hold credentials for multiple providers. The product surface needed to follow.
+- Open-sourcing the rotator as `pi-*` implied it was only interesting inside the `pi.dev` ecosystem. The engine itself is provider-agnostic and useful in any agent stack.
+
+The name comes from the maintainer's nickname (`tuxevil`). It's also the namespace already used across this maintainer's other open-source work, so the rotator stops being a one-off and becomes part of a recognizable family of tools.
+
+> **Want the longer story?** A deeper post on the rationale, the design tradeoffs, and the provider-pluggable architecture is on the maintainer's blog: [Why I renamed pi-antigravity-rotator to tuxevil-rotator](https://tuxevil.com/en/blog/tuxevil-rotator/).
+
+---
+
 ## Star History
 
-<a href="https://www.star-history.com/?repos=tuxevil%2Fpi-antigravity-rotator&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=tuxevil%2Ftuxevil-rotator&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=tuxevil/pi-antigravity-rotator&type=date&theme=dark&legend=top-left&sealed_token=obDO-nvWTZErW7T7dgOBp_5AMavHuc70IWvLlTQs9wfbuB4-NINioIoVFjcHccMOcJGmL7mm8JGodxBWC4vWl2W5FW7C1i_xak0Mc0mOD2HIowLdL2VS07heeIUk3YibkZcN0qAFzMFcH_B6_4wgzT-t-jTrOUEntcsmoVgjfFCGUA7hduT3LtyOzQiW" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=tuxevil/pi-antigravity-rotator&type=date&legend=top-left&sealed_token=obDO-nvWTZErW7T7dgOBp_5AMavHuc70IWvLlTQs9wfbuB4-NINioIoVFjcHccMOcJGmL7mm8JGodxBWC4vWl2W5FW7C1i_xak0Mc0mOD2HIowLdL2VS07heeIUk3YibkZcN0qAFzMFcH_B6_4wgzT-t-jTrOUEntcsmoVgjfFCGUA7hduT3LtyOzQiW" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=tuxevil/pi-antigravity-rotator&type=date&legend=top-left&sealed_token=obDO-nvWTZErW7T7dgOBp_5AMavHuc70IWvLlTQs9wfbuB4-NINioIoVFjcHccMOcJGmL7mm8JGodxBWC4vWl2W5FW7C1i_xak0Mc0mOD2HIowLdL2VS07heeIUk3YibkZcN0qAFzMFcH_B6_4wgzT-t-jTrOUEntcsmoVgjfFCGUA7hduT3LtyOzQiW" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=tuxevil/tuxevil-rotator&type=date&theme=dark&legend=top-left&sealed_token=obDO-nvWTZErW7T7dgOBp_5AMavHuc70IWvLlTQs9wfbuB4-NINioIoVFjcHccMOcJGmL7mm8JGodxBWC4vWl2W5FW7C1i_xak0Mc0mOD2HIowLdL2VS07heeIUk3YibkZcN0qAFzMFcH_B6_4wgzT-t-jTrOUEntcsmoVgjfFCGUA7hduT3LtyOzQiW" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=tuxevil/tuxevil-rotator&type=date&legend=top-left&sealed_token=obDO-nvWTZErW7T7dgOBp_5AMavHuc70IWvLlTQs9wfbuB4-NINioIoVFjcHccMOcJGmL7mm8JGodxBWC4vWl2W5FW7C1i_xak0Mc0mOD2HIowLdL2VS07heeIUk3YibkZcN0qAFzMFcH_B6_4wgzT-t-jTrOUEntcsmoVgjfFCGUA7hduT3LtyOzQiW" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=tuxevil/tuxevil-rotator&type=date&legend=top-left&sealed_token=obDO-nvWTZErW7T7dgOBp_5AMavHuc70IWvLlTQs9wfbuB4-NINioIoVFjcHccMOcJGmL7mm8JGodxBWC4vWl2W5FW7C1i_xak0Mc0mOD2HIowLdL2VS07heeIUk3YibkZcN0qAFzMFcH_B6_4wgzT-t-jTrOUEntcsmoVgjfFCGUA7hduT3LtyOzQiW" />
  </picture>
 </a>
 
@@ -251,21 +319,17 @@ If this tool has saved you API costs, consider supporting its development!
 
 <a href="https://ko-fi.com/tuxevil" target="_blank"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" height="36" alt="Buy Me a Coffee at ko-fi.com" /></a> <a href="https://discord.gg/GgwVqTaKgK" target="_blank"><img src="https://img.shields.io/badge/Discord-7289DA?style=for-the-badge&logo=discord&logoColor=white" height="36" alt="Join Discord" /></a>
 
-To donate an authorized Google account for testing, see [CONTRIBUTING.md](CONTRIBUTING.md).
-
----
+To donate an authorized account for testing across supported providers, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Contributors
 
 Thanks to these amazing people who have contributed to the project:
 
-- **[@Codder-hermes](https://github.com/Codder-hermes)** — Fixed Claude Code tool-schema requests by stripping the unsupported JSON Schema `propertyNames` keyword for Gemini and Claude-via-Gemini routes, with regression coverage for both compatibility paths. ([PR #19](https://github.com/tuxevil/pi-antigravity-rotator/pull/19))
-- **[@CyR1en](https://github.com/CyR1en)** (Ethan Bacurio) — Added the Gemini 3.6 Flash model family, shared quota-pool routing, pricing, dashboard support, and regression coverage. ([PR #18](https://github.com/tuxevil/pi-antigravity-rotator/pull/18))
-- **[@josenicomaia](https://github.com/josenicomaia)** (José Nicodemos Maia Neto) — Modularized the compatibility layer architecture, added multimodal tool response support, and fixed streaming pass-through for tool executions. ([PR #8](https://github.com/tuxevil/pi-antigravity-rotator/pull/8), [PR #9](https://github.com/tuxevil/pi-antigravity-rotator/pull/9), [PR #11](https://github.com/tuxevil/pi-antigravity-rotator/pull/11))
-- **[@yashyadav711](https://github.com/yashyadav711)** (Yash) — Fixed Draft-2020-12 inline JSON-Schema union type mapping for Gemini tools support. ([PR #10](https://github.com/tuxevil/pi-antigravity-rotator/pull/10))
-- **[@javargasm](https://github.com/javargasm)** (Jeisson Alexander Vargas Marroquin) — Anthropic tool-use compatibility layer (`tool_use`/`tool_result` content block conversion), JSON schema round-trip fixes, and compat test suite expansion. ([PR #3](https://github.com/tuxevil/pi-antigravity-rotator/pull/3), [PR #7](https://github.com/tuxevil/pi-antigravity-rotator/pull/7))
-
----
+- **[@Codder-hermes](https://github.com/Codder-hermes)** — Fixed Claude Code tool-schema requests by stripping the unsupported JSON Schema `propertyNames` keyword for Gemini and Claude-via-Gemini routes, with regression coverage for both compatibility paths. ([PR #19](https://github.com/tuxevil/tuxevil-rotator/pull/19))
+- **[@CyR1en](https://github.com/CyR1en)** (Ethan Bacurio) — Added the Gemini 3.6 Flash model family, shared quota-pool routing, pricing, dashboard support, and regression coverage. ([PR #18](https://github.com/tuxevil/tuxevil-rotator/pull/18))
+- **[@josenicomaia](https://github.com/josenicomaia)** (José Nicodemos Maia Neto) — Modularized the compatibility layer architecture, added multimodal tool response support, and fixed streaming pass-through for tool executions. ([PR #8](https://github.com/tuxevil/tuxevil-rotator/pull/8), [PR #9](https://github.com/tuxevil/tuxevil-rotator/pull/9), [PR #11](https://github.com/tuxevil/tuxevil-rotator/pull/11))
+- **[@yashyadav711](https://github.com/yashyadav711)** (Yash) — Fixed Draft-2020-12 inline JSON-Schema union type mapping for Gemini tools support. ([PR #10](https://github.com/tuxevil/tuxevil-rotator/pull/10))
+- **[@javargasm](https://github.com/javargasm)** (Jeisson Alexander Vargas Marroquin) — Anthropic tool-use compatibility layer (`tool_use`/`tool_result` content block conversion), JSON schema round-trip fixes, and compat test suite expansion. ([PR #3](https://github.com/tuxevil/tuxevil-rotator/pull/3), [PR #7](https://github.com/tuxevil/tuxevil-rotator/pull/7))
 
 ## Development
 

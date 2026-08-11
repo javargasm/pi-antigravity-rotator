@@ -494,18 +494,52 @@
     transform-origin: center;
   }
 
-  .discord-btn svg {
-    fill: currentColor !important;
-    stroke: none !important;
+  .website-btn svg {
     transition: transform 0.2s, color 0.2s;
   }
-  .discord-btn:hover {
-    border-color: rgba(88, 101, 242, 0.4) !important;
-    background: rgba(88, 101, 242, 0.08) !important;
+  .website-btn:hover {
+    border-color: rgba(124, 92, 252, 0.4) !important;
+    background: rgba(124, 92, 252, 0.08) !important;
   }
-  .discord-btn:hover svg {
-    color: #5865F2 !important;
+  .website-btn:hover svg {
+    color: var(--accent) !important;
     transform: scale(1.12);
+  }
+
+  .app-footer {
+    margin-top: 32px;
+    padding: 16px 0;
+    border-top: 1px solid var(--border);
+    font-size: 0.78rem;
+    color: var(--text-dim);
+  }
+  .app-footer-inner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+  }
+  .app-footer-brand {
+    font-weight: 600;
+    color: var(--text);
+    opacity: 0.5;
+    letter-spacing: 0.3px;
+  }
+  .app-footer-sep {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    opacity: 0.4;
+    flex-shrink: 0;
+  }
+  .app-footer a {
+    color: var(--text-dim);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  .app-footer a:hover {
+    color: var(--accent);
   }
 
   .badge-pro { background: rgba(52, 211, 153, 0.15); color: var(--green); }
@@ -667,6 +701,7 @@
   .operator-item.operator-yellow { border-left: 4px solid var(--yellow); }
   .operator-item.operator-gray { border-left: 4px solid var(--text-dim); }
   .operator-item.operator-orange { border-left: 4px solid #f97316; }
+  .operator-item.operator-green { border-left: 4px solid #22c55e; }
 
   .operator-icon {
     width: 24px;
@@ -678,6 +713,7 @@
   .operator-yellow .operator-icon { color: var(--yellow); }
   .operator-gray .operator-icon { color: var(--text-dim); }
   .operator-orange .operator-icon { color: #f97316; }
+  .operator-green .operator-icon { color: #22c55e; }
 
   .operator-content {
     flex: 1;

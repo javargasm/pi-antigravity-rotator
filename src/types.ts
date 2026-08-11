@@ -1,16 +1,29 @@
 // Account types and configuration
 
+import { rotatorEnv } from "./env.js";
+import type { ExhaustionPrediction } from "./providers/ollama/prediction.js";
+
 export type AccountType = "pro" | "free";
-export type AccountTier = "ultra" | "pro" | "plus" | "free" | "unknown";
+export type AccountTier =
+  | "ultra"
+  | "pro"
+  | "plus"
+  | "free"
+  | "unknown"
+  | "max"
+  | "team";
 export type RoutingPolicy =
   | "timer-first"
   | "tier-first"
   | "quota-first"
-  | "hybrid";
+  | "hybrid"
+  | "sequential-quota"
+  | "sticky-quota";
 
 export type RoutingRejectionReason =
   | "disabled"
   | "flagged"
+  | "provider-ineligible"
   | "account-concurrency"
   | "project-concurrency"
   | "cooldown"
@@ -22,12 +35,54 @@ export type RoutingRejectionReason =
   | "daily-project-stop"
   | "token-bucket-empty";
 
-export interface AccountConfig {
-  email: string;
-  refreshToken: string;
-  projectId: string;
+/**
+ * One set of credentials for a single provider, owned by an account.
+ * The account (email) is the parent entity; it may hold credentials for
+ * multiple providers (e.g. the same human with a Google Antigravity token
+ * and an Ollama Cloud API key).
+ */
+export interface ProviderCredential {
+  /** Provider id: "google-antigravity" or "ollama". */
+  provider: string;
+  /** Ollama Cloud: static API key (never expires). */
+  apiKey?: string;
+  /** Google Antigravity: OAuth refresh token. */
+  refreshToken?: string;
+  /** Google Antigravity: Cloud project id. */
+  projectId?: string;
   // How the projectId was obtained.
   projectSource?: "google" | "manual";
+  /** Optional HTTP(S) or SOCKS5 egress proxy for this provider credential. */
+  proxyUrl?: string;
+}
+
+export interface AccountConfig {
+  email: string;
+  /**
+   * Per-provider credentials. The account (email) is the parent entity and
+   * may hold credentials for several providers.
+   *
+   * Legacy configs (pre-2.8) used flat fields instead: `provider`,
+   * `apiKey` (Ollama) and `refreshToken`/`projectId` (Google). Those shapes
+   * are still accepted on read and normalized into `credentials` by
+   * normalizeAccountConfig().
+   */
+  credentials?: ProviderCredential[];
+  /**
+   * @deprecated legacy flat provider id ("google-antigravity" default).
+   * Migrated into `credentials` on read; kept for back-compat.
+   */
+  provider?: string;
+  /** @deprecated legacy Ollama Cloud API key, migrated into credentials. */
+  apiKey?: string;
+  /** @deprecated legacy Google Antigravity OAuth refresh token. */
+  refreshToken?: string;
+  /** @deprecated legacy Google Antigravity Cloud project id. */
+  projectId?: string;
+  /** @deprecated migrated into credentials. */
+  projectSource?: "google" | "manual";
+  /** @deprecated use credentials[].proxyUrl for provider-scoped routing. */
+  proxyUrl?: string;
   label?: string;
   // Optional - pro/free is detected dynamically from quota API reset times
   type?: AccountType;
@@ -166,20 +221,24 @@ export interface ModelQuota {
   modelKey: string;
   displayName: string;
   percentRemaining: number;
+  /** Raw usage fraction (0..1) when the provider reports one (Ollama). */
+  usageRaw?: number;
   resetTime: string | null;
   // Timer classification based on resetTime duration
   // "fresh" = no active timer, "5h" = short timer, "7d" = long timer
   timerType: "fresh" | "5h" | "7d";
 }
 
-// Model key mapping for the quota API
+// Model key mapping for the quota API. One entry per family: all Claude
+// variants (and gpt-oss) share one bucket, all Gemini variants share one.
 export const QUOTA_MODEL_KEYS: Record<
   string,
   { key: string; altKeys: string[]; display: string }
 > = {
   claude: {
-    key: "claude-opus-4-6-thinking",
+    key: "claude",
     altKeys: [
+      "claude-opus-4-6-thinking",
       "claude-opus-4-5-thinking",
       "claude-opus-4-5",
       "claude-sonnet-4-6-thinking",
@@ -191,72 +250,44 @@ export const QUOTA_MODEL_KEYS: Record<
     ],
     display: "Claude",
   },
-  "gemini-3.1-pro": {
-    key: "gemini-3.1-pro",
+  gemini: {
+    key: "gemini",
     altKeys: [
-      "gemini-3.1-pro-high",
+      "gemini-3.1-pro",
       "gemini-3.1-pro-low",
+      "gemini-3.1-pro-high",
       "gemini-3-pro-high",
       "gemini-3-pro-low",
-    ],
-    display: "G3.1Pro",
-  },
-  "gemini-3.5-flash": {
-    key: "gemini-3.5-flash",
-    altKeys: [
+      "gemini-3.5-flash",
       "gemini-3.5-flash-low",
       "gemini-3.5-flash-medium",
       "gemini-3.5-flash-high",
       "gemini-3-flash-agent",
       "gemini-3-flash",
-    ],
-    display: "G3.5Flash",
-  },
-  "gemini-3.6-flash": {
-    key: "gemini-3.6-flash",
-    altKeys: [
+      "gemini-3.6-flash",
       "gemini-3.6-flash-high",
       "gemini-3.6-flash-medium",
       "gemini-3.6-flash-low",
       "gemini-3.6-flash-tiered",
     ],
-    display: "G3.6Flash",
+    display: "Gemini",
   },
 };
 
-// Map request model names to quota model keys
+// Map request model names to quota model keys (family buckets).
 export function resolveQuotaModelKey(requestModel: string): string | null {
   const lower = requestModel.toLowerCase();
-  // Explicit mappings to avoid substring collisions
-  if (lower.includes("gemini-3-flash-agent")) return "gemini-3.5-flash";
-  if (lower.includes("gpt-oss")) return "claude-opus-4-6-thinking";
-
-  for (const [, config] of Object.entries(QUOTA_MODEL_KEYS)) {
-    if (
-      lower.includes(config.key) ||
-      config.altKeys.some((alt) => lower.includes(alt))
-    ) {
-      return config.key;
-    }
+  // Claude family: every Claude variant and gpt-oss share one bucket.
+  if (
+    lower.includes("claude") ||
+    lower.includes("gpt-oss")
+  ) {
+    return "claude";
   }
-  // Broad fallback matching
-  if (
-    lower.includes("gemini") &&
-    lower.includes("3.6") &&
-    lower.includes("flash")
-  )
-    return "gemini-3.6-flash";
-  if (
-    lower.includes("gemini") &&
-    lower.includes("3.5") &&
-    lower.includes("flash")
-  )
-    return "gemini-3.5-flash";
-  if (lower.includes("gemini") && lower.includes("pro"))
-    return "gemini-3.1-pro";
-  if (lower.includes("gemini") && lower.includes("flash"))
-    return "gemini-3.5-flash";
-  if (lower.includes("claude")) return "claude-opus-4-6-thinking";
+  // Gemini family: every Gemini variant shares one bucket.
+  if (lower.includes("gemini")) {
+    return "gemini";
+  }
   return null;
 }
 
@@ -328,6 +359,10 @@ export interface AccountRuntime {
   // Quota tracking (from API) - per-model data
   quota: ModelQuota[];
   lastQuotaPoll: number;
+  // Per-provider RAW POLL strings, accumulated by each adapter during a
+  // quota cycle. The rotator emits one consolidated log per account/cycle
+  // and resets the map.
+  lastPollByProvider?: Record<string, string>;
   // Status
   lastUsed: number;
   lastError: string | null;
@@ -349,6 +384,8 @@ export interface AccountRuntime {
 // Per-model rotation state tracked by the rotator
 export interface ModelRotationState {
   activeAccountIndex: number;
+  /** Preferred account for quota-aware policies while a temporary fallback is active. */
+  stickyAccountIndex?: number;
   quotaAtRotationStart: number; // quota % when this account became active for this model
   requestsOnActiveAccount: number;
 }
@@ -371,6 +408,8 @@ export interface PersistedState {
   modelAccounts: Record<string, number>;
   // Per-model request count on the active account
   modelRequestCounts?: Record<string, number>;
+  // Per-model preferred account for quota-aware sticky/sequential fallback
+  modelStickyAccounts?: Record<string, number>;
   // Legacy fallback
   currentIndex?: number;
   protectivePauseUntil?: number;
@@ -436,6 +475,10 @@ export interface StatusResponse {
     bindHost: string;
   };
   routingDiagnostics: Record<string, RoutingModelDiagnostics>;
+  ollamaModels: string[];
+  // Present only when at least one account carries an ollama credential.
+  modelTierAccess?: Record<string, ModelTierAccess>;
+  predictions: Record<string, ExhaustionPrediction>;
   circuitBreakers: {
     model: Record<string, { until: number; remainingMs: number }>;
     project: Record<string, { until: number; remainingMs: number }>;
@@ -472,6 +515,8 @@ export interface StatusResponse {
 export interface AccountStatus {
   email: string;
   label: string;
+  /** Provider id, e.g. "google-antigravity" | "ollama". */
+  provider: string;
   status:
     | "active"
     | "ready"
@@ -678,6 +723,54 @@ export const MODEL_PRICING: Record<
     cachingStoragePer1MPerHour: 1.0,
   },
   "gpt-oss-120b-medium": { inputPer1M: 2.0, outputPer1M: 10.0 },
+
+  // Ollama Cloud model pricing (USD per 1M tokens). Sourced from the
+  // ~/ollama-rotator project (verified 2026-08-09).
+  "gpt-oss:20b":                 { inputPer1M: 0.075,  outputPer1M: 0.30 },
+  "gpt-oss:120b":                { inputPer1M: 0.15,   outputPer1M: 0.60 },
+  "deepseek-v4-flash:preview":   { inputPer1M: 0.14,   outputPer1M: 0.28,  cachingPer1M: 0.0028 },
+  "deepseek-v4-flash:0731":      { inputPer1M: 0.14,   outputPer1M: 0.28,  cachingPer1M: 0.0028 },
+  "deepseek-v4-pro":             { inputPer1M: 0.435,  outputPer1M: 0.87,  cachingPer1M: 0.0036 },
+  "qwen3.5:397b":                { inputPer1M: 0.60,   outputPer1M: 3.60 },
+  "glm-5.1":                     { inputPer1M: 0.80,   outputPer1M: 2.56 },
+  "glm-5.2":                     { inputPer1M: 0.80,   outputPer1M: 2.56 },
+  "gemma4:31b":                  { inputPer1M: 0.38,   outputPer1M: 1.15 },
+  "kimi-k2.6":                   { inputPer1M: 0.95,   outputPer1M: 4.00 },
+  "kimi-k2.7-code":              { inputPer1M: 0.95,   outputPer1M: 4.00 },
+  "kimi-k3":                     { inputPer1M: 0.95,   outputPer1M: 4.00 },
+  "minimax-m2.7":                { inputPer1M: 0.30,   outputPer1M: 1.20 },
+  "minimax-m3":                  { inputPer1M: 0.30,   outputPer1M: 1.20 },
+  "mistral-large-3:675b":        { inputPer1M: 0.50,   outputPer1M: 1.50 },
+  "nemotron-3-nano:30b":         { inputPer1M: 0.50,   outputPer1M: 1.50 },
+  "nemotron-3-super":            { inputPer1M: 0.60,   outputPer1M: 1.80 },
+  "nemotron-3-ultra":            { inputPer1M: 0.60,   outputPer1M: 1.80 },
+};
+
+// Which Ollama Cloud models respond on which subscription tiers, verified
+// 2026-08-09 with minimal /api/chat probes against free-tier accounts
+// (HTTP 200 vs 403). "free" = served on the free tier; "subscription" =
+// the API returns "this model requires a subscription" until the account
+// is upgraded. Sourced from ~/ollama-rotator.
+export type ModelTierAccess = "free" | "subscription";
+export const MODEL_TIER_ACCESS: Record<string, ModelTierAccess> = {
+  "gpt-oss:20b":                  "free",
+  "gpt-oss:120b":                 "free",
+  "gemma4:31b":                   "free",
+  "minimax-m3":                   "free",
+  "nemotron-3-nano:30b":          "free",
+  "nemotron-3-super":             "free",
+  "nemotron-3-ultra":             "free",
+  "deepseek-v4-flash:0731":       "subscription",
+  "deepseek-v4-flash:preview":    "subscription",
+  "deepseek-v4-pro":              "subscription",
+  "glm-5.1":                      "subscription",
+  "glm-5.2":                      "subscription",
+  "kimi-k2.6":                    "subscription",
+  "kimi-k2.7-code":               "subscription",
+  "kimi-k3":                      "subscription",
+  "minimax-m2.7":                 "subscription",
+  "mistral-large-3:675b":         "subscription",
+  "qwen3.5:397b":                 "subscription",
 };
 
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -702,20 +795,50 @@ export const ANTIGRAVITY_ENDPOINTS = [
   "https://daily-cloudcode-pa.googleapis.com",
 ] as const;
 
+// Maps each quota pool key (Google quota API) to the cheapest upstream model
+// used for kickstart warmup requests. Gemini 3.6/3.5 Flash and Gemini 3.1 Pro
+// share the same upstream pool, so all map to gemini-3-flash.
+export const KICKSTART_MODEL_FOR_QUOTA_POOL: Record<string, string> = {
+  "claude-opus-4-6-thinking": "gpt-oss-120b-medium",
+  "gemini-3.5-flash": "gemini-3-flash",
+  "gemini-3.6-flash": "gemini-3-flash",
+  "gemini-3.1-pro": "gemini-3-flash",
+};
+
 export const QUOTA_API_URL =
   "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
+
+// ── Ollama Cloud endpoints ──────────────────────────────────────────
+export const OLLAMA_API_BASE = "https://ollama.com/api";
+export const OLLAMA_OPENAI_BASE = "https://ollama.com/v1";
+export const OLLAMA_USAGE_URL = "https://ollama.com/api/usage";
+export const OLLAMA_TAGS_URL = "https://ollama.com/api/tags";
+// Mutable so tests can redirect to a local stub (same pattern as ANTIGRAVITY_ENDPOINTS).
+export const OLLAMA_CHAT_ENDPOINTS = ["https://ollama.com/api/chat"];
+export const OLLAMA_CHAT_URL = OLLAMA_CHAT_ENDPOINTS[0];
+
+// User-Agent sent to ollama.com (defaults are spoofed per docs examples).
+export const OLLAMA_USER_AGENT =
+  process.env.TUXEVIL_ROTATOR_OLLAMA_USER_AGENT ||
+  process.env.OLLAMA_ROTATOR_USER_AGENT ||
+  "ollama-rotator/1.0";
+
+// TTL for the cached /api/tags listing (model catalog refresh).
+export const TAGS_CACHE_TTL_MS = 5 * 60 * 1000;
 export const ANTIGRAVITY_VERSION =
-	process.env.PI_AI_ANTIGRAVITY_VERSION || "1.107.0";
+	rotatorEnv("ANTIGRAVITY_VERSION") ||
+	process.env.PI_AI_ANTIGRAVITY_VERSION ||
+	"1.107.0";
 export const QUOTA_USER_AGENT =
-	process.env.PI_ROTATOR_QUOTA_USER_AGENT ||
+	rotatorEnv("QUOTA_USER_AGENT") ||
 	`antigravity/${ANTIGRAVITY_VERSION} darwin/arm64`;
 export const REQUEST_USER_AGENT =
-  process.env.PI_ROTATOR_REQUEST_USER_AGENT || QUOTA_USER_AGENT;
+  rotatorEnv("REQUEST_USER_AGENT") || QUOTA_USER_AGENT;
 export const REQUEST_GOOG_API_CLIENT =
-  process.env.PI_ROTATOR_X_GOOG_API_CLIENT ||
+  rotatorEnv("X_GOOG_API_CLIENT") ||
   "google-cloud-sdk vscode_cloudshelleditor/0.1";
 export const REQUEST_CLIENT_METADATA =
-  process.env.PI_ROTATOR_CLIENT_METADATA ||
+  rotatorEnv("CLIENT_METADATA") ||
   JSON.stringify({
     ideType: "ANTIGRAVITY",
     platform: "MACOS",

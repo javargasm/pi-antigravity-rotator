@@ -5,7 +5,7 @@ Virtual Keys and Spend Logging require PostgreSQL. See [Setting up PostgreSQL](i
 Enable by setting:
 
 ```bash
-export PI_ROTATOR_DATABASE_URL="postgres://user:pass@localhost:5432/rotatordb"
+export TUXEVIL_ROTATOR_DATABASE_URL="postgres://user:pass@localhost:5432/rotatordb"
 ```
 
 ## Virtual Keys
@@ -30,16 +30,16 @@ The dashboard provides a full CRUD interface for virtual keys: list, generate, u
 
 ```bash
 # List all virtual keys
-pi-antigravity-rotator keys list
+tuxevil-rotator keys list
 
 # Generate a new key scoped to specific models
-pi-antigravity-rotator keys generate \
+tuxevil-rotator keys generate \
   --alias "cursor-agent" \
   --user-id "alice" \
   --models "gemini-3.6-flash-high,claude-sonnet-4-6"
 
 # Delete a key by its hash
-pi-antigravity-rotator keys delete <hash>
+tuxevil-rotator keys delete <hash>
 ```
 
 **Via REST API** (admin-authenticated):
@@ -89,7 +89,7 @@ Developer A  →  rk-abc123  (Flash models only, 100 RPM)
 Developer B  →  rk-def456  (All models)
 CI Pipeline  →  rk-ghi789  (Flash low only)
               ↓
-        pi-antigravity-rotator
+        tuxevil-rotator
               ↓
         Google Accounts (pooled)
 ```
@@ -142,6 +142,6 @@ All spend endpoints require admin authentication.
 Logs are automatically cleaned up. Configure via:
 
 ```bash
-export PI_ROTATOR_LOG_RETENTION_DAYS=30   # default: 30 days for logs
+export TUXEVIL_ROTATOR_LOG_RETENTION_DAYS=30   # default: 30 days for logs
 # Daily aggregates are retained for 90 days
 ```

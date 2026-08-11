@@ -35,3 +35,4 @@ DEVELOPMENT_NOTES.md
 *.tmp
 *.orig
 .DS_Store
+ollama-debug-last.json

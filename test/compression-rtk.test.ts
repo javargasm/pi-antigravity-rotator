@@ -4,7 +4,7 @@ import { detectCommandType } from "../src/compression/rtk/command-detector.js";
 import { loadBuiltinRtkFilters, matchRtkFilter } from "../src/compression/rtk/filter-loader.js";
 import { applyLineFilter } from "../src/compression/rtk/line-filter.js";
 import { compressRTK } from "../src/compression/rtk/index.js";
-import type { ChatMessage } from "../src/compat/translators.js";
+import type { ChatMessage } from "../src/providers/google-antigravity/translators.js";
 
 describe("Compression RTK Engine", () => {
   it("loads builtin filter packs", () => {

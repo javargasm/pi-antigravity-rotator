@@ -58,6 +58,16 @@ describe("validators", () => {
 		assert.equal(result.ok, true);
 	});
 
+	it("accepts quota-aware sequential and sticky routing policies", () => {
+		for (const routingPolicy of ["sequential-quota", "sticky-quota"] as const) {
+			const result = validateConfig({
+				accounts: [validAccount],
+				routingPolicy,
+			});
+			assert.equal(result.ok, true, routingPolicy);
+		}
+	});
+
 	it("rejects quota polling intervals outside the safe bounds", () => {
 		for (const interval of [1, 86_400_000 + 1]) {
 			const result = validateConfig({

@@ -1,3 +1,5 @@
+import type { Dispatcher } from "undici";
+
 export interface FetchWithRetryOptions extends RequestInit {
 	retries?: number;
 	timeoutMs?: number;
@@ -6,7 +8,11 @@ export interface FetchWithRetryOptions extends RequestInit {
 	retryStatuses?: number[];
 	fetchImpl?: typeof fetch;
 	sleepImpl?: (ms: number) => Promise<void>;
+	/** Node/Undici dispatcher selected from the account's provider config. */
+	dispatcher?: Dispatcher;
 }
+
+export type RequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
 
 export const DEFAULT_RETRY_STATUSES = [408, 429, 500, 502, 503, 504] as const;
 
@@ -54,16 +60,19 @@ export async function fetchWithRetry(input: RequestInfo | URL, options: FetchWit
 		retryStatuses = [...DEFAULT_RETRY_STATUSES],
 		fetchImpl = fetch,
 		sleepImpl = sleep,
+		dispatcher,
 		...init
 	} = options;
 
 	let lastError: unknown;
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
-			const response = await fetchImpl(input, {
+			const requestInit: RequestInitWithDispatcher = {
 				...init,
+				dispatcher,
 				signal: createTimeoutSignal(timeoutMs, init.signal),
-			});
+			};
+			const response = await fetchImpl(input, requestInit);
 
 			if (!isRetryableStatus(response.status, retryStatuses) || attempt === retries) {
 				return response;

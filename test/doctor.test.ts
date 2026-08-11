@@ -33,7 +33,7 @@ describe("doctor command", () => {
       },
     );
     assert.equal(run.status, 0);
-    assert.match(run.stdout, /PI_ROTATOR_ADMIN_TOKEN is not configured/);
+    assert.match(run.stdout, /TUXEVIL_ROTATOR_ADMIN_TOKEN is not configured/);
   });
 
   it("warns when config is corrupted (treated as missing by repository)", () => {

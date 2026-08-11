@@ -2,7 +2,7 @@ import {
   extractPreservedBlocks,
   restorePreservedBlocks,
 } from "./preservation.js";
-import type { ChatMessage } from "../compat/translators.js";
+import type { ChatMessage } from "../providers/google-antigravity/translators.js";
 
 export interface LiteCompressionOptions {
   /** Maximum length for tool result messages before truncation (default: 2000) */

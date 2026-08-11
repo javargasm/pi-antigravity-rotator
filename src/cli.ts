@@ -1,11 +1,15 @@
-// CLI entry point for pi-antigravity-rotator
+// CLI entry point for tuxevil-rotator
 // Usage:
-//   pi-antigravity-rotator start     Start the proxy
-//   pi-antigravity-rotator login     Add a new account
-//   pi-antigravity-rotator status    Show account status
-//   pi-antigravity-rotator keys      Manage virtual API keys
+//   tuxevil-rotator start     Start the proxy
+//   tuxevil-rotator login     Add a new account
+//   tuxevil-rotator status    Show account status
+//   tuxevil-rotator keys      Manage virtual API keys
 
-import { getConfigDir } from "./paths.js";
+import {
+  getConfigDir,
+  getLastLegacyMigrationReport,
+  migrateLegacyConfig,
+} from "./paths.js";
 
 const args = process.argv
   .slice(2)
@@ -29,16 +33,60 @@ switch (command) {
   }
   case "login": {
     // Mirror the environment of the installed systemd service unit
-    // (PI_ROTATOR_*, ANTIGRAVITY_*, DATABASE_URL) into this CLI process so
+    // (TUXEVIL_ROTATOR_*, ANTIGRAVITY_*, DATABASE_URL) into this CLI process so
     // login talks to the same backend store the running service uses. Without
     // this, login would write to the on-disk accounts.json while the service
-    // (configured with PI_ROTATOR_DATABASE_URL) reads from PostgreSQL.
+    // (configured with TUXEVIL_ROTATOR_DATABASE_URL) reads from PostgreSQL.
     const { loadSystemdEnvironment } = await import("./systemd-env.js");
     loadSystemdEnvironment();
     const { initDb } = await import("./db-store.js");
     await initDb();
+    const providerFlag = process.argv.indexOf("--provider");
+    const providerId =
+      providerFlag >= 0 && process.argv[providerFlag + 1]
+        ? process.argv[providerFlag + 1]
+        : undefined;
     const { runLogin } = await import("./login.js");
-    await runLogin();
+    await runLogin(providerId);
+    break;
+  }
+  case "import": {
+    const { initDb, closeDb } = await import("./db-store.js");
+    const { readFile } = await import("node:fs/promises");
+    const { homedir } = await import("node:os");
+    const { join, resolve } = await import("node:path");
+    const {
+      ensurePiAuthConfig,
+      ensurePiModelsConfig,
+      importAccountsToConfig,
+    } = await import("./account-store.js");
+    const sourcePath = resolve(
+      args[1] || join(homedir(), ".config", "antigravity", "accounts.json"),
+    );
+
+    try {
+      await initDb();
+      const parsed = JSON.parse(await readFile(sourcePath, "utf-8")) as unknown;
+      const result = await importAccountsToConfig(parsed);
+      if (result.added + result.updated > 0) {
+        await ensurePiModelsConfig();
+        await ensurePiAuthConfig();
+      }
+      console.log(`Imported ${result.added + result.updated} account(s) from ${sourcePath}`);
+      console.log(`  Added:     ${result.added}`);
+      console.log(`  Updated:   ${result.updated}`);
+      console.log(`  Unchanged: ${result.unchanged}`);
+      console.log(`  Skipped:   ${result.skipped}`);
+      for (const error of result.errors) console.error(`  Skipped: ${error}`);
+      if (result.errors.length > 0) process.exitCode = 1;
+    } catch (err) {
+      console.error(
+        `Import failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      process.exitCode = 1;
+    } finally {
+      await closeDb();
+    }
     break;
   }
   case "status": {
@@ -87,11 +135,32 @@ switch (command) {
     process.exit(result.ok ? 0 : 1);
     break;
   }
+  case "migrate": {
+    const report =
+      getLastLegacyMigrationReport() ?? migrateLegacyConfig(getConfigDir());
+    console.log("Legacy migration complete.");
+    console.log(`  Target: ${report.targetDir}`);
+    if (report.copied.length > 0) {
+      console.log(`  Copied: ${report.copied.join(", ")}`);
+    }
+    if (report.skipped.length > 0) {
+      console.log(`  Already present: ${report.skipped.join(", ")}`);
+    }
+    if (report.errors.length > 0) {
+      console.error("  Errors:");
+      for (const error of report.errors) console.error(`    ${error}`);
+      process.exitCode = 1;
+    } else if (report.copied.length === 0 && report.skipped.length === 0) {
+      console.log("  No legacy files were found; nothing to migrate.");
+    }
+    console.log("  Legacy files were not removed.");
+    break;
+  }
   case "keys": {
     const initDb = (await import("./db-store.js")).initDb;
     const { isDbConfigured } = await import("./db-store.js");
     if (!isDbConfigured()) {
-      console.error("Virtual keys require PostgreSQL. Set PI_ROTATOR_DATABASE_URL.");
+      console.error("Virtual keys require PostgreSQL. Set TUXEVIL_ROTATOR_DATABASE_URL.");
       process.exit(1);
     }
     await initDb();
@@ -109,7 +178,7 @@ switch (command) {
     if (subAction === "list") {
       const keys = await listVirtualKeys();
       if (keys.length === 0) {
-        console.log("No virtual keys found. Use 'pi-antigravity-rotator keys generate' to create one.");
+        console.log("No virtual keys found. Use 'tuxevil-rotator keys generate' to create one.");
       } else {
         console.log(`${keys.length} virtual key(s):`);
         console.log("─".repeat(70));
@@ -163,7 +232,7 @@ switch (command) {
     if (subAction === "delete") {
       const hash = args[2];
       if (!hash) {
-        console.error("Usage: pi-antigravity-rotator keys delete <hash>");
+        console.error("Usage: tuxevil-rotator keys delete <hash>");
         process.exit(1);
       }
       const deleted = await deleteVirtualKey(hash);
@@ -177,23 +246,29 @@ switch (command) {
     }
 
     console.error(`Unknown subcommand: ${subAction}`);
-    console.log("Usage: pi-antigravity-rotator keys [list|generate|delete]");
+    console.log("Usage: tuxevil-rotator keys [list|generate|delete]");
     process.exit(1);
   }
   break;
   default:
-    console.log("Pi Antigravity Rotator");
+    console.log("Tuxevil Rotator");
     console.log();
     console.log("Usage:");
-    console.log("  pi-antigravity-rotator start     Start the proxy (default)");
-    console.log("  pi-antigravity-rotator login     Add a new Google account");
+    console.log("  tuxevil-rotator start     Start the proxy (default)");
+    console.log("  tuxevil-rotator login     Add a Google account (login --provider ollama for Ollama Cloud)");
     console.log(
-      "  pi-antigravity-rotator status    Show account status (JSON)",
+      "  tuxevil-rotator import    Import Google/Pi accounts from JSON (default: ~/.config/antigravity/accounts.json)",
     );
     console.log(
-      "  pi-antigravity-rotator doctor    Validate config and local state",
+      "  tuxevil-rotator status    Show account status (JSON)",
     );
-    console.log("  pi-antigravity-rotator keys     Manage virtual API keys");
+    console.log(
+      "  tuxevil-rotator doctor    Validate config and local state",
+    );
+    console.log(
+      "  tuxevil-rotator migrate   Copy legacy config files safely",
+    );
+    console.log("  tuxevil-rotator keys     Manage virtual API keys");
     console.log(
       "                                 list   - List all virtual keys",
     );
@@ -206,10 +281,13 @@ switch (command) {
     console.log();
     console.log("Options:");
     console.log(
-      "  --config-dir <path>    Config directory (default: ~/.pi-antigravity-rotator/)",
+      "  --config-dir <path>    Config directory (default: ~/.tuxevil-rotator/)",
+    );
+    console.log(
+      "  routingPolicy          timer-first | tier-first | quota-first | hybrid | sequential-quota | sticky-quota (accounts.json)",
     );
     console.log();
     console.log("Environment:");
-    console.log("  PI_ROTATOR_DIR         Config directory override");
+    console.log("  TUXEVIL_ROTATOR_DIR         Config directory override");
     process.exit(command === "help" || command === "--help" ? 0 : 1);
 }

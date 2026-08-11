@@ -8,9 +8,9 @@ import type { Config } from "../src/types.js";
 // Keep direct execution of this file from persisting its fixture accounts in
 // the operator's real config directory. `npm test` already sets this env var,
 // but `node --test test/v2-routing.test.ts` does not.
-if (!process.env.PI_ROTATOR_DIR) {
-  process.env.PI_ROTATOR_DIR = mkdtempSync(
-    join(tmpdir(), "pi-antigravity-v2-routing-"),
+if (!process.env.TUXEVIL_ROTATOR_DIR) {
+  process.env.TUXEVIL_ROTATOR_DIR = mkdtempSync(
+    join(tmpdir(), "tuxevil-v2-routing-"),
   );
 }
 
@@ -117,7 +117,7 @@ describe("v2 routing and status", () => {
     rotator.stopQuotaPolling();
     const status = rotator.getStatus();
     assert.equal(status.security.adminTokenConfigured, false);
-    assert.match(status.security.warning || "", /PI_ROTATOR_ADMIN_TOKEN/);
+    assert.match(status.security.warning || "", /TUXEVIL_ROTATOR_ADMIN_TOKEN/);
   });
 
   it("surfaces proxy exposure warnings even when admin auth is configured", () => {
@@ -129,7 +129,7 @@ describe("v2 routing and status", () => {
     assert.match(status.security.warning || "", /proxy routes are unauthenticated/);
     assert.doesNotMatch(
       status.security.warning || "",
-      /PI_ROTATOR_ADMIN_TOKEN is not configured/,
+      /TUXEVIL_ROTATOR_ADMIN_TOKEN is not configured/,
     );
   });
 
@@ -210,6 +210,149 @@ describe("v2 routing and status", () => {
     assert.equal(
       status.routingDiagnostics["gemini-3.1-pro"].accounts[0].rejectedReason,
       "token-bucket-empty",
+    );
+  });
+
+  it("keeps sticky-quota on the active account beyond the request threshold", async () => {
+    const config = makeConfig();
+    config.routingPolicy = "sticky-quota";
+    config.requestsPerRotation = 1;
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+    rotator.ensureValidToken = async () => {};
+    const model = "gemini";
+    for (const account of rotator.accounts) {
+      account.quota = [
+        {
+          modelKey: model,
+          displayName: "G3.1Pro",
+          percentRemaining: 80,
+          resetTime: null,
+          timerType: "7d",
+        },
+      ];
+    }
+    rotator.modelState.set(model, {
+      activeAccountIndex: 0,
+      stickyAccountIndex: 0,
+      quotaAtRotationStart: 80,
+      requestsOnActiveAccount: 0,
+    });
+
+    const account = await rotator.getActiveAccount(model);
+    assert.equal(account?.config.email, "a@example.com");
+    rotator.finishRequest(account, model);
+    assert.equal(rotator.recordRequest(account, model), false);
+    assert.equal(rotator.modelState.get(model).activeAccountIndex, 0);
+  });
+
+  it("temporarily falls back from sticky-quota and restores the preferred account", async () => {
+    const config = makeConfig();
+    config.routingPolicy = "sticky-quota";
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+    rotator.ensureValidToken = async () => {};
+    const model = "gemini";
+    for (const account of rotator.accounts) {
+      account.quota = [
+        {
+          modelKey: model,
+          displayName: "G3.1Pro",
+          percentRemaining: 80,
+          resetTime: null,
+          timerType: "7d",
+        },
+      ];
+    }
+    rotator.modelState.delete(model);
+    const initial = await rotator.getActiveAccount(model);
+    assert.equal(initial?.config.email, "a@example.com");
+    rotator.finishRequest(initial, model);
+    assert.equal(rotator.modelState.get(model).stickyAccountIndex, 0);
+    rotator.accounts[0].cooldownsByModel[model] = Date.now() + 60_000;
+
+    const fallback = await rotator.getActiveAccount(model);
+    assert.equal(fallback?.config.email, "b@example.com");
+    rotator.finishRequest(fallback, model);
+    assert.equal(rotator.modelState.get(model).stickyAccountIndex, 0);
+
+    rotator.accounts[0].cooldownsByModel[model] = Date.now() - 1;
+    const restored = await rotator.getActiveAccount(model);
+    assert.equal(restored?.config.email, "a@example.com");
+    rotator.finishRequest(restored, model);
+    assert.equal(rotator.modelState.get(model).activeAccountIndex, 0);
+  });
+
+  it("permanently leaves a sticky account after its quota reaches zero", async () => {
+    const config = makeConfig();
+    config.routingPolicy = "sticky-quota";
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+    rotator.ensureValidToken = async () => {};
+    const model = "gemini";
+    rotator.accounts[0].quota = [
+      {
+        modelKey: model,
+        displayName: "G3.1Pro",
+        percentRemaining: 0,
+        resetTime: null,
+        timerType: "7d",
+      },
+    ];
+    rotator.accounts[1].quota = [
+      {
+        modelKey: model,
+        displayName: "G3.1Pro",
+        percentRemaining: 80,
+        resetTime: null,
+        timerType: "7d",
+      },
+    ];
+    rotator.modelState.set(model, {
+      activeAccountIndex: 0,
+      stickyAccountIndex: 0,
+      quotaAtRotationStart: 80,
+      requestsOnActiveAccount: 3,
+    });
+
+    const replacement = await rotator.getActiveAccount(model);
+    assert.equal(replacement?.config.email, "b@example.com");
+    rotator.finishRequest(replacement, model);
+    assert.equal(rotator.modelState.get(model).stickyAccountIndex, 1);
+  });
+
+  it("uses circular account order for sequential-quota", () => {
+    const config = makeConfig();
+    config.routingPolicy = "sequential-quota";
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+    const model = "gemini";
+    rotator.accounts[0].quota = [
+      {
+        modelKey: model,
+        displayName: "G3.1Pro",
+        percentRemaining: 1,
+        resetTime: null,
+        timerType: "fresh",
+      },
+    ];
+    rotator.accounts[1].quota = [
+      {
+        modelKey: model,
+        displayName: "G3.1Pro",
+        percentRemaining: 99,
+        resetTime: null,
+        timerType: "7d",
+      },
+    ];
+
+    assert.equal(
+      rotator.pickBestModelAccount(model, Date.now(), -1)?.config.email,
+      "a@example.com",
+    );
+    assert.equal(
+      rotator.pickBestModelAccount(model, Date.now(), 0)?.config.email,
+      "b@example.com",
     );
   });
 
@@ -386,6 +529,110 @@ describe("v2 routing and status", () => {
     assert.ok(
       reason.indexOf("daily account budget exhausted") <
         reason.indexOf("quota is exhausted for this model"),
+    );
+  });
+
+  it("keeps dual accounts (google + ollama) eligible for google pools", () => {
+    const config = makeConfig();
+    config.accounts = [
+      {
+        email: "dual@example.com",
+        credentials: [
+          { provider: "google-antigravity", refreshToken: "g" },
+          { provider: "ollama", apiKey: "o" },
+        ],
+        projectId: "pd",
+        tier: "free",
+      },
+      {
+        email: "google-only@example.com",
+        provider: "google-antigravity",
+        refreshToken: "g2",
+        projectId: "pg",
+        tier: "free",
+      },
+      {
+        email: "ollama-only@example.com",
+        provider: "ollama",
+        apiKey: "o2",
+        projectId: "po",
+        tier: "free",
+      },
+    ];
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+
+    function quota(modelKey: string) {
+      return [
+        {
+          modelKey,
+          displayName: modelKey,
+          percentRemaining: 100,
+          resetTime: null,
+          timerType: "7d",
+        },
+      ];
+    }
+    for (const account of rotator.accounts) {
+      account.quota = [...quota("claude"), ...quota("session")];
+      account.healthScore = 1;
+    }
+
+    function allowed(modelKey: string): string | null {
+      const available = rotator.accounts
+        .filter((a: any) => rotator.isProviderEligibleForKey(a, modelKey))
+        .map((a: any) => a.config.email);
+      return available[0] ?? null;
+    }
+
+    const now = Date.now();
+    const claudeBest = rotator.pickBestModelAccount("claude", now, -1);
+    assert.equal(allowed("claude"), "dual@example.com");
+    assert.equal(claudeBest?.config.email, "dual@example.com");
+
+    const sessionBest = rotator.pickBestModelAccount("session", now, -1);
+    assert.equal(sessionBest?.config.email, "dual@example.com");
+    assert.equal(allowed("session"), "dual@example.com");
+  });
+
+  it("arms the model breaker on plain 429s but not on quota exhaustion", () => {
+    const config = makeConfig();
+    config.accounts.push({
+      email: "c@example.com",
+      refreshToken: "c",
+      projectId: "pc",
+      tier: "free",
+    });
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+    const now = Date.now();
+    const cooldownMs = 60_000;
+
+    rotator.recordProvider429(rotator.accounts[0], "claude", cooldownMs, true);
+    rotator.recordProvider429(rotator.accounts[1], "claude", cooldownMs, true);
+    assert.equal(
+      rotator.modelBreakers["claude"] ?? 0,
+      0,
+      "quota exhaustion must not arm the model breaker",
+    );
+
+    rotator.recordProvider429(rotator.accounts[0], "claude", cooldownMs, false);
+    rotator.recordProvider429(
+      rotator.accounts[1],
+      "claude",
+      cooldownMs * 2,
+      false,
+    );
+    assert.equal(
+      rotator.modelBreakers["claude"] ?? 0,
+      0,
+      "below threshold must not arm the breaker",
+    );
+
+    rotator.recordProvider429(rotator.accounts[2], "claude", cooldownMs, false);
+    assert.ok(
+      rotator.modelBreakers["claude"] > now,
+      "3 unique accounts with plain 429 must arm the model breaker",
     );
   });
 });

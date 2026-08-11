@@ -10,8 +10,16 @@ import {
   getOAuthClientConfig,
   getUserEmail,
   isHostedOAuthConfigured,
-} from "./oauth.js";
-import type { AccountRotator } from "./rotator.js";
+} from "./providers/google-antigravity/oauth.js";
+import {
+  defaultAccountEmail,
+  validateApiKey,
+} from "./providers/ollama/api-key-validation.js";
+import type { AccountConfig } from "./types.js";
+
+interface AccountSink {
+  addOrUpdateAccount(account: AccountConfig): Promise<void>;
+}
 
 interface PendingSession {
   verifier: string;
@@ -154,6 +162,47 @@ function renderPage(title: string, body: string): string {
     padding-left: 18px;
     margin: 16px 0 0;
   }
+  .field {
+    width: 100%;
+    margin-top: 12px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: rgba(31,42,31,0.03);
+  }
+  label {
+    display: block;
+    margin-top: 14px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .tabs {
+    display: flex;
+    gap: 8px;
+    margin: 20px 0 4px;
+    flex-wrap: wrap;
+  }
+  .tab {
+    padding: 10px 16px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: rgba(31,42,31,0.04);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tab.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+  }
+  .panel { display: none; }
+  .panel.active { display: block; }
 </style>
 </head>
 <body>
@@ -261,8 +310,14 @@ export function serveCliLogin(res: ServerResponse): void {
     renderPage(
       "Add Account",
       `<h1>Add Account</h1>
-<p>This page works like the CLI login. Follow the steps below to add a Google account to the rotator.</p>
+<p>This page works like the CLI login. Pick a provider below and follow the steps to add an account to the rotator.</p>
 
+<div class="tabs">
+  <button class="tab active" data-panel="panel-google">Google (Antigravity)</button>
+  <button class="tab" data-panel="panel-ollama">Ollama Cloud</button>
+</div>
+
+<div class="panel active" id="panel-google">
 <h3 style="margin:24px 0 8px;font-size:18px;">Step 1 &mdash; Sign in with Google</h3>
 <p>Click the button below to open the Google sign-in page in a new tab:</p>
 <a class="cta" href="${escapeHtml(authUrl)}" target="_blank" rel="noopener" style="font-size:16px;">
@@ -282,9 +337,36 @@ export function serveCliLogin(res: ServerResponse): void {
     Connect Account
   </button>
 </form>
+</div>
+
+<div class="panel" id="panel-ollama">
+<p>Paste an Ollama Cloud API key to add the account to this rotator. The key is validated against ollama.com before saving.</p>
+<p class="mono">Create a key at https://ollama.com/settings/keys</p>
+<form id="keyForm" style="margin-top:12px;">
+  <label for="email">Account identifier (email or label)</label>
+  <input id="email" name="email" class="field" placeholder="me@example.com (optional)" autocomplete="off" />
+  <label for="apiKey">Ollama API key</label>
+  <input id="apiKey" name="apiKey" class="field" type="password" placeholder="ollama-..." autocomplete="off" required />
+  <button type="submit" class="cta" style="cursor:pointer;border:none;font-family:inherit;font-size:16px;margin-top:12px;">
+    Connect Account
+  </button>
+</form>
+</div>
+
 <div id="result" style="margin-top:18px;"></div>
 
 <script>
+document.querySelectorAll('.tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
+    document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('active', p.id === tab.dataset.panel));
+  });
+});
+
+function showResult(html) {
+  document.getElementById('result').innerHTML = html;
+}
+
 document.getElementById('pasteForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
@@ -292,24 +374,24 @@ document.getElementById('pasteForm').addEventListener('submit', async (e) => {
   const resultDiv = document.getElementById('result');
   const redirectUrl = form.redirectUrl.value.trim();
   const session = form.session.value;
-  if (!redirectUrl) { resultDiv.innerHTML = '<div class="note error">Please paste the redirect URL.</div>'; return; }
+  if (!redirectUrl) { showResult('<div class="note error">Please paste the redirect URL.</div>'); return; }
   btn.disabled = true;
   btn.textContent = 'Connecting...';
-  resultDiv.innerHTML = '<div class="note">Exchanging code for tokens...</div>';
+  showResult('<div class="note">Exchanging code for tokens...</div>');
   try {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('token') || '';
     const res = await fetch('/api/cli-login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Rotator-Admin-Token': token } : {}) },
-      body: JSON.stringify({ session, redirectUrl }),
+      body: JSON.stringify({ provider: 'google-antigravity', session, redirectUrl }),
     });
     const data = await res.json();
     if (data.ok) {
-      resultDiv.innerHTML = '<div class="note" style="border-left-color:var(--accent);background:rgba(30,107,82,0.12);">' +
+      showResult('<div class="note" style="border-left-color:var(--accent);background:rgba(30,107,82,0.12);">' +
         '<strong id="loginResultEmail"></strong> ' + (data.isNew ? 'added' : 'updated') + ' successfully.<br>' +
         'Project: <span id="loginResultProject" class="mono" style="padding:2px 6px;"></span>' +
-        '</div>';
+        '</div>');
       document.getElementById('loginResultEmail').textContent = data.email || '';
       document.getElementById('loginResultProject').textContent = data.projectId || '';
     } else {
@@ -330,6 +412,47 @@ document.getElementById('pasteForm').addEventListener('submit', async (e) => {
     btn.textContent = 'Connect Account';
   }
 });
+
+document.getElementById('keyForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const btn = form.querySelector('button[type=submit]');
+  const apiKey = form.apiKey.value.trim();
+  const email = form.email.value.trim();
+  if (!apiKey) { showResult('<div class="note error">Please paste an API key.</div>'); return; }
+  btn.disabled = true;
+  btn.textContent = 'Validating...';
+  showResult('<div class="note">Checking the key against ollama.com...</div>');
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token') || '';
+    const res = await fetch('/api/cli-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Rotator-Admin-Token': token } : {}) },
+      body: JSON.stringify({ provider: 'ollama', email, apiKey }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showResult('<div class="note" style="border-left-color:var(--accent);background:rgba(30,107,82,0.12);">' +
+        '<strong>' + (data.email || '') + '</strong> ' + (data.isNew ? 'added' : 'updated') + ' successfully. The rotator will start using it on the next poll.</div>');
+    } else {
+      var keyErrDiv = document.createElement('div');
+      keyErrDiv.className = 'note error';
+      keyErrDiv.textContent = data.error || 'Unknown error';
+      document.getElementById('result').innerHTML = '';
+      document.getElementById('result').appendChild(keyErrDiv);
+    }
+  } catch (err) {
+    var keyErr2 = document.createElement('div');
+    keyErr2.className = 'note error';
+    keyErr2.textContent = 'Request failed: ' + err.message;
+    document.getElementById('result').innerHTML = '';
+    document.getElementById('result').appendChild(keyErr2);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Connect Account';
+  }
+});
 </script>
 `,
     ),
@@ -339,21 +462,46 @@ document.getElementById('pasteForm').addEventListener('submit', async (e) => {
 export async function handleCliLoginApi(
   req: IncomingMessage,
   res: ServerResponse,
-  rotator: AccountRotator,
+  rotator: AccountSink,
 ): Promise<void> {
-  let body: { session?: string; redirectUrl?: string };
+  let body: {
+    provider?: string;
+    session?: string;
+    redirectUrl?: string;
+    email?: string;
+    apiKey?: string;
+  };
   try {
     const raw = await readLimitedBody(req, MAX_CLI_LOGIN_BODY_BYTES);
     const parsed: unknown = JSON.parse(raw.toString("utf-8"));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("Request body must be an object");
     }
-    body = parsed as { session?: string; redirectUrl?: string };
+    body = parsed as {
+      provider?: string;
+      session?: string;
+      redirectUrl?: string;
+      email?: string;
+      apiKey?: string;
+    };
   } catch (err) {
     res.writeHead(err instanceof PayloadTooLargeError ? 413 : 400, {
       "Content-Type": "application/json",
     });
     res.end(JSON.stringify({ ok: false, error: "Invalid JSON body" }));
+    return;
+  }
+
+  const provider = body.provider || "google-antigravity";
+
+  if (provider === "ollama") {
+    await handleOllamaCliLogin(body, res, rotator);
+    return;
+  }
+
+  if (provider !== "google-antigravity") {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: `Unknown provider "${provider}"` }));
     return;
   }
 
@@ -464,10 +612,67 @@ export async function handleCliLoginApi(
   }
 }
 
+const MAX_ACCOUNT_EMAIL_LENGTH = 320;
+const MAX_ACCOUNT_LABEL_LENGTH = 200;
+
+async function handleOllamaCliLogin(
+  body: { email?: string; apiKey?: string },
+  res: ServerResponse,
+  rotator: AccountSink,
+): Promise<void> {
+  const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+  const email = typeof body.email === "string" ? body.email.trim() : "";
+
+  if (!apiKey) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "Missing apiKey" }));
+    return;
+  }
+  if (apiKey.length > 4096) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "API key too long" }));
+    return;
+  }
+  if (email.length > MAX_ACCOUNT_EMAIL_LENGTH) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "Account identifier too long" }));
+    return;
+  }
+
+  const validation = await validateApiKey(apiKey);
+  if (!validation.ok) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ok: false,
+        error: `Key rejected (${validation.status}): ${validation.error}`,
+      }),
+    );
+    return;
+  }
+
+  const entry = {
+    email: email || defaultAccountEmail(apiKey),
+    apiKey,
+    label: email || defaultAccountEmail(apiKey).split("@")[0],
+  };
+  if (entry.label.length > MAX_ACCOUNT_LABEL_LENGTH) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "Account label too long" }));
+    return;
+  }
+
+  const { isNew } = await addAccountToConfig(entry);
+  await rotator.addOrUpdateAccount(entry);
+
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, email: entry.email, isNew }));
+}
+
 export async function handleHostedCallback(
   req: IncomingMessage,
   res: ServerResponse,
-  rotator: AccountRotator,
+  rotator: AccountSink,
 ): Promise<void> {
   const requestUrl = new URL(req.url || "/", "http://localhost");
   const code = requestUrl.searchParams.get("code");

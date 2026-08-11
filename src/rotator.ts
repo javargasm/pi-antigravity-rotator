@@ -6,7 +6,6 @@ import {
   type AccountStatus,
   type AccountTier,
   type Config,
-  type GoogleQuotaResponse,
   type HealthScoreBreakdown,
   type ModelQuota,
   type ModelRotationState,
@@ -19,13 +18,15 @@ import {
   type TokenUsageData,
   type TokenUsageTiered,
   MODEL_PRICING,
-  TOKEN_URL,
-  QUOTA_API_URL,
+  MODEL_TIER_ACCESS,
   QUOTA_USER_AGENT,
   REQUEST_GOOG_API_CLIENT,
   REQUEST_CLIENT_METADATA,
   ANTIGRAVITY_ENDPOINTS,
-  QUOTA_MODEL_KEYS,
+  KICKSTART_MODEL_FOR_QUOTA_POOL,
+  OLLAMA_TAGS_URL,
+  OLLAMA_USER_AGENT,
+  TAGS_CACHE_TTL_MS,
   DEFAULT_QUOTA_POLL_INTERVAL_MS,
   MAX_QUOTA_POLL_INTERVAL_MS,
   MIN_QUOTA_POLL_INTERVAL_MS,
@@ -42,9 +43,22 @@ import {
   saveAccountsConfig,
   removeAccountFromConfig,
 } from "./account-store.js";
-import { getOAuthClientConfig, isHostedOAuthConfigured } from "./oauth.js";
+import { isHostedOAuthConfigured } from "./providers/google-antigravity/oauth.js";
+import type { RequestBody } from "./proxy.js";
+import { UsagePredictor, type ExhaustionPrediction } from "./providers/ollama/prediction.js";
 import { fetchWithRetry } from "./fetch-with-retry.js";
+import type { RequestInitWithDispatcher } from "./fetch-with-retry.js";
+import { getOllamaApiKey } from "./providers/ollama/credentials.js";
+import {
+  DEFAULT_PROVIDER,
+  getProviderAdapter,
+  getProviderForAccount,
+  hasCredential,
+  primaryProviderId,
+} from "./providers/registry.js";
+import type { QuotaFetchContext } from "./providers/adapter.js";
 import { logger } from "./logger.js";
+import { getAccountProxyDispatcher } from "./providers/proxy-dispatcher.js";
 import { getUpdateInfo } from "./version-check.js";
 import { getNotifications } from "./notification-poller.js";
 import { getConfiguredAdminToken } from "./admin-auth.js";
@@ -75,15 +89,6 @@ function projectModelKey(projectId: string, modelKey: string): string {
   return `${projectId}::${modelKey}`;
 }
 
-// Maps each quota pool key to the cheapest upstream model to use for kickstart warmup requests.
-// Gemini 3.6/3.5 Flash and Gemini 3.1 Pro share the same upstream pool, so all map to gemini-3-flash.
-const KICKSTART_MODEL_FOR_QUOTA_POOL: Record<string, string> = {
-  "claude-opus-4-6-thinking": "gpt-oss-120b-medium",
-  "gemini-3.5-flash": "gemini-3-flash",
-  "gemini-3.6-flash": "gemini-3-flash",
-  "gemini-3.1-pro": "gemini-3-flash",
-};
-
 // Reverse map: upstream model → the quota pool key it primarily represents (for deduplication).
 const QUOTA_POOL_FOR_KICKSTART_MODEL: Record<string, string> = {
   "gpt-oss-120b-medium": "claude-opus-4-6-thinking",
@@ -113,6 +118,58 @@ export class AccountRotator {
     new Map();
   private static readonly MAX_LATENCY_RECORDS = 200;
   private requestLog: StatusResponse["requestLog"] = [];
+  private ollamaModels = new Set<string>();
+  private readonly usagePredictor = new UsagePredictor();
+  private lastOllamaCatalogFetch = 0;
+
+  setOllamaModels(models: string[]): void {
+    this.ollamaModels = new Set(models.map((m) => m.trim()).filter(Boolean));
+  }
+
+  getOllamaModels(): string[] {
+    return [...this.ollamaModels];
+  }
+
+  /** Fetch the Ollama Cloud catalog once at startup so provider-aware routing and /v1/models work before the first quota poll. */
+  primeOllamaCatalog(): Promise<void> {
+    return this.refreshOllamaCatalogOnce();
+  }
+
+    private async refreshOllamaCatalogOnce(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastOllamaCatalogFetch < TAGS_CACHE_TTL_MS) return;
+    const ollamaAccount = this.accounts.find(
+      (a) =>
+        hasCredential(a.config, "ollama") &&
+        !a.disabled &&
+        !a.flagged,
+    );
+    if (!ollamaAccount || typeof getOllamaApiKey(ollamaAccount.config) !== "string") {
+      return;
+    }
+    this.lastOllamaCatalogFetch = now;
+    try {
+      const response = await fetchWithRetry(OLLAMA_TAGS_URL, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${getOllamaApiKey(ollamaAccount.config) ?? ""}`,
+          "User-Agent": OLLAMA_USER_AGENT,
+        },
+        timeoutMs: 8000,
+      });
+      if (!response.ok) return;
+      const data = (await response.json()) as {
+        models?: Array<{ name?: string; model?: string }>;
+      };
+      const names = (data.models ?? [])
+        .map((m) => m.name ?? m.model ?? "")
+        .filter(Boolean);
+      if (names.length > 0) this.setOllamaModels(names);
+    } catch {
+      // Catalog refresh is non-fatal
+    }
+  }
+
   private static readonly MAX_REQUEST_LOG = 200;
   private safetyDay = currentUtcDay();
   private projectRequests: Record<string, number> = {};
@@ -279,6 +336,13 @@ export class AccountRotator {
         for (const [model, idx] of Object.entries(state.modelAccounts)) {
           this.modelState.set(model, {
             activeAccountIndex: Math.min(idx, this.accounts.length - 1),
+            stickyAccountIndex:
+              state.modelStickyAccounts?.[model] !== undefined
+                ? Math.min(
+                    state.modelStickyAccounts[model],
+                    this.accounts.length - 1,
+                  )
+                : undefined,
             quotaAtRotationStart: -1,
             requestsOnActiveAccount: state.modelRequestCounts?.[model] ?? 0,
           });
@@ -388,14 +452,19 @@ export class AccountRotator {
   async saveState(): Promise<void> {
     const modelAccounts: Record<string, number> = {};
     const modelRequestCounts: Record<string, number> = {};
+    const modelStickyAccounts: Record<string, number> = {};
     for (const [model, state] of this.modelState.entries()) {
       modelAccounts[model] = state.activeAccountIndex;
       modelRequestCounts[model] = state.requestsOnActiveAccount;
+      if (state.stickyAccountIndex !== undefined) {
+        modelStickyAccounts[model] = state.stickyAccountIndex;
+      }
     }
 
     const state: PersistedState = {
       modelAccounts,
       modelRequestCounts,
+      modelStickyAccounts,
       currentIndex: this.defaultIndex,
       protectivePauseUntil: this.protectivePauseUntil,
       protectivePauseReason: this.protectivePauseReason,
@@ -508,18 +577,55 @@ export class AccountRotator {
     }
   }
 
+  /**
+   * Emit one consolidated RAW POLL line per quota cycle, with Antigravity
+   * pools first and Ollama (usage) pools last. Per-provider strings are
+   * collected into `account.lastPollByProvider` by each adapter.
+   */
+  private logConsolidatedPoll(account: AccountRuntime): void {
+    const stash = account.lastPollByProvider;
+    if (!stash) return;
+    const ordered = ["google-antigravity", "ollama"]
+      .filter((pid) => stash[pid])
+      .map((pid) => `${pid}: ${stash[pid]}`);
+    if (ordered.length > 0) {
+      this.log(`RAW POLL ${account.config.email} -> ${ordered.join(" | ")}`);
+    }
+    account.lastPollByProvider = {};
+  }
+
   private async pollAllQuotas(): Promise<void> {
     // Reset per-cycle warmup tracking so each poll cycle allows at most one warmup per upstream model per account.
     this.warmupSentThisCycle.clear();
+    void this.refreshOllamaCatalogOnce().catch(() => {});
 
     const available = this.accounts.filter((a) => !a.disabled && !a.flagged);
     for (const account of available) {
       try {
         await this.ensureValidToken(account);
-        await this.fetchQuota(account);
+        const quotaCtx: QuotaFetchContext = {
+          log: (message) => this.log(message),
+          markFlagged: (acc, reason, options) =>
+            this.markFlagged(acc, reason, options),
+          reportQuotaPollFlag: (acc, statusCode, errorText) =>
+            this.reportQuotaPollFlag(acc, statusCode, errorText),
+        };
+        // Parent-account model: poll quota for every provider credential
+        // the account holds (Google OAuth pools + Ollama usage pools).
+        const providerIds = new Set<string>(
+          (account.config.credentials ?? []).map((c) => c.provider),
+        );
+        if (providerIds.size === 0) providerIds.add(primaryProviderId(account.config));
+        for (const pid of providerIds) {
+          await getProviderAdapter(pid).fetchQuota(account, quotaCtx);
+        }
       } catch {
         // Token refresh or quota fetch failed, skip this account
       }
+
+      // Consolidated RAW POLL across all providers on this account:
+      // google first (Antigravity OAuth pools), then ollama (usage pools).
+      this.logConsolidatedPoll(account);
 
       // Auto-warmup: send minimal kickstart requests for idle pools on accounts that have opted
       // in via allowFreshWindowStartsOverride, but only if the operator has enabled the global
@@ -531,13 +637,18 @@ export class AccountRotator {
         if (idlePools.length > 0) {
           const alreadySent =
             this.warmupSentThisCycle.get(account.config.email) ?? new Set<string>();
-          // Build deduplicated upstream model list
           const upstreamToQuotaKey = new Map<string, string>();
           for (const q of idlePools) {
-            const upstream = KICKSTART_MODEL_FOR_QUOTA_POOL[q.modelKey] ?? q.modelKey;
+            // Dispatch warmup by pool owner: the session pool belongs to
+            // Ollama; every other pool key is a Google OAuth pool.
+            const warmupAdapter =
+              q.modelKey === "session"
+                ? getProviderAdapter("ollama")
+                : getProviderForAccount(account.config);
+            const upstream =
+              warmupAdapter.getKickstartModelForPool(q.modelKey) ?? q.modelKey;
             if (!upstreamToQuotaKey.has(upstream)) {
-              const primaryKey = QUOTA_POOL_FOR_KICKSTART_MODEL[upstream] ?? q.modelKey;
-              upstreamToQuotaKey.set(upstream, primaryKey);
+              upstreamToQuotaKey.set(upstream, q.modelKey);
             }
           }
           for (const [upstream, quotaKey] of upstreamToQuotaKey) {
@@ -626,118 +737,6 @@ export class AccountRotator {
     });
   }
 
-  private async fetchQuota(account: AccountRuntime): Promise<void> {
-    if (!account.accessToken) return;
-
-    try {
-      const response = await fetchWithRetry(QUOTA_API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${account.accessToken}`,
-          "User-Agent": QUOTA_USER_AGENT,
-        },
-        body: JSON.stringify({ project: account.config.projectId }),
-        timeoutMs: 8000,
-      });
-
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) {
-          const errorText = await response.text();
-          this.log(
-            `${account.config.email}: quota API returned ${response.status}, flagging account`,
-          );
-          this.reportQuotaPollFlag(account, response.status, errorText);
-          this.markFlagged(
-            account,
-            `Quota API ${response.status}: ${errorText}`,
-            { triggerProtectivePause: false },
-          );
-        }
-        return;
-      }
-
-      const data = (await response.json()) as GoogleQuotaResponse;
-      const oldQuota = account.quota || [];
-      account.quota = this.extractQuotas(data, oldQuota);
-      account.lastQuotaPoll = Date.now();
-
-      // --- RAW QUOTA LOGGING FOR DEBUGGING ---
-      const rawLog = account.quota
-        .map((q) => {
-          const remain = q.resetTime
-            ? Math.round(
-                (new Date(q.resetTime).getTime() - Date.now()) / 60000,
-              ) + "m"
-            : "no_reset";
-          return `[${q.modelKey}: ${q.timerType} ${q.percentRemaining}% in ${remain}]`;
-        })
-        .join(" | ");
-      this.log(`RAW POLL ${account.config.email} -> ${rawLog}`);
-      // ---------------------------------------
-    } catch {
-      // Network error, skip
-    }
-  }
-
-  private extractQuotas(
-    data: GoogleQuotaResponse,
-    oldQuota: ModelQuota[],
-  ): ModelQuota[] {
-    const quotas: ModelQuota[] = [];
-    const now = Date.now();
-
-    for (const [, config] of Object.entries(QUOTA_MODEL_KEYS)) {
-      let modelInfo = data.models[config.key];
-
-      if (!modelInfo) {
-        for (const altKey of config.altKeys) {
-          modelInfo = data.models[altKey];
-          if (modelInfo) break;
-        }
-      }
-
-      if (modelInfo?.quotaInfo) {
-        const resetTime = modelInfo.quotaInfo.resetTime ?? null;
-        let timerType: ModelQuota["timerType"] = "fresh";
-
-        if (resetTime) {
-          const oldQ = oldQuota.find((q) => q.modelKey === config.key);
-          // If the resetTime is exactly the same as the previous poll, preserve the old timerType.
-          // A timer doesn't change its nature just because it gets closer to zero.
-          if (
-            oldQ &&
-            oldQ.resetTime === resetTime &&
-            oldQ.timerType !== "fresh"
-          ) {
-            timerType = oldQ.timerType;
-          } else {
-            // It's a BRAND NEW timer (or we restarted the service).
-            // Since it just started, we can measure the distance to determine its type.
-            const resetMs = new Date(resetTime).getTime();
-            if (resetMs > now) {
-              const durationMs = resetMs - now;
-              // If the new timer is < 6 hours away, it's a 5h timer. Otherwise 7d.
-              timerType = durationMs < 6 * 60 * 60 * 1000 ? "5h" : "7d";
-            }
-          }
-        }
-
-        quotas.push({
-          modelKey: config.key,
-          displayName: config.display,
-          percentRemaining: Math.round(
-            (modelInfo.quotaInfo.remainingFraction ?? 0) * 100,
-          ),
-          resetTime,
-          timerType,
-        });
-      }
-    }
-
-    return quotas;
-  }
-
   // Get quota % for a specific model on an account. Returns -1 if no data.
   private getModelQuota(account: AccountRuntime, modelKey: string): number {
     const q = account.quota.find((q) => q.modelKey === modelKey);
@@ -812,6 +811,12 @@ export class AccountRotator {
     });
   }
 
+  private isQuotaAwarePolicy(
+    policy: Config["routingPolicy"] = this.config.routingPolicy,
+  ): boolean {
+    return policy === "sequential-quota" || policy === "sticky-quota";
+  }
+
   private pickBestModelAccount(
     modelKey: string,
     now: number,
@@ -829,9 +834,19 @@ export class AccountRotator {
     } | null = null;
     const policy = this.config.routingPolicy || "timer-first";
 
-    for (let i = 0; i < this.accounts.length; i++) {
+    const candidateIndices =
+      policy === "sequential-quota"
+        ? Array.from({ length: this.accounts.length }, (_, offset) =>
+            excludeIdx >= 0
+              ? (excludeIdx + 1 + offset) % this.accounts.length
+              : offset,
+          )
+        : Array.from({ length: this.accounts.length }, (_, i) => i);
+
+    for (const i of candidateIndices) {
       if (i === excludeIdx) continue;
       const account = this.accounts[i];
+      if (!this.isProviderEligibleForKey(account, modelKey)) continue;
       if (!this.isAvailableForModel(account, modelKey, now)) continue;
 
       const quota = this.getModelQuota(account, modelKey);
@@ -856,6 +871,7 @@ export class AccountRotator {
         tokenSnapshot.tokens < 1
       )
         continue;
+      if (policy === "sequential-quota") return account;
       const metrics = {
         priority,
         quota,
@@ -958,8 +974,7 @@ export class AccountRotator {
       };
     }
 
-    const projectCount = this.getProjectDailyCount(
-      account.config.projectId,
+    const projectCount = this.getProjectDailyCount(account.config.projectId ?? "",
       now,
     );
     const projectLimit = this.config.dailyProjectStopRequests ?? 1200;
@@ -1018,11 +1033,11 @@ export class AccountRotator {
     if (this.isModelBreakerActive(modelKey, now))
       return "model circuit breaker active";
     if (
-      this.isProjectModelBreakerActive(account.config.projectId, modelKey, now)
+      this.isProjectModelBreakerActive(account.config.projectId ?? "", modelKey, now)
     )
       return "project circuit breaker active";
     if (
-      this.getProjectInFlight(modelKey, account.config.projectId) >=
+      this.getProjectInFlight(modelKey, account.config.projectId ?? "") >=
       (this.config.maxConcurrentRequestsPerProjectModel ?? 1)
     )
       return "project concurrency limit reached";
@@ -1075,13 +1090,23 @@ export class AccountRotator {
       return { reason: "disabled", detail: "account disabled" };
     if (account.flagged)
       return { reason: "flagged", detail: "account quarantined or flagged" };
+    if (!this.isProviderEligibleForKey(account, modelKey))
+      return {
+        reason: "provider-ineligible",
+        detail: "account lacks a credential for this provider pool",
+      };
     const defaultCooldown = account.cooldownsByModel["__default__"] ?? 0;
     if (defaultCooldown > now)
       return { reason: "cooldown", detail: "default cooldown active" };
     const modelCooldown = account.cooldownsByModel[modelKey] ?? 0;
     if (modelCooldown > now)
       return { reason: "cooldown", detail: "model cooldown active" };
+    // Ollama Cloud (pool key "session") imposes no per-account
+    // concurrency limit — the in-flight check would otherwise wedge
+    // long-running streams while the same model on another account is
+    // still serving. Antigravity keeps the per-account limit.
     if (
+      modelKey !== "session" &&
       (account.inFlightByModel[modelKey] ?? 0) >=
       (this.config.maxConcurrentRequestsPerAccount ?? 1)
     ) {
@@ -1132,6 +1157,7 @@ export class AccountRotator {
       "token-bucket-empty",
       "fresh-window-blocked",
       "quota-zero",
+      "provider-ineligible",
       "flagged",
       "disabled",
     ];
@@ -1185,6 +1211,9 @@ export class AccountRotator {
     },
     policy: Config["routingPolicy"],
   ): boolean {
+    if (policy === "sequential-quota") {
+      return candidate.distance < best.distance;
+    }
     if (policy === "hybrid") {
       return (
         candidate.hybridScore > best.hybridScore ||
@@ -1429,11 +1458,47 @@ export class AccountRotator {
     if (this.accounts.length === 0) return null;
     if (this.isProtectivePauseActive(now)) return null;
 
-    const modelKey = model ? resolveQuotaModelKey(model) : null;
+    const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
     const state = modelKey ? this.modelState.get(modelKey) : null;
     const idx = state?.activeAccountIndex ?? this.defaultIndex;
-
     const current = this.accounts[idx];
+
+    if (
+      modelKey &&
+      !state &&
+      current &&
+      this.isQuotaAwarePolicy() &&
+      this.isRoutableForModel(current, modelKey, now)
+    ) {
+      // Seed the preference on the first request as well. Without this, a
+      // default account that later enters cooldown would be indistinguishable
+      // from an account that was never preferred and could not be restored.
+      this.modelState.set(modelKey, {
+        activeAccountIndex: idx,
+        stickyAccountIndex: idx,
+        quotaAtRotationStart: this.getModelQuota(current, modelKey),
+        requestsOnActiveAccount: 0,
+      });
+      this.scheduleStateSave();
+    }
+
+    if (modelKey && state) {
+      const restored = await this.restorePreferredModelAccount(
+        modelKey,
+        now,
+        state,
+        idx,
+      );
+      if (restored) return restored;
+    }
+
+    if (current && modelKey && !this.isProviderEligibleForKey(current, modelKey)) {
+      this.log(
+        `${current.config.label || current.config.email}: provider mismatch for model, rotating`,
+        "warn",
+      );
+      return this.rotateModelForRequest(modelKey, now, idx);
+    }
     if (
       current &&
       (!modelKey
@@ -1503,6 +1568,45 @@ export class AccountRotator {
     return this.rotateDefault();
   }
 
+  private async restorePreferredModelAccount(
+    modelKey: string,
+    now: number,
+    state: ModelRotationState,
+    activeIndex: number,
+  ): Promise<AccountRuntime | null> {
+    if (!this.isQuotaAwarePolicy()) return null;
+    const preferredIndex = state.stickyAccountIndex;
+    if (
+      preferredIndex === undefined ||
+      preferredIndex === activeIndex ||
+      preferredIndex < 0 ||
+      preferredIndex >= this.accounts.length
+    ) {
+      return null;
+    }
+
+    const preferred = this.accounts[preferredIndex];
+    if (this.getModelQuota(preferred, modelKey) === 0) {
+      // A zero quota is a permanent hand-off for this rotation cycle. The
+      // next selected account becomes the new preference in rotateModel().
+      state.stickyAccountIndex = undefined;
+      this.scheduleStateSave();
+      return null;
+    }
+    if (!this.isRoutableForModel(preferred, modelKey, now)) return null;
+
+    this.log(
+      `[${modelKey}] Restoring preferred account ${preferred.config.label || preferred.config.email} after temporary fallback`,
+    );
+    const restored = await this.activateModelAccount(
+      modelKey,
+      preferred,
+      preferredIndex,
+    );
+    this.countModelAssignment(modelKey);
+    return restored;
+  }
+
   // Rotate a specific model to the best available account.
   async rotateModel(
     modelKey: string,
@@ -1513,27 +1617,32 @@ export class AccountRotator {
     const best = this.pickBestModelAccount(modelKey, now, excludeIdx);
 
     if (best) {
-      const newIdx = this.accounts.indexOf(best);
+      const previous = this.modelState.get(modelKey);
+      let stickyAccountIndex: number | undefined;
+      if (this.isQuotaAwarePolicy() && previous) {
+        const preferredIndex = previous.stickyAccountIndex;
+        const preferred =
+          preferredIndex === undefined
+            ? undefined
+            : this.accounts[preferredIndex];
+        if (
+          preferredIndex !== undefined &&
+          preferred &&
+          this.getModelQuota(preferred, modelKey) !== 0 &&
+          (preferredIndex !== previous.activeAccountIndex ||
+            !this.isAvailableForModel(preferred, modelKey, now))
+        ) {
+          // Keep the original account as the preference while a cooldown,
+          // breaker, or concurrency limit forces a temporary fallback.
+          stickyAccountIndex = preferredIndex;
+        }
+      }
       const quota = this.getModelQuota(best, modelKey);
       const timerType = this.getModelTimerType(best, modelKey);
-      this.modelState.set(modelKey, {
-        activeAccountIndex: newIdx,
-        quotaAtRotationStart: quota,
-        requestsOnActiveAccount: 0,
-      });
       this.log(
         `[${modelKey}] Rotated to ${best.config.label || best.config.email} [${timerType}] (quota: ${quota >= 0 ? quota + "%" : "unknown"})`,
       );
-      await this.saveState();
-      this.startRequest(best, modelKey);
-      try {
-        await this.ensureValidToken(best);
-        return best;
-      } catch (err) {
-        this.refundTokenBucket(best, Date.now());
-        this.finishRequest(best, modelKey);
-        throw err;
-      }
+      return this.activateModelAccount(modelKey, best, stickyAccountIndex);
     }
 
     if (
@@ -1578,6 +1687,33 @@ export class AccountRotator {
       );
     }
     return null;
+  }
+
+  private async activateModelAccount(
+    modelKey: string,
+    account: AccountRuntime,
+    stickyAccountIndex?: number,
+  ): Promise<AccountRuntime> {
+    const newIdx = this.accounts.indexOf(account);
+    const quota = this.getModelQuota(account, modelKey);
+    this.modelState.set(modelKey, {
+      activeAccountIndex: newIdx,
+      stickyAccountIndex: this.isQuotaAwarePolicy()
+        ? stickyAccountIndex ?? newIdx
+        : undefined,
+      quotaAtRotationStart: quota,
+      requestsOnActiveAccount: 0,
+    });
+    await this.saveState();
+    this.startRequest(account, modelKey);
+    try {
+      await this.ensureValidToken(account);
+      return account;
+    } catch (err) {
+      this.refundTokenBucket(account, Date.now());
+      this.finishRequest(account, modelKey);
+      throw err;
+    }
   }
 
   // Fallback rotation when model can't be resolved
@@ -1638,7 +1774,7 @@ export class AccountRotator {
   // Force rotation for a model (called from proxy on 429 etc.)
   async rotateToNext(model?: string): Promise<AccountRuntime | null> {
     if (this.isProtectivePauseActive(Date.now())) return null;
-    const modelKey = model ? resolveQuotaModelKey(model) : null;
+    const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
     return modelKey ? this.rotateModel(modelKey) : this.rotateDefault();
   }
 
@@ -1650,7 +1786,7 @@ export class AccountRotator {
     account.consecutiveErrors = 0;
     account.lastError = null;
 
-    const modelKey = model ? resolveQuotaModelKey(model) : null;
+    const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
     const state = modelKey ? this.modelState.get(modelKey) : null;
     const shouldRotate =
       !!modelKey &&
@@ -1770,6 +1906,20 @@ export class AccountRotator {
     inputTokens: number;
     outputTokens: number;
   }): void {
+    const ollamaAccount = this.accounts.find(
+      (a) =>
+        hasCredential(a.config, "ollama") &&
+        (a.config.email === entry.account ||
+          a.config.label === entry.account),
+    );
+    if (ollamaAccount && entry.statusCode >= 200 && entry.statusCode < 300) {
+      this.usagePredictor.recordUsage(
+        ollamaAccount.config.email,
+        entry.model,
+        entry.inputTokens,
+        entry.outputTokens,
+      );
+    }
     this.requestLog.unshift({
       timestamp: Date.now(),
       ...entry,
@@ -1777,6 +1927,33 @@ export class AccountRotator {
     if (this.requestLog.length > AccountRotator.MAX_REQUEST_LOG) {
       this.requestLog.length = AccountRotator.MAX_REQUEST_LOG;
     }
+  }
+
+    getPredictionSummary(): Record<string, ExhaustionPrediction> {
+    const result: Record<string, ExhaustionPrediction> = {};
+    const now = Date.now();
+    for (const account of this.accounts) {
+      if (!hasCredential(account.config, "ollama")) continue;
+      const session = account.quota.find((q) => q.modelKey === "session");
+      const weekly = account.quota.find((q) => q.modelKey === "weekly");
+      if (
+        !session ||
+        !weekly ||
+        !Number.isFinite(session.usageRaw) ||
+        !Number.isFinite(weekly.usageRaw)
+      ) {
+        continue;
+      }
+      const model = this.getOllamaModels()[0] ?? "gpt-oss:20b";
+      result[account.config.email] = this.usagePredictor.predict(
+        account.config.email,
+        model,
+        session.usageRaw ?? 0,
+        weekly.usageRaw ?? 0,
+        now,
+      );
+    }
+    return result;
   }
 
   private consolidateTokenBuckets(now: Date): void {
@@ -2143,8 +2320,16 @@ export class AccountRotator {
     account: AccountRuntime,
     model: string | undefined,
     cooldownMs: number,
+    providerResourceExhausted = false,
   ): void {
     const now = Date.now();
+    if (providerResourceExhausted) {
+      // Account-level daily/weekly quota exhaustion is not a model outage:
+      // the account already gets an individual cooldown from markExhausted,
+      // so it must not arm the project or model circuit breaker and block
+      // healthy accounts that still have quota.
+      return;
+    }
     const modelKey = model
       ? (resolveQuotaModelKey(model) ?? "__default__")
       : "__default__";
@@ -2153,7 +2338,7 @@ export class AccountRotator {
     const threshold = this.config.projectCircuitBreaker429Threshold ?? 3;
     const breakerCooldownMs =
       this.config.projectCircuitBreakerCooldownMs ?? 60 * 60 * 1000;
-    const projectId = account.config.projectId;
+    const projectId = account.config.projectId ?? "";
     this.provider429Events = this.provider429Events
       .filter((event) => now - event.ts <= windowMs)
       .concat({ ts: now, projectId, modelKey, account: account.config.email });
@@ -2201,8 +2386,8 @@ export class AccountRotator {
     this.rollDailySafetyIfNeeded(now);
     this.getAccountDailyCount(account, now);
     account.dailyRequestCount++;
-    this.projectRequests[account.config.projectId] =
-      (this.projectRequests[account.config.projectId] ?? 0) + 1;
+    this.projectRequests[account.config.projectId ?? ""] =
+      (this.projectRequests[account.config.projectId ?? ""] ?? 0) + 1;
     this.scheduleStateSave();
   }
 
@@ -2212,7 +2397,7 @@ export class AccountRotator {
       this.getAccountDailyCount(account, now) >=
       (this.config.dailyAccountSlowRequests ?? 250);
     const projectSlow =
-      this.getProjectDailyCount(account.config.projectId, now) >=
+      this.getProjectDailyCount(account.config.projectId ?? "", now) >=
       (this.config.dailyProjectSlowRequests ?? 900);
     if (!accountSlow && !projectSlow) return 0;
     const min = this.config.slowModeJitterMinMs ?? 8_000;
@@ -2412,55 +2597,18 @@ export class AccountRotator {
   }
 
   async ensureValidToken(account: AccountRuntime): Promise<void> {
-    const now = Date.now();
-    if (account.accessToken && account.tokenExpires > now) {
-      return;
-    }
-
-    this.log(
-      `Refreshing token for ${account.config.label || account.config.email}...`,
-    );
+    const adapter = getProviderForAccount(account.config);
     try {
-      const oauth = getOAuthClientConfig();
-      const response = await fetchWithRetry(TOKEN_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          client_id: oauth.clientId,
-          client_secret: oauth.clientSecret,
-          refresh_token: account.config.refreshToken,
-          grant_type: "refresh_token",
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        const msg = `Token refresh failed (${response.status}): ${errorText}`;
-        this.markError(account, msg);
-        throw new Error(msg);
-      }
-
-      const data = (await response.json()) as {
-        access_token: string;
-        expires_in: number;
-      };
-
-      account.accessToken = data.access_token;
-      account.tokenExpires = now + data.expires_in * 1000 - 5 * 60 * 1000;
-      account.consecutiveErrors = 0;
-      this.log(
-        `Token refreshed for ${account.config.label || account.config.email}`,
-      );
+      await adapter.ensureValidToken(account);
     } catch (err) {
-      if (
-        err instanceof Error &&
-        err.message.startsWith("Token refresh failed")
-      ) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith("Token refresh failed")) {
+        this.markError(account, msg);
         throw err;
       }
-      const msg = `Token refresh error: ${err instanceof Error ? err.message : String(err)}`;
-      this.markError(account, msg);
-      throw new Error(msg, { cause: err });
+      const wrapped = `Token refresh error: ${msg}`;
+      this.markError(account, wrapped);
+      throw new Error(wrapped, { cause: err });
     }
   }
 
@@ -2480,7 +2628,11 @@ export class AccountRotator {
     if (!this.isAvailable(account, now)) return false;
     const modelCooldown = account.cooldownsByModel[modelKey] ?? 0;
     if (modelCooldown > now) return false;
+    // Ollama Cloud (pool key "session") imposes no per-account concurrency
+    // limit. Antigravity keeps it so long streams don't pile up on a
+    // single account while siblings sit idle.
     if (
+      modelKey !== "session" &&
       (account.inFlightByModel[modelKey] ?? 0) >=
       (this.config.maxConcurrentRequestsPerAccount ?? 1)
     )
@@ -2515,6 +2667,13 @@ export class AccountRotator {
 
   startRequest(account: AccountRuntime, modelKey?: string): void {
     const key = modelKey ?? "__default__";
+    // Ollama Cloud imposes no per-account concurrency limit, so its
+    // requests must not activate in-flight tracking at all (pool key
+    // "session" and raw ollama model names from benchmark probes).
+    if (key === "session" || this.ollamaModels.has(key)) {
+      this.consumeTokenBucket(account, Date.now());
+      return;
+    }
     account.inFlightByModel[key] = (account.inFlightByModel[key] ?? 0) + 1;
     this.recalculateInFlightRequests(account);
     this.consumeTokenBucket(account, Date.now());
@@ -2522,6 +2681,7 @@ export class AccountRotator {
 
   finishRequest(account: AccountRuntime, modelKey?: string): void {
     const key = modelKey ?? "__default__";
+    if (key === "session" || this.ollamaModels.has(key)) return;
     account.inFlightByModel[key] = Math.max(
       0,
       (account.inFlightByModel[key] ?? 0) - 1,
@@ -2537,11 +2697,47 @@ export class AccountRotator {
     );
   }
 
+  private isProviderEligibleForKey(
+    account: AccountRuntime,
+    modelKey: string,
+  ): boolean {
+    if (modelKey === "session") {
+      return hasCredential(account.config, "ollama");
+    }
+    // Google pools (claude/gemini) require a google credential. A dual
+    // account (google + ollama) must stay eligible here — it can serve both.
+    return hasCredential(account.config, DEFAULT_PROVIDER);
+  }
+
+  /** Public pool-key resolution for quota routing display/logging. */
+  resolveQuotaModelKeyForDisplay(model: string): string | null {
+    return this.resolvePoolKeyForModel(model);
+  }
+
+  private resolvePoolKeyForModel(model: string): string | null {
+    if (this.ollamaModels.has(model)) return "session";
+    return resolveQuotaModelKey(model) ?? null;
+  }
+
+  /** Map a candidate key (model name or pool key) to the account's pool key. */
+  private resolvePoolKey(account: AccountRuntime, key: string): string {
+    if (
+      hasCredential(account.config, "ollama") &&
+      key !== "session" &&
+      this.ollamaModels.has(key)
+    ) {
+      return "session";
+    }
+    return key;
+  }
+
   private isRoutableForModel(
     account: AccountRuntime,
     modelKey: string,
     now: number,
   ): boolean {
+    modelKey = this.resolvePoolKey(account, modelKey);
+    if (!this.isProviderEligibleForKey(account, modelKey)) return false;
     if (!this.isAvailableForModel(account, modelKey, now)) return false;
     if (this.getModelQuota(account, modelKey) === 0) return false;
     if (!this.isFreshWindowAllowed(account, modelKey)) return false;
@@ -2574,7 +2770,7 @@ export class AccountRotator {
       if (cooldown > now) retryTimes.push(cooldown);
       const projectBreaker =
         this.projectModelBreakers[
-          projectModelKey(account.config.projectId, modelKey)
+          projectModelKey(account.config.projectId ?? "", modelKey)
         ] ?? 0;
       if (projectBreaker > now) retryTimes.push(projectBreaker);
       if ((this.config.routingPolicy || "timer-first") === "hybrid") {
@@ -2621,6 +2817,10 @@ export class AccountRotator {
 
       return {
         email: a.config.email,
+        provider:
+          (a.config.credentials ?? []).map((c) => c.provider).join("+") ||
+          a.config.provider ||
+          "google-antigravity",
         label: a.config.label || a.config.email,
         status,
         activeForModels,
@@ -2628,8 +2828,7 @@ export class AccountRotator {
         totalRequests: a.totalRequests,
         dailyRequestCount: this.getAccountDailyCount(a, now),
         dailyAccountStopRequests: this.config.dailyAccountStopRequests ?? 350,
-        dailyProjectRequestCount: this.getProjectDailyCount(
-          a.config.projectId,
+        dailyProjectRequestCount: this.getProjectDailyCount(a.config.projectId ?? "",
           now,
         ),
         dailyProjectStopRequests: this.config.dailyProjectStopRequests ?? 1200,
@@ -2698,7 +2897,7 @@ export class AccountRotator {
 
     const adminWarning = getConfiguredAdminToken()
       ? null
-      : `Admin routes are exposed on ${this.config.bindHost}:${this.config.proxyPort} because PI_ROTATOR_ADMIN_TOKEN is not configured.`;
+      : `Admin routes are exposed on ${this.config.bindHost}:${this.config.proxyPort} because TUXEVIL_ROTATOR_ADMIN_TOKEN is not configured.`;
     const proxyWarning = getProxyExposureWarning(this.config);
 
     return {
@@ -2739,6 +2938,13 @@ export class AccountRotator {
       updateInfo,
       notifications: getNotifications(),
       hostedOAuthConfigured: isHostedOAuthConfigured(),
+      ollamaModels: this.getOllamaModels(),
+      modelTierAccess: this.accounts.some((a) =>
+        hasCredential(a.config, "ollama"),
+      )
+        ? MODEL_TIER_ACCESS
+        : undefined,
+      predictions: this.getPredictionSummary(),
     };
   }
 
@@ -3002,8 +3208,9 @@ export class AccountRotator {
     account: AccountRuntime,
     model?: string,
   ): boolean {
+    if (this.isQuotaAwarePolicy()) return false;
     if (!this.config.useRequestCountRotationWhenQuotaUnknownOnly) return true;
-    const modelKey = model ? resolveQuotaModelKey(model) : null;
+    const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
     if (!modelKey) return true;
     return this.getModelQuota(account, modelKey) < 0;
   }
@@ -3229,49 +3436,83 @@ export class AccountRotator {
       };
     }
 
-    if (!account.accessToken) {
+    const kickstartAdapter =
+      quotaModelKey === "session"
+        ? getProviderAdapter("ollama")
+        : getProviderForAccount(account.config);
+    const isOllamaAccount = kickstartAdapter.id === "ollama";
+    if (!account.accessToken && !isOllamaAccount) {
       return { ok: false, status: 401, upstreamModel: "", error: "no access token" };
     }
 
     const upstreamModel =
-      KICKSTART_MODEL_FOR_QUOTA_POOL[quotaModelKey] ?? quotaModelKey;
-
-    const body = JSON.stringify({
-      project: account.config.projectId,
-      model: upstreamModel,
-      request: {
-        contents: [{ role: "user", parts: [{ text: "." }] }],
-        generationConfig: { maxOutputTokens: 1 },
-      },
-    });
-
-    const endpoint = ANTIGRAVITY_ENDPOINTS[ANTIGRAVITY_ENDPOINTS.length - 1];
-    const url = `${endpoint}/v1internal:streamGenerateContent?alt=sse`;
+      kickstartAdapter.getKickstartModelForPool(quotaModelKey) ??
+      quotaModelKey;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
 
     let response: Response;
-    try {
-      response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${account.accessToken}`,
-          "User-Agent": QUOTA_USER_AGENT,
-          "X-Goog-Api-Client": REQUEST_GOOG_API_CLIENT,
-          "Client-Metadata": REQUEST_CLIENT_METADATA,
+    if (isOllamaAccount) {
+      const ollamaBody: RequestBody = {
+        project: "",
+        model: upstreamModel,
+        request: {
+          messages: [{ role: "user", content: "." }],
+          options: { num_predict: 1 },
+          stream: false,
         },
-        body,
-        signal: controller.signal,
-      });
-    } catch (err) {
+      };
+      try {
+        const forwarded = await kickstartAdapter.forwardRequest(
+          account,
+          ollamaBody,
+          {},
+          controller.signal,
+        );
+        response = forwarded.response;
+      } catch (err) {
+        clearTimeout(timeout);
+        const msg = `kickstart network error: ${err instanceof Error ? err.message : String(err)}`;
+        this.markError(account, msg);
+        return { ok: false, status: 0, upstreamModel, error: msg };
+      }
       clearTimeout(timeout);
-      const msg = `kickstart network error: ${err instanceof Error ? err.message : String(err)}`;
-      this.markError(account, msg);
-      return { ok: false, status: 0, upstreamModel, error: msg };
+    } else {
+      const body = JSON.stringify({
+        project: account.config.projectId,
+        model: upstreamModel,
+        request: {
+          contents: [{ role: "user", parts: [{ text: "." }] }],
+          generationConfig: { maxOutputTokens: 1 },
+        },
+      });
+
+      const endpoint = ANTIGRAVITY_ENDPOINTS[ANTIGRAVITY_ENDPOINTS.length - 1];
+      const url = `${endpoint}/v1internal:streamGenerateContent?alt=sse`;
+
+      try {
+        response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${account.accessToken}`,
+            "User-Agent": QUOTA_USER_AGENT,
+            "X-Goog-Api-Client": REQUEST_GOOG_API_CLIENT,
+            "Client-Metadata": REQUEST_CLIENT_METADATA,
+          },
+          body,
+          signal: controller.signal,
+          dispatcher: getAccountProxyDispatcher(account, "google-antigravity"),
+        } as RequestInitWithDispatcher);
+      } catch (err) {
+        clearTimeout(timeout);
+        const msg = `kickstart network error: ${err instanceof Error ? err.message : String(err)}`;
+        this.markError(account, msg);
+        return { ok: false, status: 0, upstreamModel, error: msg };
+      }
+      clearTimeout(timeout);
     }
-    clearTimeout(timeout);
 
     // Consume and discard the response body to free the connection
     try {

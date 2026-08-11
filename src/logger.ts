@@ -1,3 +1,5 @@
+import { rotatorEnv } from "./env.js";
+
 export type LogLevel = "debug" | "info" | "warn" | "error" | "silent";
 
 type WritableLogLevel = Exclude<LogLevel, "silent">;
@@ -47,7 +49,7 @@ export class Logger {
 	private readonly now: () => Date;
 
 	constructor(options: LoggerOptions = {}) {
-		this.level = options.level ?? parseLogLevel(process.env.PI_ROTATOR_LOG_LEVEL);
+		this.level = options.level ?? parseLogLevel(rotatorEnv("LOG_LEVEL"));
 		this.writer = options.writer ?? ((line) => console.log(line));
 		this.now = options.now ?? (() => new Date());
 	}

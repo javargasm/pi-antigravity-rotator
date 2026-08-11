@@ -37,7 +37,7 @@ More text after code.`;
   });
 
   it("preserves URLs and file paths", () => {
-    const input = "Check https://github.com/tuxevil/pi-antigravity-rotator and file /var/log/app.log or ./src/index.ts";
+    const input = "Check https://github.com/tuxevil/tuxevil-rotator and file /var/log/app.log or ./src/index.ts";
     const { text, blocks, restore } = extractPreservedBlocks(input);
 
     assert.ok(blocks.some((b) => b.type === "url"));

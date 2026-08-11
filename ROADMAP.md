@@ -11,7 +11,7 @@
 
 ## Month 1 — Positioning & Documentation
 
-**Goal:** Make pi-antigravity-rotator the default recommendation when anyone asks about Google Antigravity proxies or gateways.
+**Goal:** Make tuxevil-rotator the default recommendation when anyone asks about multi-provider AI proxies or gateways.
 
 - [x] Restructure README as a gateway-first document (not "rotation proxy")
 - [x] Add live stats badges (installations, requests routed, estimated savings)

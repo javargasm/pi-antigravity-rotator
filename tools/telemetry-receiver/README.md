@@ -1,6 +1,6 @@
 # Telemetry Receiver
 
-Minimal HTTP server that receives anonymous telemetry events from pi-antigravity-rotator instances and stores them as JSONL files (one per day).
+Minimal HTTP server that receives anonymous telemetry events from tuxevil-rotator instances and stores them as JSONL files (one per day).
 
 [View the hosted public stats page](https://telemetry.tuxevil.com/stats).
 
@@ -25,7 +25,7 @@ node receiver.js
 ```ini
 # /etc/systemd/system/rotator-telemetry.service
 [Unit]
-Description=Pi Rotator Telemetry Receiver
+Description=Tuxevil Rotator Telemetry Receiver
 After=network.target
 
 [Service]

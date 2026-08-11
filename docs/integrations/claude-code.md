@@ -1,12 +1,12 @@
 # Claude Code
 
-Connect Claude Code (Anthropic's CLI coding agent) to pi-antigravity-rotator using the Anthropic-compatible `/v1/messages` endpoint.
+Connect Claude Code (Anthropic's CLI coding agent) to tuxevil-rotator using the Anthropic-compatible `/v1/messages` endpoint.
 
 ## Quick Start
 
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:51200
-export ANTHROPIC_AUTH_TOKEN=antigravity   # or your rk-... Virtual Key
+export ANTHROPIC_AUTH_TOKEN=tuxevil   # or your rk-... Virtual Key
 claude
 ```
 
@@ -20,7 +20,7 @@ Add to your `~/.bashrc` or `~/.zshrc`:
 
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:51200
-export ANTHROPIC_AUTH_TOKEN=antigravity
+export ANTHROPIC_AUTH_TOKEN=tuxevil
 export ANTHROPIC_MODEL=claude-sonnet-4-6
 ```
 
@@ -30,7 +30,7 @@ export ANTHROPIC_MODEL=claude-sonnet-4-6
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:51200",
-    "ANTHROPIC_AUTH_TOKEN": "antigravity",
+    "ANTHROPIC_AUTH_TOKEN": "tuxevil",
     "ANTHROPIC_MODEL": "claude-sonnet-4-6"
   }
 }
@@ -42,7 +42,7 @@ export ANTHROPIC_MODEL=claude-sonnet-4-6
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:51200",
-    "ANTHROPIC_AUTH_TOKEN": "antigravity"
+    "ANTHROPIC_AUTH_TOKEN": "tuxevil"
   },
   "model": "claude-sonnet-4-6"
 }

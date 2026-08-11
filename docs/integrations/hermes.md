@@ -1,6 +1,6 @@
 # Hermes
 
-Connect Hermes AI agent to pi-antigravity-rotator using a custom provider configuration.
+Connect Hermes AI agent to tuxevil-rotator using a custom provider configuration.
 
 ## Configuration
 
@@ -11,7 +11,7 @@ model:
   default: gemini-3.6-flash-high
   provider: custom
   base_url: http://localhost:51200/v1
-  api_key: antigravity
+  api_key: tuxevil
 ```
 
 ## Alternative: Named Custom Provider
@@ -44,7 +44,7 @@ Or switch mid-session:
 hermes model
 # Select "Custom endpoint (self-hosted / VLLM / etc.)"
 # API base URL: http://localhost:51200/v1
-# API key: antigravity
+# API key: tuxevil
 # Model name: gemini-3.6-flash-high
 ```
 

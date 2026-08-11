@@ -3,7 +3,7 @@ import { AccountRotator } from "../src/rotator.js";
 import { QUOTA_API_URL, QUOTA_USER_AGENT } from "../src/types.js";
 
 async function main() {
-    const store = new AccountStore("/root/.pi-antigravity-rotator");
+    const store = new AccountStore("/root/.tuxevil-rotator");
     await store.load();
     const rotator = new AccountRotator(store);
     

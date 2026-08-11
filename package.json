@@ -1,10 +1,11 @@
 {
-  "name": "pi-antigravity-rotator",
-  "version": "2.6.3",
-  "description": "Multi-account rotation proxy for Google Antigravity with per-model routing, real-time quota tracking, and infringement detection",
+  "name": "tuxevil-rotator",
+  "version": "3.0.0",
+  "description": "Multi-provider, multi-account AI proxy rotator with per-model routing, real-time quota tracking, and infringement detection (Google Antigravity, Ollama Cloud)",
   "license": "MIT",
   "type": "module",
   "bin": {
+    "tuxevil-rotator": "bin/tuxevil-rotator.js",
     "pi-antigravity-rotator": "bin/pi-antigravity-rotator.js"
   },
   "engines": {
@@ -15,7 +16,7 @@
     "login": "tsx src/cli.ts login",
     "typecheck": "tsc --noEmit",
     "typecheck:test": "tsc --project tsconfig.test.json",
-    "test": "ANTIGRAVITY_CLIENT_ID=test-client-id ANTIGRAVITY_CLIENT_SECRET=test-client-secret PI_ROTATOR_DIR=/tmp/pi-rotator-test node --import tsx/esm --test \"test/**/*.test.ts\"",
+    "test": "ANTIGRAVITY_CLIENT_ID=test-client-id ANTIGRAVITY_CLIENT_SECRET=test-client-secret TUXEVIL_ROTATOR_DIR=/tmp/tuxevil-rotator-test node --import tsx/esm --test \"test/**/*.test.ts\"",
     "lint": "eslint src test",
     "coverage": "c8 --reporter=text --reporter=html --check-coverage --lines=60 --branches=50 --functions=60 --statements=60 npm test",
     "check": "npm run typecheck && npm run typecheck:test && npm test && npm run lint"
@@ -26,28 +27,29 @@
     "tools/telemetry-receiver/",
     "CHANGELOG.md",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "tuxevil-rotator_logo.png"
   ],
   "keywords": [
-    "pi-package",
-    "pi",
-    "pi-coding",
-    "pi-coding-agent",
-    "antigravity",
+    "ai",
     "proxy",
     "rotation",
-    "google",
+    "multiprovider",
+    "antigravity",
+    "ollama",
+    "gemini",
     "quota",
-    "gemini"
+    "load-balancing"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tuxevil/pi-antigravity-rotator.git"
+    "url": "git+https://github.com/tuxevil/tuxevil-rotator.git"
   },
-  "author": "Sebastián Real (tuxevil)",
+  "author": "Sebasti\u00e1n Real (tuxevil)",
   "dependencies": {
     "pg": "^8.22.0",
-    "tsx": "^4.22.4"
+    "tsx": "^4.22.4",
+    "undici": "^7.29.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

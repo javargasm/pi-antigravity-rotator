@@ -1,22 +1,22 @@
-import { logger, redactSensitive } from "../logger.js";
-import { applyModelAlias } from "../types.js";
-import type { RequestBody } from "../proxy.js";
+import { logger, redactSensitive } from "../../logger.js";
+import { applyModelAlias } from "../../types.js";
+import type { RequestBody } from "../../proxy.js";
 import {
   isRecord,
   sanitizeGeminiSchema,
   sanitizeClaudeViaGeminiSchema,
-} from "./schema-sanitizer.js";
+} from "../../compat/schema-sanitizer.js";
 import {
   getModelFamily,
   getModelSpec,
   isThinkingModel,
-} from "./model-specs.js";
+} from "../../compat/model-specs.js";
 import {
   thoughtSignatureCache,
   getStoredResponse,
   setStoredResponse,
   makeCompatId,
-} from "./cache.js";
+} from "../../compat/cache.js";
 
 const compatLogger = logger.child("compat");
 
@@ -50,7 +50,8 @@ export interface ResponseFunctionCallOutputItem {
   type: "function_call";
   call_id: string;
   name: string;
-  arguments: string;
+  /** JSON-encoded function arguments (OpenAI Responses API format). */
+  arguments: unknown;
   status: "completed";
 }
 
@@ -60,7 +61,7 @@ export type ResponseOutputItem =
 
 export interface ChatMessage {
   role: "system" | "developer" | "user" | "assistant" | "model" | "tool";
-  content:
+  content?:
     | string
     | Array<{ type: string; text?: string; [key: string]: unknown }>
     | null;
@@ -83,7 +84,12 @@ export interface OpenAIToolCall {
   type: "function";
   function: {
     name: string;
-    arguments: string;
+    /**
+     * Function arguments: the OpenAI standard encodes this as a
+     * JSON-stringified string, while Ollama expects an object. Callers
+     * (rotator/forward) deal with the right shape for each provider.
+     */
+    arguments: unknown;
   };
 }
 
@@ -181,12 +187,46 @@ export function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/**
+ * Normalize a tool-call `arguments` field into the JSON-encoded string
+ * shape that OpenAI-compat responses expect. The Ollama adapter feeds us
+ * a parsed object, while OpenAI/Antigravity already gives us a string.
+ */
+export function toolArgumentsToString(args: unknown): string {
+  if (typeof args === "string") return args;
+  try {
+    return JSON.stringify(args ?? {});
+  } catch {
+    return "{}";
+  }
+}
+
+/**
+ * Normalize a tool-call `arguments` field into a parsed object, falling
+ * back to an empty object when the payload is malformed. Used when
+ * forwarding an OpenAI-style request (where `arguments` is a string)
+ * into Ollama (which expects an object).
+ */
+export function toolArgumentsToObject(args: unknown): Record<string, unknown> {
+  if (args && typeof args === "object") return args as Record<string, unknown>;
+  if (typeof args === "string") {
+    try {
+      const parsed = JSON.parse(args);
+      if (parsed && typeof parsed === "object") {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return {};
+}
+
 function cleanCacheControl<T>(content: T): T {
   if (!Array.isArray(content)) return content;
   return content.map((block: Record<string, unknown>) => {
     if (!block || typeof block !== "object") return block;
     if ("cache_control" in block) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { cache_control: _cc, ...rest } = block;
       return rest;
     }
@@ -324,12 +364,33 @@ export function validateMessages(value: unknown): value is ChatMessage[] {
         )
       )
         return false;
+      // OpenAI clients may omit assistant content when the turn consists
+      // solely of valid tool calls. Other roles still require content.
+      if (msg.content === undefined) {
+        return msg.role === "assistant" && hasValidToolCalls(msg.tool_calls);
+      }
       return (
         typeof msg.content === "string" ||
         msg.content === null ||
         Array.isArray(msg.content)
       );
     })
+  );
+}
+
+function hasValidToolCalls(value: unknown): value is OpenAIToolCall[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (toolCall) =>
+        isRecord(toolCall) &&
+        isNonEmptyString(toolCall.id) &&
+        toolCall.type === "function" &&
+        isRecord(toolCall.function) &&
+        isNonEmptyString(toolCall.function.name) &&
+        "arguments" in toolCall.function,
+    )
   );
 }
 
@@ -1521,7 +1582,7 @@ export function buildResponsesOutput(completion: CompatCompletion): {
       type: "function_call",
       call_id: toolCall.id,
       name: toolCall.function.name,
-      arguments: toolCall.function.arguments,
+      arguments: toolArgumentsToString(toolCall.function.arguments),
       status: "completed",
     });
   }

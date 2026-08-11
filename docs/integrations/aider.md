@@ -1,12 +1,12 @@
 # Aider
 
-Connect Aider (AI pair programming CLI) to pi-antigravity-rotator using the OpenAI-compatible provider.
+Connect Aider (AI pair programming CLI) to tuxevil-rotator using the OpenAI-compatible provider.
 
 ## Quick Start
 
 ```bash
 export OPENAI_API_BASE=http://localhost:51200/v1
-export OPENAI_API_KEY=antigravity
+export OPENAI_API_KEY=tuxevil
 aider --model openai/gemini-3.6-flash-high
 ```
 
@@ -18,7 +18,7 @@ aider --model openai/gemini-3.6-flash-high
 
 ```dotenv
 OPENAI_API_BASE=http://localhost:51200/v1
-OPENAI_API_KEY=antigravity
+OPENAI_API_KEY=tuxevil
 AIDER_MODEL=openai/gemini-3.6-flash-high
 ```
 
@@ -26,7 +26,7 @@ AIDER_MODEL=openai/gemini-3.6-flash-high
 
 ```yaml
 openai-api-base: http://localhost:51200/v1
-openai-api-key: antigravity
+openai-api-key: tuxevil
 model: openai/gemini-3.6-flash-high
 show-model-warnings: false
 ```
@@ -57,6 +57,6 @@ openai/gpt-oss-120b-medium
 
 ## Notes
 
-- The `OPENAI_API_KEY` must be set to a non-empty string even if the rotator doesn't validate it — use `antigravity` or your `rk-...` Virtual Key
+- The `OPENAI_API_KEY` must be set to a non-empty string even if the rotator doesn't validate it — use `tuxevil` or your `rk-...` Virtual Key
 - Aider will show a warning that the model is not in its built-in registry — this is expected and can be suppressed with `show-model-warnings: false`
 - Config files are loaded in order: home directory → git repo root → current directory (later files take priority)

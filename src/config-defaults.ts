@@ -1,3 +1,5 @@
+import { rotatorEnv } from "./env.js";
+import { normalizeAccountConfig } from "./config-normalize.js";
 import {
 	DEFAULT_QUOTA_POLL_INTERVAL_MS,
 	MAX_QUOTA_POLL_INTERVAL_MS,
@@ -25,7 +27,7 @@ function safeStreamRecoveryMaxRetries(value: number | undefined): number {
 export function applyConfigDefaults(config: Config): Config {
 	return {
 		proxyPort: config.proxyPort || 51200,
-		bindHost: config.bindHost || process.env.PI_ROTATOR_BIND_HOST || "0.0.0.0",
+		bindHost: config.bindHost || rotatorEnv("BIND_HOST") || "0.0.0.0",
 		routingPolicy: config.routingPolicy || "timer-first",
 		requestsPerRotation: config.requestsPerRotation || 5,
 		rotateOnQuotaDrop: config.rotateOnQuotaDrop ?? 20,
@@ -53,8 +55,8 @@ export function applyConfigDefaults(config: Config): Config {
 		idempotencyWindowMs: config.idempotencyWindowMs ?? 2000,
 		streamRecoveryMaxRetries: safeStreamRecoveryMaxRetries(config.streamRecoveryMaxRetries),
 		compressionMode: config.compressionMode ?? "off",
-		accounts: config.accounts ? config.accounts.map((account) => ({
-			...account,
+accounts: config.accounts ? config.accounts.map((account) => ({
+			...normalizeAccountConfig(account),
 			tier: account.tier || "unknown",
 		})) : [],
 	};
