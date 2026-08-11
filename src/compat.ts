@@ -1700,24 +1700,30 @@ export function serveOpenAIModels(
       },
     }),
   );
-  const ollamaModels = rotator?.getOllamaModels?.() ?? [];
-  for (const model of getCodexModels()) {
-    catalog.push({
-      id: model.id,
-      object: "model",
-      created: 0,
-      owned_by: "openai-codex",
-      context_window: model.contextWindow,
-      max_model_len: model.contextWindow,
-      meta: {
-        context_length: model.contextWindow,
-        family: "openai-codex",
-        provider: "openai-codex",
-        reasoning: model.reasoning,
-        multimodal: model.multimodal,
-        tool_calling: model.tools,
-      },
-    });
+  const hasActiveProvider = (providerId: string): boolean =>
+    rotator?.hasActiveProvider(providerId) ?? false;
+  const ollamaModels = hasActiveProvider("ollama")
+    ? rotator?.getOllamaModels?.() ?? []
+    : [];
+  if (hasActiveProvider("openai-codex")) {
+    for (const model of getCodexModels()) {
+      catalog.push({
+        id: model.id,
+        object: "model",
+        created: 0,
+        owned_by: "openai-codex",
+        context_window: model.contextWindow,
+        max_model_len: model.contextWindow,
+        meta: {
+          context_length: model.contextWindow,
+          family: "openai-codex",
+          provider: "openai-codex",
+          reasoning: model.reasoning,
+          multimodal: model.multimodal,
+          tool_calling: model.tools,
+        },
+      });
+    }
   }
   for (const id of ollamaModels) {
     catalog.push({

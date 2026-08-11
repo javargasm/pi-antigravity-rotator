@@ -138,6 +138,15 @@ export class AccountRotator {
     return [...this.ollamaModels];
   }
 
+  hasActiveProvider(providerId: string): boolean {
+    return this.accounts.some(
+      (account) =>
+        !account.disabled &&
+        !account.flagged &&
+        hasCredential(account.config, providerId),
+    );
+  }
+
   setCodexModels(models: string[]): void {
     this.codexModels = new Set(
       models

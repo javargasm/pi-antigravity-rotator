@@ -158,6 +158,8 @@ function createRotatorStub(
   return {
     getActiveAccount: async () => account,
     getOllamaModels: () => ollamaCatalog,
+    hasActiveProvider: (providerId: string) =>
+      providerId === "ollama" && useOllamaAccount,
     getRetryAfterMs: () => 0,
     resolveQuotaModelKeyForDisplay: () => "gemini-3.5-flash",
     rotateToNext: async () => null,
@@ -798,7 +800,7 @@ describe("compat observability", () => {
   it("lists ollama models on /v1/models with owned_by ollama", async () => {
     ollamaCatalog = ["gpt-oss:20b", "nemotron-nano:8b"];
     const tracking = createTracking();
-    const rotator = createRotatorStub(tracking);
+    const rotator = createRotatorStub(tracking, true);
     const proxy = await startTestProxy(rotator);
     const port = (proxy.address() as AddressInfo).port;
     try {
