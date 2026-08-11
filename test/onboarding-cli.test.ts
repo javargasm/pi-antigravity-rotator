@@ -1,7 +1,9 @@
-import { after, describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import { serveCliLogin, serveLoginLanding, handleCliLoginApi } from "../src/onboarding.js";
+import { removeAccountFromConfig } from "../src/account-store.js";
+import type { AccountConfig } from "../src/types.js";
 
 function mockRes() {
 	const state = { body: "", statusCode: 200, headers: {} as Record<string, string> };
@@ -104,6 +106,14 @@ describe("serveCliLogin", () => {
 		serveCliLogin(res);
 		// The CTA link should contain an href pointing to the OAuth URL
 		assert.match(state.body, /<a class="cta" href="[^"]+"/);
+	});
+
+	it("includes an OpenAI Codex OAuth panel", () => {
+		const { res, state } = mockRes();
+		serveCliLogin(res);
+		assert.match(state.body, /id="panel-codex"/);
+		assert.match(state.body, /Sign in with OpenAI Codex/);
+		assert.match(state.body, /id="codexPasteForm"/);
 	});
 
 	it("uses independent values for the browser session and OAuth state", () => {
@@ -220,6 +230,65 @@ describe("handleCliLoginApi", () => {
 		const parsed = JSON.parse(state.body);
 		assert.equal(parsed.ok, false);
 		assert.match(parsed.error, /State mismatch/);
+	});
+});
+
+describe("CLI login OpenAI Codex provider", () => {
+	const originalFetch = globalThis.fetch;
+	const recordingRotator = {
+		lastEntry: undefined as AccountConfig | undefined,
+		async addOrUpdateAccount(entry: AccountConfig) {
+			this.lastEntry = entry;
+		},
+	};
+	let email = "";
+
+	before(async () => {
+		const { initDb } = await import("../src/db-store.js");
+		await initDb();
+	});
+
+	after(async () => {
+		globalThis.fetch = originalFetch;
+		if (email) await removeAccountFromConfig(email);
+	});
+
+	it("exchanges the browser callback server-side and stores only the refresh credential", async () => {
+		const { res: loginRes, state: loginState } = mockRes();
+		serveCliLogin(loginRes);
+		const sessionMatch = loginState.body.match(/<form id="codexPasteForm"[\s\S]*?name="session" value="([^"]+)"/);
+		assert.ok(sessionMatch);
+		const authMatch = loginState.body.match(/<a class="cta" href="([^"]+)"[^>]*>\s*Sign in with OpenAI Codex/);
+		assert.ok(authMatch);
+		const oauthState = new URL(authMatch[1].replace(/&amp;/g, "&")).searchParams.get("state");
+		assert.ok(oauthState);
+
+		email = `codex-web-${Date.now()}@example.com`;
+		const payload = Buffer.from(JSON.stringify({
+			email,
+			"https://api.openai.com/auth": { chatgpt_account_id: "acct-web-1" },
+		})).toString("base64url");
+		globalThis.fetch = (async () => new Response(JSON.stringify({
+			access_token: "access-secret",
+			refresh_token: "refresh-secret",
+			id_token: `header.${payload}.signature`,
+		}), { status: 200 })) as typeof fetch;
+
+		const req = mockReq({
+			provider: "openai-codex",
+			session: sessionMatch[1],
+			redirectUrl: `http://127.0.0.1:1455/auth/callback?code=browser-code&state=${oauthState}`,
+		});
+		const { res, state } = mockRes();
+		await handleCliLoginApi(req, res, recordingRotator);
+		assert.equal(state.statusCode, 200, state.body);
+		const result = JSON.parse(state.body) as Record<string, unknown>;
+		assert.equal(result.ok, true);
+		assert.equal(result.provider, "openai-codex");
+		assert.doesNotMatch(state.body, /access-secret|refresh-secret|browser-code/);
+		assert.equal(recordingRotator.lastEntry?.credentials?.[0]?.provider, "openai-codex");
+		assert.equal(recordingRotator.lastEntry?.credentials?.[0]?.refreshToken, "refresh-secret");
+		assert.equal(recordingRotator.lastEntry?.credentials?.[0]?.providerAccountId, "acct-web-1");
 	});
 });
 

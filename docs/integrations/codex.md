@@ -13,6 +13,11 @@ an expiry timeout, and a manual callback paste fallback:
 tuxevil-rotator login --provider openai-codex
 ```
 
+The authenticated WebUI page at `/login-cli` also has an **OpenAI Codex** tab.
+It starts the same PKCE flow and accepts the complete loopback callback URL;
+the authorization code is exchanged server-side and only the refresh
+credential is persisted.
+
 Existing Codex CLI files can be imported from a path. The CLI accepts the nested
 `{ "tokens": { ... } }` form and compatible flat/provider-wrapped exports. It
 requires a `refresh_token`; access tokens are used only in memory and are never
