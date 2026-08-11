@@ -62,6 +62,7 @@ import {
   fetchCodexCatalog,
   getCodexModels,
   isCodexModel,
+  isCodexProviderModelId,
 } from "./providers/openai-codex/catalog.js";
 import { CodexOAuthError } from "./providers/openai-codex/oauth.js";
 import { CODEX_QUOTA_MODEL_KEY } from "./providers/openai-codex/quota.js";
@@ -138,7 +139,11 @@ export class AccountRotator {
   }
 
   setCodexModels(models: string[]): void {
-    this.codexModels = new Set(models.map((model) => model.trim()).filter(Boolean));
+    this.codexModels = new Set(
+      models
+        .map((model) => model.trim())
+        .filter((model): model is string => isCodexProviderModelId(model)),
+    );
   }
 
   getCodexModels(): string[] {

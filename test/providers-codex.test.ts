@@ -25,13 +25,18 @@ import {
   codexQuotaRows,
   parseCodexUsageResponse,
 } from "../src/providers/openai-codex/quota.js";
-import { CODEX_BASE_MODELS, isCodexModel } from "../src/providers/openai-codex/catalog.js";
+import {
+  CODEX_BASE_MODELS,
+  isCodexModel,
+  setDiscoveredCodexModels,
+} from "../src/providers/openai-codex/catalog.js";
 import type { AccountRuntime } from "../src/types.js";
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  setDiscoveredCodexModels([]);
 });
 
 describe("openai-codex OAuth", () => {
@@ -42,6 +47,39 @@ describe("openai-codex OAuth", () => {
     );
     assert.equal(isCodexModel("gpt-5.6-luna"), true);
     assert.equal(isCodexModel("gpt-5-codex"), false);
+  });
+
+  it("does not classify Google models returned by Codex discovery", () => {
+    setDiscoveredCodexModels([
+      {
+        id: "claude-sonnet-4-6",
+        contextWindow: 500_000,
+        reasoning: true,
+        multimodal: true,
+        tools: true,
+        source: "discovered",
+      },
+      {
+        id: "gpt-oss-120b-medium",
+        contextWindow: 131_072,
+        reasoning: true,
+        multimodal: false,
+        tools: true,
+        source: "discovered",
+      },
+      {
+        id: "gpt-5.6-nova",
+        contextWindow: 272_000,
+        reasoning: true,
+        multimodal: true,
+        tools: true,
+        source: "discovered",
+      },
+    ]);
+
+    assert.equal(isCodexModel("claude-sonnet-4-6"), false);
+    assert.equal(isCodexModel("gpt-oss-120b-medium"), false);
+    assert.equal(isCodexModel("gpt-5.6-nova"), true);
   });
 
   it("generates S256 PKCE and a state-bound URL", () => {

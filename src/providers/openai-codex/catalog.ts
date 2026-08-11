@@ -14,8 +14,12 @@ export interface CodexModel {
 }
 
 // Only models validated by the initial unauthenticated/public spike are in the
-// safe base list. Authenticated discovery can add provider-reported IDs.
+// safe base list. Authenticated discovery can add provider-owned GPT-5 IDs.
+// The Codex /models endpoint can expose models from other ChatGPT-backed
+// providers (for example Claude), so model IDs alone must be filtered before
+// they influence routing.
 const CODEX_CONTEXT_WINDOW = 272_000;
+const CODEX_DISCOVERED_ID_PATTERN = /^gpt-5(?:\.\d+)?(?:-[a-z0-9]+)+$/i;
 export const CODEX_BASE_MODELS: readonly CodexModel[] = [
   { id: "gpt-5.6-sol", contextWindow: CODEX_CONTEXT_WINDOW, reasoning: true, multimodal: true, tools: true, source: "allowlist" },
   { id: "gpt-5.6-terra", contextWindow: CODEX_CONTEXT_WINDOW, reasoning: true, multimodal: true, tools: true, source: "allowlist" },
@@ -41,8 +45,14 @@ export function getCodexModels(): CodexModel[] {
   return [...merged.values()];
 }
 
+export function isCodexProviderModelId(value: unknown): value is string {
+  return typeof value === "string" &&
+    isSafeModelId(value) &&
+    CODEX_DISCOVERED_ID_PATTERN.test(value);
+}
+
 export function setDiscoveredCodexModels(models: CodexModel[]): void {
-  discoveredModels = models.filter((model) => isSafeModelId(model.id));
+  discoveredModels = models.filter((model) => isCodexProviderModelId(model.id));
 }
 
 function isSafeModelId(value: unknown): value is string {
@@ -51,14 +61,14 @@ function isSafeModelId(value: unknown): value is string {
 
 function parseModel(value: unknown): CodexModel | null {
   if (typeof value === "string") {
-    return isSafeModelId(value)
+    return isCodexProviderModelId(value)
       ? { id: value, contextWindow: CODEX_CONTEXT_WINDOW, reasoning: true, multimodal: true, tools: true, source: "discovered" }
       : null;
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   const id = record.id ?? record.model ?? record.name;
-  if (!isSafeModelId(id)) return null;
+  if (!isCodexProviderModelId(id)) return null;
   const contextWindow = [record.context_window, record.contextWindow, record.context_length]
     .find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0);
   return {
