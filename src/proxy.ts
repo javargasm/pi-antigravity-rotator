@@ -15,7 +15,10 @@ import {
   resolveQuotaModelKey,
   resolveDisplayModelKey,
 } from "./types.js";
-import { isCodexModel } from "./providers/openai-codex/catalog.js";
+import {
+  isCodexModel,
+  isCodexProviderModelId,
+} from "./providers/openai-codex/catalog.js";
 import type { AccountRuntime } from "./types.js";
 import type { AccountRotator } from "./rotator.js";
 import { DEFAULT_PROVIDER, getProviderAdapter, getProviderForAccount } from "./providers/registry.js";
@@ -97,7 +100,7 @@ import type { FlagEventData } from "./telemetry.js";
  * The rotator is required only when it exposes `getOllamaModels()`; test
  * stubs that omit it fall back to the credentials-only dispatch.
  */
-function providerAdapterForModel(
+export function providerAdapterForModel(
   account: AccountRuntime,
   model: string | undefined,
   rotator?: { getOllamaModels?: () => string[]; getCodexModels?: () => string[] },
@@ -105,7 +108,11 @@ function providerAdapterForModel(
   const creds = account.config.credentials ?? [];
   let isCodex = Boolean(model && isCodexModel(model));
   try {
-    if (model && rotator?.getCodexModels?.().includes(model)) isCodex = true;
+    if (
+      model &&
+      isCodexProviderModelId(model) &&
+      rotator?.getCodexModels?.().includes(model)
+    ) isCodex = true;
   } catch {
     // Ignore catalog read failures and retain the safe static allowlist.
   }
