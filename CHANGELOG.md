@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.8.9] - 2026-08-11
+
+### Fixed
+- **Dual google+ollama accounts were excluded from the `claude`/`gemini` pools**: `isProviderEligibleForKey` required the account to NOT have an `ollama` credential for Google pool keys, so every dual account (27 of 46, including the accounts at 100% claude quota) could never serve `claude` even with a full weekly bucket. Only the google-only accounts stayed eligible; once those drained, three unique 429s armed the 6-hour model circuit breaker and blocked every account — including healthy ones. Eligibility now checks for the `google-antigravity` credential itself, so dual accounts serve both the Ollama `session` pool and the Google pools.
+- **Routing diagnostics lied about the best route**: `buildRoutingDiagnostics` never applied provider eligibility, so it reported "Best route is dragontecuador@gmail.com" while `pickBestModelAccount` silently rejected that same account. `getRoutingRejectionForModel` now reports the new `provider-ineligible` reason, making the dashboard match the rotation decision.
+- **Account-level quota exhaustion no longer arms the circuit breakers**: a 429 with RESOURCE_EXHAUSTED ("Individual quota reached…") is per-account daily/weekly exhaustion, already handled by the account's own cooldown from `markExhausted`. `recordProvider429` ignored that distinction, so three drained accounts armed the pool-wide project/model breakers for hours and blocked accounts that still had quota. The proxy now passes `providerResourceExhausted` through and exhausted-account 429s skip breaker arming.
+
 ## [2.8.8] - 2026-08-10
 
 ### Changed
