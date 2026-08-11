@@ -378,7 +378,7 @@ ${codexAuthUrl && codexSessionId ? `<h3 style="margin:24px 0 8px;font-size:18px;
 <p>Copy the complete URL from the browser address bar, even if the loopback page does not load, and paste it here:</p>
 <form id="codexPasteForm" style="margin-top:12px;">
   <input type="hidden" name="session" value="${escapeHtml(codexSessionId)}" />
-  <textarea name="redirectUrl" rows="4" placeholder="Paste the Codex callback URL (http://127.0.0.1:1455/auth/callback?... )" style="
+  <textarea name="redirectUrl" rows="4" placeholder="Paste the Codex callback URL (http://localhost:1455/auth/callback?... )" style="
     width:100%;font-family:'IBM Plex Mono',monospace;font-size:13px;
     padding:12px 14px;border-radius:12px;border:1px solid rgba(31,42,31,0.15);
     background:rgba(31,42,31,0.03);resize:vertical;

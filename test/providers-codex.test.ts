@@ -38,11 +38,15 @@ describe("openai-codex OAuth", () => {
     const { verifier, challenge } = generatePKCE();
     assert.ok(verifier.length >= 40);
     assert.match(challenge, /^[A-Za-z0-9_-]+$/);
+    const defaultConfig = getCodexOAuthConfig();
+    assert.equal(defaultConfig.redirectUri, "http://localhost:1455/auth/callback");
     const config = getCodexOAuthConfig({ CODEX_OAUTH_REDIRECT_URI: "http://127.0.0.1:1999/auth/callback" });
     const url = new URL(buildCodexAuthorizationUrl(config, createOAuthState(), challenge));
     assert.equal(url.searchParams.get("code_challenge_method"), "S256");
     assert.equal(url.searchParams.get("redirect_uri"), config.redirectUri);
     assert.equal(url.searchParams.get("scope"), "openid profile email offline_access");
+    assert.equal(url.searchParams.get("originator"), "codex_cli_rs");
+    assert.equal(url.searchParams.get("prompt"), "login");
   });
 
   it("rejects an invalid callback state and accepts a valid callback", async () => {

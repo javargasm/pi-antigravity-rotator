@@ -8,6 +8,7 @@ export const DEFAULT_CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token";
 export const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
 export const DEFAULT_CODEX_CALLBACK_HOST = "127.0.0.1";
 export const DEFAULT_CODEX_CALLBACK_PORT = 1455;
+export const DEFAULT_CODEX_REDIRECT_HOST = "localhost";
 export const DEFAULT_CODEX_SCOPE = "openid profile email offline_access";
 const CODEX_AUTH_CLAIM = "https://api.openai.com/auth";
 
@@ -72,7 +73,7 @@ export function getCodexOAuthConfig(overrides: Partial<NodeJS.ProcessEnv> = {}):
   );
   const redirectUri = get(
     "CODEX_OAUTH_REDIRECT_URI",
-    `http://${callbackHost}:${callbackPort}/auth/callback`,
+    `http://${DEFAULT_CODEX_REDIRECT_HOST}:${callbackPort}/auth/callback`,
   );
   return {
     clientId: get("CODEX_OAUTH_CLIENT_ID", DEFAULT_CODEX_CLIENT_ID),
@@ -115,7 +116,10 @@ export function buildCodexAuthorizationUrl(
   // These flags are part of the Codex CLI flow and do not contain secrets.
   url.searchParams.set("id_token_add_organizations", "true");
   url.searchParams.set("codex_cli_simplified_flow", "true");
-  url.searchParams.set("originator", "tuxevil-rotator");
+  url.searchParams.set("originator", "codex_cli_rs");
+  // Force a fresh ChatGPT session so adding a second Codex account does not
+  // silently reuse the first browser session.
+  url.searchParams.set("prompt", "login");
   return url.toString();
 }
 

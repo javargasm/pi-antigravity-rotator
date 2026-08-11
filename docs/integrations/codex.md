@@ -40,7 +40,7 @@ Optional environment variables are available for deployments and tests:
 | `CODEX_OAUTH_CLIENT_ID` | Codex CLI public client id |
 | `CODEX_OAUTH_AUTHORIZE_URL` | `https://auth.openai.com/oauth/authorize` |
 | `CODEX_OAUTH_TOKEN_URL` | `https://auth.openai.com/oauth/token` |
-| `CODEX_OAUTH_REDIRECT_URI` | loopback callback on port 1455 |
+| `CODEX_OAUTH_REDIRECT_URI` | `http://localhost:1455/auth/callback` |
 | `CODEX_OAUTH_CALLBACK_HOST` | `127.0.0.1` |
 | `CODEX_OAUTH_CALLBACK_PORT` | `1455` |
 | `CODEX_BASE_URL` | `https://chatgpt.com/backend-api/codex` |
