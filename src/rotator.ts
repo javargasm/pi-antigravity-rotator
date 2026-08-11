@@ -23,7 +23,6 @@ import {
   REQUEST_GOOG_API_CLIENT,
   REQUEST_CLIENT_METADATA,
   ANTIGRAVITY_ENDPOINTS,
-  KICKSTART_MODEL_FOR_QUOTA_POOL,
   OLLAMA_TAGS_URL,
   OLLAMA_USER_AGENT,
   TAGS_CACHE_TTL_MS,
@@ -671,20 +670,19 @@ export class AccountRotator {
       // pools (100% quota with resetTime very close to a full 5h or 7d window — timer exists but
       // untouched). Deduplicates by upstream model within this cycle.
       if (this.autoWarmupEnabled && account.allowFreshWindowStartsOverride) {
-        const idlePools = account.quota.filter((q) => this.isQuotaIdleForKickstart(q));
+        const idlePools = account.quota.filter(
+          (q) =>
+            this.isQuotaIdleForKickstart(q) &&
+            this.getKickstartTarget(account, q.modelKey) !== null,
+        );
         if (idlePools.length > 0) {
           const alreadySent =
             this.warmupSentThisCycle.get(account.config.email) ?? new Set<string>();
           const upstreamToQuotaKey = new Map<string, string>();
           for (const q of idlePools) {
-            // Dispatch warmup by pool owner: the session pool belongs to
-            // Ollama; every other pool key is a Google OAuth pool.
-            const warmupAdapter =
-              q.modelKey === "session"
-                ? getProviderAdapter("ollama")
-                : getProviderForAccount(account.config);
-            const upstream =
-              warmupAdapter.getKickstartModelForPool(q.modelKey) ?? q.modelKey;
+            const target = this.getKickstartTarget(account, q.modelKey);
+            if (!target) continue;
+            const upstream = target.upstreamModel;
             if (!upstreamToQuotaKey.has(upstream)) {
               upstreamToQuotaKey.set(upstream, q.modelKey);
             }
@@ -807,6 +805,32 @@ export class AccountRotator {
     if (remaining <= 0) return false;
     const within = (target: number) => Math.abs(remaining - target) < 600_000;
     return within(5 * 3600 * 1000) || within(7 * 24 * 3600 * 1000);
+  }
+
+  /**
+   * Resolve kickstart by quota-pool owner, never by the account's primary
+   * provider. Parent accounts may hold several credentials, and Codex pools
+   * deliberately have no kickstart implementation.
+   */
+  private getKickstartTarget(
+    account: AccountRuntime,
+    quotaModelKey: string,
+  ): { providerId: string; adapter: ReturnType<typeof getProviderAdapter>; upstreamModel: string } | null {
+    const quota = account.quota.find((candidate) => candidate.modelKey === quotaModelKey);
+    const providerId =
+      quota?.providerId ??
+      (quotaModelKey === "session"
+        ? "ollama"
+        : quotaModelKey === CODEX_QUOTA_MODEL_KEY ||
+            quotaModelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
+          ? "openai-codex"
+          : DEFAULT_PROVIDER);
+    if (!hasCredential(account.config, providerId)) return null;
+
+    const adapter = getProviderAdapter(providerId);
+    const upstreamModel = adapter.getKickstartModelForPool(quotaModelKey);
+    if (!upstreamModel) return null;
+    return { providerId, adapter, upstreamModel };
   }
 
   // Timer priority for a specific model:
@@ -3576,8 +3600,18 @@ export class AccountRotator {
       };
     }
 
+    const target = this.getKickstartTarget(account, quotaModelKey);
+    if (!target) {
+      return {
+        ok: false,
+        status: 409,
+        upstreamModel: "",
+        error: "quota pool has no configured kickstart provider",
+      };
+    }
+
     try {
-      await this.ensureValidToken(account);
+      await this.ensureValidTokenForProvider(account, target.providerId);
     } catch (err) {
       return {
         ok: false,
@@ -3587,18 +3621,13 @@ export class AccountRotator {
       };
     }
 
-    const kickstartAdapter =
-      quotaModelKey === "session"
-        ? getProviderAdapter("ollama")
-        : getProviderForAccount(account.config);
+    const kickstartAdapter = target.adapter;
     const isOllamaAccount = kickstartAdapter.id === "ollama";
     if (!account.accessToken && !isOllamaAccount) {
       return { ok: false, status: 401, upstreamModel: "", error: "no access token" };
     }
 
-    const upstreamModel =
-      kickstartAdapter.getKickstartModelForPool(quotaModelKey) ??
-      quotaModelKey;
+    const upstreamModel = target.upstreamModel;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -3730,7 +3759,11 @@ export class AccountRotator {
       return { ok: false, error: "account not found", results: [] };
     }
 
-    const idlePools = account.quota.filter((q) => this.isQuotaIdleForKickstart(q));
+    const idlePools = account.quota.filter(
+      (q) =>
+        this.isQuotaIdleForKickstart(q) &&
+        this.getKickstartTarget(account, q.modelKey) !== null,
+    );
     if (idlePools.length === 0) {
       return { ok: true, results: [] };
     }
@@ -3738,7 +3771,9 @@ export class AccountRotator {
     // Deduplicate: group quota pool keys by their upstream model
     const upstreamToQuotaPools = new Map<string, string[]>();
     for (const q of idlePools) {
-      const upstream = KICKSTART_MODEL_FOR_QUOTA_POOL[q.modelKey] ?? q.modelKey;
+      const target = this.getKickstartTarget(account, q.modelKey);
+      if (!target) continue;
+      const upstream = target.upstreamModel;
       const list = upstreamToQuotaPools.get(upstream) ?? [];
       list.push(q.modelKey);
       upstreamToQuotaPools.set(upstream, list);

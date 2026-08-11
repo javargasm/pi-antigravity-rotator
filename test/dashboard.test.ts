@@ -129,6 +129,43 @@ describe("dashboard", () => {
     assert.equal(gptOss20b, "#dcfce7");
   });
 
+  it("does not offer kickstart controls for Codex quota pools", () => {
+    const js = readDashboardJs();
+    const sandbox: Record<string, unknown> = {
+      window: { location: { search: "" } } as Record<string, unknown>,
+      URLSearchParams: globalThis.URLSearchParams,
+      EventSource: function () {},
+      setInterval: () => {},
+      clearInterval: () => {},
+      setTimeout: () => {},
+      clearTimeout: () => {},
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: {
+        getElementById: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener: () => {},
+      },
+    };
+    const script = new Script(
+      js +
+        "\nthis.isKickstartSupported = isKickstartSupported;",
+    );
+    script.runInNewContext(sandbox);
+    const isKickstartSupported = sandbox.isKickstartSupported as (
+      quota: Record<string, unknown>,
+    ) => boolean;
+
+    assert.equal(
+      isKickstartSupported({ modelKey: "openai-codex", providerId: "openai-codex" }),
+      false,
+    );
+    assert.equal(
+      isKickstartSupported({ modelKey: "session", providerId: "ollama" }),
+      true,
+    );
+  });
+
   it("includes optional admin-token client support", () => {
     const js = readDashboardJs();
     assert.match(js, /X-Rotator-Admin-Token/);

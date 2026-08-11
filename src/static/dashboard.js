@@ -40,6 +40,17 @@ function isIdleForKickstart(q, now) {
   return isRolling5h || isRolling7d;
 }
 
+function isKickstartSupported(q) {
+  if (!q) return false;
+  if (q.providerId === "openai-codex") return false;
+  var key = String(q.modelKey || "");
+  return (
+    key !== "openai-codex" &&
+    key !== "openai-codex-spark" &&
+    key.indexOf("openai-codex:") !== 0
+  );
+}
+
 function renderQuotaBars(account) {
   var quota = account.quota;
   if (!quota || quota.length === 0) return "";
@@ -60,7 +71,7 @@ function renderQuotaBars(account) {
           : '<button class="btn-clear-flight" title="No in-flight requests for ' +
             escapeHtml(q.displayName) +
             '" disabled>Clear</button>';
-      var idle = isIdleForKickstart(q, now);
+      var idle = isKickstartSupported(q) && isIdleForKickstart(q, now);
       var kickstartBtn = "";
       var color = quotaBarColor(q.percentRemaining);
       var timerClass = "timer-" + q.timerType;
@@ -472,7 +483,7 @@ function renderAccounts(data) {
           : "Allow Fresh On This Account") +
         "</button>" +
         ((a.quota || []).some(function (q) {
-          return isIdleForKickstart(q, Date.now());
+          return isKickstartSupported(q) && isIdleForKickstart(q, Date.now());
         })
           ? '<button class="btn-enable" onclick="kickstartAllTimers(\'' +
             jsString(a.email) +
