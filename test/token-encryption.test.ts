@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   decryptAccountsInConfig,
@@ -123,6 +126,9 @@ describe("token encryption", () => {
   });
 
   it("transparently encrypts tokens in db-store when PI_ROTATOR_ENCRYPTION_KEY is set", async () => {
+    if (!process.env.TUXEVIL_ROTATOR_DIR) {
+      process.env.TUXEVIL_ROTATOR_DIR = mkdtempSync(join(tmpdir(), "tuxevil-token-enc-"));
+    }
     await initDb();
     process.env.PI_ROTATOR_ENCRYPTION_KEY = "db-store-secret";
 

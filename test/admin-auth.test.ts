@@ -1,5 +1,8 @@
 import { describe, it, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ensureAdminToken,
   generateAdminToken,
@@ -89,6 +92,9 @@ describe("admin auth helpers", () => {
 
 describe("admin token generation and persistence", () => {
   before(async () => {
+    if (!process.env.TUXEVIL_ROTATOR_DIR) {
+      process.env.TUXEVIL_ROTATOR_DIR = mkdtempSync(join(tmpdir(), "tuxevil-admin-auth-"));
+    }
     await initDb();
   });
 

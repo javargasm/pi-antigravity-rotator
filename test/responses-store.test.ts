@@ -1,5 +1,8 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ResponsesStore,
   type StoredResponseEntry,
@@ -30,6 +33,9 @@ describe("ResponsesStore", () => {
   let store: ResponsesStore;
 
   before(async () => {
+    if (!process.env.TUXEVIL_ROTATOR_DIR) {
+      process.env.TUXEVIL_ROTATOR_DIR = mkdtempSync(join(tmpdir(), "tuxevil-responses-"));
+    }
     await initDb();
     store = new ResponsesStore();
   });

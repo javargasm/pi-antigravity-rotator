@@ -1,6 +1,9 @@
 import { describe, it, after, before } from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { serveCliLogin, handleCliLoginApi } from "../src/onboarding.js";
 import { removeAccountFromConfig } from "../src/account-store.js";
 import type { AccountConfig } from "../src/types.js";
@@ -121,6 +124,9 @@ describe("CLI login Ollama provider", () => {
 	};
 
 	before(async () => {
+		if (!process.env.TUXEVIL_ROTATOR_DIR) {
+			process.env.TUXEVIL_ROTATOR_DIR = mkdtempSync(join(tmpdir(), "tuxevil-cli-login-"));
+		}
 		const { initDb } = await import("../src/db-store.js");
 		await initDb();
 	});

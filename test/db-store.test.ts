@@ -1,5 +1,8 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   initDb,
   isDbConfigured,
@@ -19,6 +22,9 @@ import type { PersistedResponsesStore } from "../src/db-store.js";
 
 describe("db-store helpers", () => {
   before(async () => {
+    if (!process.env.TUXEVIL_ROTATOR_DIR) {
+      process.env.TUXEVIL_ROTATOR_DIR = mkdtempSync(join(tmpdir(), "tuxevil-db-store-"));
+    }
     await initDb();
   });
 
