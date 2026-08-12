@@ -120,6 +120,18 @@ describe("proxy compat integration", () => {
 		assert.notEqual(provider.id, "openai-codex");
 	});
 
+	it("selects Codex for an explicitly requested unsupported Codex model", () => {
+		const provider = providerAdapterForModel(
+			createAccount(),
+			"gpt-5.6-sol",
+			{
+				getCodexModels: () => ["gpt-5.6-terra", "gpt-5.6-luna"],
+			} as unknown as AccountRotator,
+		);
+
+		assert.equal(provider.id, "openai-codex");
+	});
+
 	it("selects Google for Claude when Codex is the primary credential", () => {
 		const account = createAccount();
 		account.config.credentials = [

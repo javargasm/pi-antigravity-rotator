@@ -16,7 +16,7 @@ import {
   resolveDisplayModelKey,
 } from "./types.js";
 import {
-  isCodexModel,
+  isCodexRequestModel,
   isCodexProviderModelId,
 } from "./providers/openai-codex/catalog.js";
 import type { AccountRuntime } from "./types.js";
@@ -106,7 +106,7 @@ export function providerAdapterForModel(
   rotator?: { getOllamaModels?: () => string[]; getCodexModels?: () => string[] },
 ): ProviderAdapter {
   const creds = account.config.credentials ?? [];
-  let isCodex = Boolean(model && isCodexModel(model));
+  let isCodex = Boolean(model && isCodexRequestModel(model));
   try {
     if (
       model &&

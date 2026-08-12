@@ -30,6 +30,7 @@ import {
 import {
   CODEX_BASE_MODELS,
   isCodexModel,
+  isCodexRequestModel,
   setDiscoveredCodexModels,
 } from "../src/providers/openai-codex/catalog.js";
 import type { AccountRuntime } from "../src/types.js";
@@ -50,6 +51,8 @@ describe("openai-codex OAuth", () => {
     );
     assert.equal(isCodexModel("gpt-5.6-luna"), true);
     assert.equal(isCodexModel("gpt-5-codex"), false);
+    assert.equal(isCodexModel("gpt-5.6-sol"), false);
+    assert.equal(isCodexRequestModel("gpt-5.6-sol"), true);
   });
 
   it("does not classify Google models returned by Codex discovery", () => {
@@ -101,6 +104,14 @@ describe("openai-codex OAuth", () => {
 
     assert.equal(isCodexModelForRotator(rotator, "claude-sonnet-4-6"), false);
     assert.equal(isCodexModelForRotator(rotator, "gpt-oss-120b-medium"), false);
+  });
+
+  it("routes known unsupported Codex models to Codex for the official error", () => {
+    const rotator = {
+      getCodexModels: () => ["gpt-5.6-terra", "gpt-5.6-luna"],
+    } as unknown as AccountRotator;
+
+    assert.equal(isCodexModelForRotator(rotator, "gpt-5.6-sol"), true);
   });
 
   it("generates S256 PKCE and a state-bound URL", () => {

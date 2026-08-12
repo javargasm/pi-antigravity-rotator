@@ -61,7 +61,7 @@ import { getAccountProxyDispatcher } from "./providers/proxy-dispatcher.js";
 import {
   fetchCodexCatalog,
   getCodexModels,
-  isCodexModel,
+  isCodexRequestModel,
   isCodexProviderModelId,
 } from "./providers/openai-codex/catalog.js";
 import { CodexOAuthError } from "./providers/openai-codex/oauth.js";
@@ -2403,7 +2403,7 @@ export class AccountRotator {
     const modelKey = model
       ? (this.resolvePoolKeyForModel(model) ?? resolveQuotaModelKey(model) ?? "__default__")
       : "__default__";
-    if (model && (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`) || isCodexModel(model))) {
+    if (model && (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`) || isCodexRequestModel(model))) {
       this.setProviderCooldown(account, "openai-codex", cooldownMs);
     }
     account.cooldownsByModel[modelKey] = now + cooldownMs;
@@ -2424,7 +2424,7 @@ export class AccountRotator {
     providerResourceExhausted = false,
   ): void {
     const now = Date.now();
-    if (model && isCodexModel(model)) {
+    if (model && isCodexRequestModel(model)) {
       this.setProviderCooldown(account, "openai-codex", cooldownMs);
       return;
     }
@@ -2898,7 +2898,7 @@ export class AccountRotator {
   }
 
   private resolvePoolKeyForModel(model: string): string | null {
-    if (this.codexModels.has(model) || isCodexModel(model)) {
+    if (this.codexModels.has(model) || isCodexRequestModel(model)) {
       return `${CODEX_QUOTA_MODEL_KEY}:${model}`;
     }
     if (this.ollamaModels.has(model)) return "session";

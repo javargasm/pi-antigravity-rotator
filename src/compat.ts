@@ -79,14 +79,14 @@ import type {
   ResponsesConversionResult,
 } from "./providers/google-antigravity/translators.js";
 import {
-  isCodexModel,
+  isCodexRequestModel,
   isCodexProviderModelId,
   getCodexModels,
 } from "./providers/openai-codex/catalog.js";
 import { serveCodexChat, serveCodexResponses } from "./providers/openai-codex/compat.js";
 
 function isCodexModelForRotator(rotator: AccountRotator, model: string): boolean {
-  if (isCodexModel(model)) return true;
+  if (isCodexRequestModel(model)) return true;
   if (!isCodexProviderModelId(model)) return false;
   try {
     return rotator.getCodexModels?.().includes(model) ?? false;
