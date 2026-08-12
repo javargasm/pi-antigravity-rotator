@@ -38,7 +38,8 @@ export function classifyRateLimitReason(errorText: string, status?: number): Rat
 		lower.includes("rate_limit_exceeded") ||
 		lower.includes("rate limit") ||
 		lower.includes("too many requests") ||
-		lower.includes("throttl")
+		lower.includes("throttl") ||
+		lower.includes("freeusagelimit")
 	) {
 		return "rate-limit";
 	}

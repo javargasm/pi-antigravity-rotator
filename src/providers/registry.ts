@@ -66,6 +66,7 @@ export function findProviderForModel(
 
 export function getProviderIdForPoolKey(poolKey: string): string {
   if (poolKey.startsWith("codex:")) return "openai-codex";
+  if (poolKey.startsWith("opencode-zen:")) return "opencode-zen";
   if (poolKey === "session") return "ollama";
   if (isKnownProvider(poolKey)) return poolKey;
   return DEFAULT_PROVIDER;

@@ -68,6 +68,7 @@ import {
 } from "./providers/openai-codex/catalog.js";
 import { CodexOAuthError } from "./providers/openai-codex/oauth.js";
 import { CODEX_QUOTA_MODEL_KEY } from "./providers/openai-codex/quota.js";
+import { OPENCODE_ZEN_PROVIDER_ID } from "./providers/opencode-zen/credentials.js";
 import { getUpdateInfo } from "./version-check.js";
 import { getNotifications } from "./notification-poller.js";
 import { getConfiguredAdminToken } from "./admin-auth.js";
@@ -794,7 +795,9 @@ export class AccountRotator {
     const q = account.quota.find((q) => q.modelKey === modelKey) ??
       (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
         ? account.quota.find((candidate) => candidate.modelKey === CODEX_QUOTA_MODEL_KEY)
-        : undefined);
+        : modelKey.startsWith(`${OPENCODE_ZEN_PROVIDER_ID}:`)
+          ? account.quota.find((candidate) => candidate.providerId === OPENCODE_ZEN_PROVIDER_ID)
+          : undefined);
     return q ? q.percentRemaining : -1;
   }
 
@@ -806,7 +809,9 @@ export class AccountRotator {
     const q = account.quota.find((q) => q.modelKey === modelKey) ??
       (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
         ? account.quota.find((candidate) => candidate.modelKey === CODEX_QUOTA_MODEL_KEY)
-        : undefined);
+        : modelKey.startsWith(`${OPENCODE_ZEN_PROVIDER_ID}:`)
+          ? account.quota.find((candidate) => candidate.providerId === OPENCODE_ZEN_PROVIDER_ID)
+          : undefined);
     return q?.timerType ?? "fresh";
   }
 

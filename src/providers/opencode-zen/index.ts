@@ -61,8 +61,8 @@ export const opencodeZenAdapter: ProviderAdapter = {
     return isOpenCodeZenModel(model);
   },
 
-  getPoolKey(): string {
-    return OPENCODE_ZEN_PROVIDER_ID;
+  getPoolKey(model: string): string {
+    return `${OPENCODE_ZEN_PROVIDER_ID}:${model}`;
   },
 
   getBenchmark() {
