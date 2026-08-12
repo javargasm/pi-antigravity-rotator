@@ -15,15 +15,9 @@ import {
   resolveQuotaModelKey,
   resolveDisplayModelKey,
 } from "./types.js";
-import {
-  isCodexRequestModel,
-  isCodexProviderModelId,
-} from "./providers/openai-codex/catalog.js";
-import { isOpenCodeZenModel } from "./providers/opencode-zen/catalog.js";
-import { OPENCODE_ZEN_PROVIDER_ID } from "./providers/opencode-zen/index.js";
 import type { AccountRuntime } from "./types.js";
 import type { AccountRotator } from "./rotator.js";
-import { DEFAULT_PROVIDER, getProviderAdapter, getProviderForAccount } from "./providers/registry.js";
+import { DEFAULT_PROVIDER, getProviderAdapter, getProviderForAccount, findProviderForModel, isKnownProvider } from "./providers/registry.js";
 import { isRecord } from "./compat/schema-sanitizer.js";
 import type { ProviderAdapter, StreamAccumulator } from "./providers/adapter.js";
 import {
@@ -108,45 +102,22 @@ export function providerAdapterForModel(
   rotator?: { getOllamaModels?: () => string[]; getCodexModels?: () => string[] },
 ): ProviderAdapter {
   const creds = account.config.credentials ?? [];
-  if (model && isOpenCodeZenModel(model)) {
-    return getProviderAdapter(OPENCODE_ZEN_PROVIDER_ID);
-  }
-  let isCodex = Boolean(model && isCodexRequestModel(model));
-  try {
-    if (
-      model &&
-      isCodexProviderModelId(model) &&
-      rotator?.getCodexModels?.().includes(model)
-    ) isCodex = true;
-  } catch {
-    // Ignore catalog read failures and retain the safe static allowlist.
-  }
-  if (isCodex) {
-    // Codex models are provider-owned and never fall back to Google/Ollama.
-    return getProviderAdapter("openai-codex");
+  if (model) {
+    const context = {
+      ollamaModels: new Set(rotator?.getOllamaModels?.() ?? []),
+      codexModels: new Set(rotator?.getCodexModels?.() ?? []),
+    };
+    const matched = findProviderForModel(model, context);
+    if (matched) return matched;
   }
   if (creds.length > 0) {
-    const onlyZen = creds.every((c) => c.provider === OPENCODE_ZEN_PROVIDER_ID);
-    const onlyOllama = creds.every((c) => c.provider === "ollama");
-    const onlyGoogle = creds.every((c) => c.provider === DEFAULT_PROVIDER);
-    if (onlyZen) return getProviderAdapter(OPENCODE_ZEN_PROVIDER_ID);
-    if (onlyOllama) return getProviderAdapter("ollama");
-    if (onlyGoogle) return getProviderAdapter(DEFAULT_PROVIDER);
-  }
-  let isOllamaModel = false;
-  try {
-    const ollamaList = rotator?.getOllamaModels?.() ?? [];
-    if (ollamaList.length > 0 && model) {
-      isOllamaModel = ollamaList.includes(model);
+    const providers = new Set(creds.map((c) => c.provider));
+    if (providers.size === 1) {
+      const soleProvider = Array.from(providers)[0];
+      if (isKnownProvider(soleProvider)) {
+        return getProviderAdapter(soleProvider);
+      }
     }
-  } catch {
-    // ignore — fall through to primary dispatch
-  }
-  if (isOllamaModel) {
-    return getProviderAdapter("ollama");
-  }
-  if (creds.some((credential) => credential.provider === DEFAULT_PROVIDER)) {
-    return getProviderAdapter(DEFAULT_PROVIDER);
   }
   const fallback = getProviderForAccount(account.config);
   return fallback.id === "openai-codex"

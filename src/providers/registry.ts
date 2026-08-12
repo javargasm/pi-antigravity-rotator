@@ -51,6 +51,26 @@ export function isKnownProvider(providerId: string): boolean {
   return Object.prototype.hasOwnProperty.call(PROVIDERS, providerId);
 }
 
+export function findProviderForModel(
+  model: string,
+  context?: { ollamaModels?: Set<string>; codexModels?: Set<string> },
+): ProviderAdapter | null {
+  // Check non-default explicit providers first to prevent Google fallback overlap
+  for (const adapter of [opencodeZenAdapter, openaiCodexAdapter, ollamaAdapter, googleAntigravityAdapter]) {
+    if (adapter.ownsModel?.(model, context)) {
+      return adapter;
+    }
+  }
+  return null;
+}
+
+export function getProviderIdForPoolKey(poolKey: string): string {
+  if (poolKey.startsWith("codex:")) return "openai-codex";
+  if (poolKey === "session") return "ollama";
+  if (isKnownProvider(poolKey)) return poolKey;
+  return DEFAULT_PROVIDER;
+}
+
 export function getProviderForAccount(
   account: { credentials?: Array<{ provider: string }>; provider?: string },
   providerId?: string,

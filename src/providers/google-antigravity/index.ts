@@ -28,6 +28,7 @@ import {
 import {
   TOKEN_URL,
   KICKSTART_MODEL_FOR_QUOTA_POOL,
+  resolveQuotaModelKey,
 } from "../../types.js";
 import type { AccountRuntime } from "../../types.js";
 import { fetchWithRetry } from "../../fetch-with-retry.js";
@@ -157,6 +158,14 @@ export const googleAntigravityAdapter: ProviderAdapter = {
 
   getKickstartModelForPool(quotaModelKey: string): string | undefined {
     return KICKSTART_MODEL_FOR_QUOTA_POOL[quotaModelKey];
+  },
+
+  ownsModel(model: string): boolean {
+    return resolveQuotaModelKey(model) !== null || model.includes("gemini") || model.includes("claude");
+  },
+
+  getPoolKey(model: string): string {
+    return resolveQuotaModelKey(model) ?? model;
   },
 
   getBenchmark(account: AccountRuntime) {

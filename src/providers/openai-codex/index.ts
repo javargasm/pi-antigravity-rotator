@@ -18,7 +18,8 @@ import {
   extractCodexUsage,
   forwardCodexRequest,
 } from "./forward.js";
-import { fetchCodexQuota } from "./quota.js";
+import { fetchCodexQuota, CODEX_QUOTA_MODEL_KEY } from "./quota.js";
+import { isCodexRequestModel, isCodexProviderModelId } from "./catalog.js";
 
 const providerLog = logger.child("provider/openai-codex");
 const refreshFlights = new Map<string, Promise<void>>();
@@ -122,6 +123,16 @@ export const openaiCodexAdapter: ProviderAdapter = {
   createStreamAccumulator: () => new CodexSseAccumulator(),
 
   getKickstartModelForPool(): string | undefined { return undefined; },
+
+  ownsModel(model: string, context?: { codexModels?: Set<string> }): boolean {
+    if (isCodexRequestModel(model)) return true;
+    if (isCodexProviderModelId(model) && (context?.codexModels?.has(model) ?? false)) return true;
+    return false;
+  },
+
+  getPoolKey(model: string): string {
+    return `${CODEX_QUOTA_MODEL_KEY}:${model}`;
+  },
 
   getBenchmark() {
     return {

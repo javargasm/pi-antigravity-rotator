@@ -131,6 +131,13 @@ export interface ProviderAdapter {
   createStreamAccumulator(): StreamAccumulator;
 
   // --- Catalog / helpers ---
+  /** Whether a model belongs to this provider. */
+  ownsModel?(
+    model: string,
+    context?: { ollamaModels?: Set<string>; codexModels?: Set<string> },
+  ): boolean;
+  /** Returns the pool key for a model served by this provider. */
+  getPoolKey?(model: string): string;
   /** Cheap upstream model that warms a quota pool during kickstart. */
   getKickstartModelForPool(quotaModelKey: string): string | undefined;
   /** Benchmark request used to measure account latency/health. */

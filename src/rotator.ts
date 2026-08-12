@@ -54,6 +54,8 @@ import {
   getProviderForAccount,
   hasCredential,
   primaryProviderId,
+  findProviderForModel,
+  getProviderIdForPoolKey,
 } from "./providers/registry.js";
 import type { QuotaFetchContext } from "./providers/adapter.js";
 import { logger } from "./logger.js";
@@ -66,8 +68,6 @@ import {
 } from "./providers/openai-codex/catalog.js";
 import { CodexOAuthError } from "./providers/openai-codex/oauth.js";
 import { CODEX_QUOTA_MODEL_KEY } from "./providers/openai-codex/quota.js";
-import { isOpenCodeZenModel } from "./providers/opencode-zen/catalog.js";
-import { OPENCODE_ZEN_PROVIDER_ID } from "./providers/opencode-zen/credentials.js";
 import { getUpdateInfo } from "./version-check.js";
 import { getNotifications } from "./notification-poller.js";
 import { getConfiguredAdminToken } from "./admin-auth.js";
@@ -2703,7 +2703,11 @@ export class AccountRotator {
     return true;
   }
 
-  async ensureValidToken(account: AccountRuntime): Promise<void> {
+  async ensureValidToken(account: AccountRuntime, providerId?: string): Promise<void> {
+    if (providerId) {
+      await this.ensureValidTokenForProvider(account, providerId);
+      return;
+    }
     const adapter = getProviderForAccount(account.config);
     try {
       await adapter.ensureValidToken(account);
@@ -2750,16 +2754,9 @@ export class AccountRotator {
     account: AccountRuntime,
     modelKey: string | null,
   ): Promise<void> {
-    if (modelKey?.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)) {
-      await this.ensureValidTokenForProvider(account, "openai-codex");
-      return;
-    }
-    if (modelKey === "session") {
-      await this.ensureValidTokenForProvider(account, "ollama");
-      return;
-    }
-    if (modelKey === OPENCODE_ZEN_PROVIDER_ID || (modelKey && isOpenCodeZenModel(modelKey))) {
-      await this.ensureValidTokenForProvider(account, OPENCODE_ZEN_PROVIDER_ID);
+    if (modelKey) {
+      const providerId = getProviderIdForPoolKey(modelKey);
+      await this.ensureValidToken(account, providerId);
       return;
     }
     await this.ensureValidToken(account);
@@ -2806,14 +2803,9 @@ export class AccountRotator {
     now: number,
   ): boolean {
     if (!this.isAvailable(account, now)) return false;
-    if (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)) {
-      if (account.invalidProviders?.["openai-codex"]) return false;
-      if ((account.providerCooldowns?.["openai-codex"] ?? 0) > now) return false;
-    }
-    if (modelKey === OPENCODE_ZEN_PROVIDER_ID || isOpenCodeZenModel(modelKey)) {
-      if (account.invalidProviders?.[OPENCODE_ZEN_PROVIDER_ID]) return false;
-      if ((account.providerCooldowns?.[OPENCODE_ZEN_PROVIDER_ID] ?? 0) > now) return false;
-    }
+    const providerId = getProviderIdForPoolKey(modelKey);
+    if (account.invalidProviders?.[providerId]) return false;
+    if ((account.providerCooldowns?.[providerId] ?? 0) > now) return false;
     const modelCooldown = account.cooldownsByModel[modelKey] ?? 0;
     if (modelCooldown > now) return false;
     // Ollama Cloud (pool key "session") imposes no per-account concurrency
@@ -2889,22 +2881,10 @@ export class AccountRotator {
     account: AccountRuntime,
     modelKey: string,
   ): boolean {
-    if (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)) {
-      return hasCredential(account.config, "openai-codex") &&
-        !account.invalidProviders?.["openai-codex"] &&
-        (account.providerCooldowns?.["openai-codex"] ?? 0) <= Date.now();
-    }
-    if (modelKey === "session") {
-      return hasCredential(account.config, "ollama");
-    }
-    if (modelKey === OPENCODE_ZEN_PROVIDER_ID || isOpenCodeZenModel(modelKey)) {
-      return hasCredential(account.config, OPENCODE_ZEN_PROVIDER_ID) &&
-        !account.invalidProviders?.[OPENCODE_ZEN_PROVIDER_ID] &&
-        (account.providerCooldowns?.[OPENCODE_ZEN_PROVIDER_ID] ?? 0) <= Date.now();
-    }
-    // Google pools (claude/gemini) require a google credential. A dual
-    // account (google + ollama) must stay eligible here — it can serve both.
-    return hasCredential(account.config, DEFAULT_PROVIDER);
+    const providerId = getProviderIdForPoolKey(modelKey);
+    return hasCredential(account.config, providerId) &&
+      !account.invalidProviders?.[providerId] &&
+      (account.providerCooldowns?.[providerId] ?? 0) <= Date.now();
   }
 
   /** Public pool-key resolution for quota routing display/logging. */
@@ -2913,11 +2893,14 @@ export class AccountRotator {
   }
 
   private resolvePoolKeyForModel(model: string): string | null {
-    if (isOpenCodeZenModel(model)) return OPENCODE_ZEN_PROVIDER_ID;
-    if (this.codexModels.has(model) || isCodexRequestModel(model)) {
-      return `${CODEX_QUOTA_MODEL_KEY}:${model}`;
+    const context = {
+      ollamaModels: this.ollamaModels,
+      codexModels: this.codexModels,
+    };
+    const adapter = findProviderForModel(model, context);
+    if (adapter?.getPoolKey) {
+      return adapter.getPoolKey(model);
     }
-    if (this.ollamaModels.has(model)) return "session";
     return resolveQuotaModelKey(model) ?? null;
   }
 

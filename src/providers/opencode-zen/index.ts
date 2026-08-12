@@ -5,6 +5,7 @@ import { runLogin } from "./login.js";
 import { getOpenCodeZenApiKey, validateCredentials, OPENCODE_ZEN_PROVIDER_ID } from "./credentials.js";
 import { forwardRequest, OpenCodeZenSseAccumulator, getBenchmarkSpec } from "./forward.js";
 import { fetchOpenCodeZenQuota } from "./quota.js";
+import { isOpenCodeZenModel } from "./catalog.js";
 import type { AccountRuntime } from "../../types.js";
 
 const OPENCODE_ZEN_TIER_RANKING = {
@@ -54,6 +55,14 @@ export const opencodeZenAdapter: ProviderAdapter = {
 
   getKickstartModelForPool(): string | undefined {
     return undefined;
+  },
+
+  ownsModel(model: string): boolean {
+    return isOpenCodeZenModel(model);
+  },
+
+  getPoolKey(): string {
+    return OPENCODE_ZEN_PROVIDER_ID;
   },
 
   getBenchmark() {

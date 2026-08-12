@@ -77,6 +77,14 @@ export const ollamaAdapter: ProviderAdapter = {
     return quotaModelKey === "session" ? "gpt-oss:20b" : undefined;
   },
 
+  ownsModel(model: string, context?: { ollamaModels?: Set<string> }): boolean {
+    return context?.ollamaModels?.has(model) ?? false;
+  },
+
+  getPoolKey(): string {
+    return "session";
+  },
+
   getBenchmark() {
     return getBenchmarkSpec();
   },

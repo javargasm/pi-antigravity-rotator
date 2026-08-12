@@ -28,29 +28,16 @@ export function normalizeAccountConfig(account: AccountConfig): AccountConfig {
   };
 
   if (
-    !providers.has("opencode-zen") &&
-    provider === "opencode-zen" &&
     typeof account.apiKey === "string" &&
     account.apiKey.trim() !== ""
   ) {
-    addCredential({
-      provider: "opencode-zen",
-      apiKey: account.apiKey,
-      proxyUrl: account.proxyUrl,
-    });
-  }
-
-  if (
-    !providers.has("ollama") &&
-    (provider === "ollama" || (provider !== "opencode-zen" && provider !== "openai-codex" && provider !== "google-antigravity")) &&
-    typeof account.apiKey === "string" &&
-    account.apiKey.trim() !== ""
-  ) {
-    addCredential({
-      provider: "ollama",
-      apiKey: account.apiKey,
-      proxyUrl: account.proxyUrl,
-    });
+    if (!providers.has(provider)) {
+      addCredential({
+        provider,
+        apiKey: account.apiKey,
+        proxyUrl: account.proxyUrl,
+      });
+    }
   }
 
   if (
