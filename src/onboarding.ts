@@ -15,6 +15,14 @@ import {
   defaultAccountEmail,
   validateApiKey,
 } from "./providers/ollama/api-key-validation.js";
+import {
+  codexOAuthErrorMessage,
+  createCodexAuthorizationFlow,
+  exchangeCodexAuthorizationCode,
+  getCodexOAuthConfig,
+  parseCodexIdentity,
+  type CodexOAuthConfig,
+} from "./providers/openai-codex/oauth.js";
 import type { AccountConfig } from "./types.js";
 
 interface AccountSink {
@@ -261,11 +269,13 @@ export function startHostedLogin(
 // user signs in and pastes the redirect URL back, server exchanges the code.
 
 interface CliLoginSession {
+  provider: "google-antigravity" | "openai-codex";
   verifier: string;
   challenge: string;
   oauthState: string;
   authUrl: string;
   createdAt: number;
+  codexConfig?: CodexOAuthConfig;
 }
 
 const cliLoginSessions = new Map<string, CliLoginSession>();
@@ -283,27 +293,44 @@ export function serveCliLogin(res: ServerResponse): void {
   pruneCliSessions();
   const { verifier, challenge } = generatePkce();
   const oauthState = generateState();
-  let authUrl: string;
+  let authUrl: string | null = null;
+  let sessionId: string | null = null;
   try {
     authUrl = buildAuthUrl(oauthState, challenge);
-  } catch (err) {
-    res.writeHead(503, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(
-      renderPage(
-        "OAuth Not Configured",
-        `<h1>OAuth Login Isn’t Ready</h1><p>${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`,
-      ),
-    );
-    return;
+    sessionId = generateState();
+    cliLoginSessions.set(sessionId, {
+      provider: "google-antigravity",
+      verifier,
+      challenge,
+      oauthState,
+      authUrl,
+      createdAt: Date.now(),
+    });
+  } catch {
+    // Google is optional for this provider-aware page. Codex and Ollama stay
+    // available when Antigravity OAuth is not configured.
   }
-  const sessionId = generateState();
-  cliLoginSessions.set(sessionId, {
-    verifier,
-    challenge,
-    oauthState,
-    authUrl,
-    createdAt: Date.now(),
-  });
+
+  let codexAuthUrl: string | null = null;
+  let codexSessionId: string | null = null;
+  try {
+    const codexConfig = getCodexOAuthConfig();
+    const codexFlow = createCodexAuthorizationFlow(codexConfig);
+    codexSessionId = generateState();
+    codexAuthUrl = codexFlow.url;
+    cliLoginSessions.set(codexSessionId, {
+      provider: "openai-codex",
+      verifier: codexFlow.verifier,
+      challenge: "",
+      oauthState: codexFlow.state,
+      authUrl: codexFlow.url,
+      createdAt: Date.now(),
+      codexConfig,
+    });
+  } catch {
+    // Keep Google/Ollama login usable if an operator supplied malformed Codex
+    // OAuth environment overrides.
+  }
 
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   res.end(
@@ -314,11 +341,12 @@ export function serveCliLogin(res: ServerResponse): void {
 
 <div class="tabs">
   <button class="tab active" data-panel="panel-google">Google (Antigravity)</button>
+  <button class="tab" data-panel="panel-codex">OpenAI Codex</button>
   <button class="tab" data-panel="panel-ollama">Ollama Cloud</button>
 </div>
 
 <div class="panel active" id="panel-google">
-<h3 style="margin:24px 0 8px;font-size:18px;">Step 1 &mdash; Sign in with Google</h3>
+${authUrl && sessionId ? `<h3 style="margin:24px 0 8px;font-size:18px;">Step 1 &mdash; Sign in with Google</h3>
 <p>Click the button below to open the Google sign-in page in a new tab:</p>
 <a class="cta" href="${escapeHtml(authUrl)}" target="_blank" rel="noopener" style="font-size:16px;">
   Sign in with Google &nearr;
@@ -336,7 +364,29 @@ export function serveCliLogin(res: ServerResponse): void {
   <button type="submit" class="cta" style="cursor:pointer;border:none;font-family:inherit;font-size:16px;margin-top:12px;">
     Connect Account
   </button>
-</form>
+</form>` : `<div class="note error">Google OAuth is not configured for this server. Set ANTIGRAVITY_CLIENT_ID, ANTIGRAVITY_CLIENT_SECRET and ANTIGRAVITY_REDIRECT_URI to enable it.</div>`}
+</div>
+
+<div class="panel" id="panel-codex">
+${codexAuthUrl && codexSessionId ? `<h3 style="margin:24px 0 8px;font-size:18px;">Step 1 &mdash; Sign in with ChatGPT</h3>
+<p>Open the OpenAI sign-in page in a new tab. Codex OAuth will return to the loopback URL configured for the Codex CLI.</p>
+<a class="cta" href="${escapeHtml(codexAuthUrl)}" target="_blank" rel="noopener" style="font-size:16px;">
+  Sign in with OpenAI Codex &nearr;
+</a>
+
+<h3 style="margin:24px 0 8px;font-size:18px;">Step 2 &mdash; Paste the callback URL</h3>
+<p>Copy the complete URL from the browser address bar, even if the loopback page does not load, and paste it here:</p>
+<form id="codexPasteForm" style="margin-top:12px;">
+  <input type="hidden" name="session" value="${escapeHtml(codexSessionId)}" />
+  <textarea name="redirectUrl" rows="4" placeholder="Paste the Codex callback URL (http://localhost:1455/auth/callback?... )" style="
+    width:100%;font-family:'IBM Plex Mono',monospace;font-size:13px;
+    padding:12px 14px;border-radius:12px;border:1px solid rgba(31,42,31,0.15);
+    background:rgba(31,42,31,0.03);resize:vertical;
+  "></textarea>
+  <button type="submit" class="cta" style="cursor:pointer;border:none;font-family:inherit;font-size:16px;margin-top:12px;">
+    Connect Codex Account
+  </button>
+</form>` : `<div class="note error">Codex OAuth is not available because its configuration is invalid. Check the CODEX_OAUTH_* environment variables and reload this page.</div>`}
 </div>
 
 <div class="panel" id="panel-ollama">
@@ -367,7 +417,8 @@ function showResult(html) {
   document.getElementById('result').innerHTML = html;
 }
 
-document.getElementById('pasteForm').addEventListener('submit', async (e) => {
+const googleForm = document.getElementById('pasteForm');
+if (googleForm) googleForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
   const btn = form.querySelector('button[type=submit]');
@@ -453,6 +504,48 @@ document.getElementById('keyForm').addEventListener('submit', async (e) => {
     btn.textContent = 'Connect Account';
   }
 });
+
+const codexForm = document.getElementById('codexPasteForm');
+if (codexForm) codexForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const btn = form.querySelector('button[type=submit]');
+  const redirectUrl = form.redirectUrl.value.trim();
+  const session = form.session.value;
+  if (!redirectUrl) { showResult('<div class="note error">Please paste the Codex callback URL.</div>'); return; }
+  btn.disabled = true;
+  btn.textContent = 'Connecting...';
+  showResult('<div class="note">Exchanging the Codex authorization code securely...</div>');
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token') || '';
+    const res = await fetch('/api/cli-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Rotator-Admin-Token': token } : {}) },
+      body: JSON.stringify({ provider: 'openai-codex', session, redirectUrl }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showResult('<div class="note" style="border-left-color:var(--accent);background:rgba(30,107,82,0.12);"><strong id="codexLoginResultEmail"></strong> ' + (data.isNew ? 'added' : 'updated') + ' successfully. The isolated Codex pool is ready.</div>');
+      document.getElementById('codexLoginResultEmail').textContent = data.email || '';
+    } else {
+      const errorDiv = document.createElement('div');
+      errorDiv.className = 'note error';
+      errorDiv.textContent = data.error || 'Unknown error';
+      document.getElementById('result').innerHTML = '';
+      document.getElementById('result').appendChild(errorDiv);
+    }
+  } catch (err) {
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'note error';
+    errorDiv.textContent = 'Request failed: ' + err.message;
+    document.getElementById('result').innerHTML = '';
+    document.getElementById('result').appendChild(errorDiv);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Connect Codex Account';
+  }
+});
 </script>
 `,
     ),
@@ -499,6 +592,11 @@ export async function handleCliLoginApi(
     return;
   }
 
+  if (provider === "openai-codex") {
+    await handleCodexCliLogin(body, res, rotator);
+    return;
+  }
+
   if (provider !== "google-antigravity") {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: false, error: `Unknown provider "${provider}"` }));
@@ -531,6 +629,11 @@ export async function handleCliLoginApi(
         error: "Session expired or invalid. Reload the page and try again.",
       }),
     );
+    return;
+  }
+  if (session.provider !== "google-antigravity") {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "Session does not belong to Google login" }));
     return;
   }
 
@@ -609,6 +712,107 @@ export async function handleCliLoginApi(
         error: "Unable to complete login. Please try again.",
       }),
     );
+  }
+}
+
+async function handleCodexCliLogin(
+  body: { session?: string; redirectUrl?: string },
+  res: ServerResponse,
+  rotator: AccountSink,
+): Promise<void> {
+  const sessionId = body.session;
+  const redirectUrl = body.redirectUrl;
+  if (
+    typeof sessionId !== "string" ||
+    typeof redirectUrl !== "string" ||
+    sessionId.length === 0 ||
+    redirectUrl.length === 0 ||
+    sessionId.length > 256 ||
+    redirectUrl.length > 8 * 1024
+  ) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "Missing session or redirectUrl" }));
+    return;
+  }
+
+  pruneCliSessions();
+  const session = cliLoginSessions.get(sessionId);
+  if (!session || session.provider !== "openai-codex" || !session.codexConfig) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      ok: false,
+      error: "Session expired or invalid. Reload the page and try again.",
+    }));
+    return;
+  }
+
+  let code: string | undefined;
+  let state: string | null;
+  try {
+    const url = new URL(redirectUrl.trim());
+    code = url.searchParams.get("code") ?? undefined;
+    state = url.searchParams.get("state");
+  } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      ok: false,
+      error: "Could not parse the URL. Paste the complete Codex callback URL.",
+    }));
+    return;
+  }
+
+  if (!code) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "No authorization code found in the URL." }));
+    return;
+  }
+  if (state !== session.oauthState) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      ok: false,
+      error: "State mismatch - reload the login page and try again.",
+    }));
+    return;
+  }
+
+  // Consume the one-time browser session before exchanging the authorization
+  // code. A retry must start a new PKCE flow.
+  cliLoginSessions.delete(sessionId);
+
+  try {
+    const tokens = await exchangeCodexAuthorizationCode(
+      code,
+      session.verifier,
+      session.codexConfig,
+    );
+    const identity = parseCodexIdentity(tokens.accessToken, tokens.idToken);
+    const email = identity.email ??
+      (identity.providerAccountId ? `${identity.providerAccountId}@codex.local` : undefined);
+    if (!email) throw new Error("Codex OAuth did not return an account identity");
+
+    const entry: AccountConfig = {
+      email,
+      label: email.split("@")[0],
+      provider: "openai-codex",
+      credentials: [{
+        provider: "openai-codex",
+        refreshToken: tokens.refreshToken,
+        ...(identity.providerAccountId ? { providerAccountId: identity.providerAccountId } : {}),
+      }],
+    };
+    const { isNew } = await addAccountToConfig(entry);
+    await rotator.addOrUpdateAccount(entry);
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, email: entry.email, isNew, provider: "openai-codex" }));
+  } catch (error) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      ok: false,
+      error: error instanceof Error && error.message.startsWith("Codex OAuth")
+        ? codexOAuthErrorMessage(error)
+        : "Unable to complete Codex login. Please reload and try again.",
+    }));
   }
 }
 

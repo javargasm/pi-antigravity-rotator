@@ -46,7 +46,7 @@ If either variable is missing, the rotator falls back to the legacy client and e
 
 ## Providers
 
-The rotator routes through two provider families. Each account in `accounts.json`
+The rotator routes through three provider families. Each account in `accounts.json`
 carries a `provider` field selecting its family (default when absent: `google-antigravity`,
 i.e. legacy configs).
 
@@ -54,6 +54,17 @@ i.e. legacy configs).
 |----------|-----|------------|--------------|
 | Google Antigravity | `google-antigravity` | OAuth refresh token (auto-discovered project) | `tuxevil-rotator login` |
 | Ollama Cloud | `ollama` | Static API key from `ollama.com/settings/keys` (never expires) | `tuxevil-rotator login --provider ollama` |
+| OpenAI Codex | `openai-codex` | ChatGPT OAuth refresh token, stored per provider credential | `tuxevil-rotator login --provider openai-codex` |
+
+Codex can also import an existing Codex CLI or compatible export without putting
+tokens in shell history:
+
+```bash
+tuxevil-rotator login --provider openai-codex --import ~/.codex/auth.json
+```
+
+See [Codex integration](integrations/codex.md) for OAuth variables, model routing,
+quota behavior, and the internal endpoints used by the provider.
 
 Ollama Cloud models are exposed on the standard OpenAI/Anthropic-compatible routes:
 
@@ -63,8 +74,47 @@ Ollama Cloud models are exposed on the standard OpenAI/Anthropic-compatible rout
 - `GET /v1/models` lists the Ollama catalog (`owned_by: "ollama"`).
 - When the `ollama` provider is enabled, the native `POST /api/chat` endpoint routes to it.
 
-Model names are matched per provider: models in Ollama's cloud catalog go to Ollama
-accounts, everything else routes to Google Antigravity.
+OpenAI Codex models are exposed on the same standard routes, but the pool is
+isolated and runs in its own credential ring:
+
+- `POST /v1/responses` is the primary native route: it sends a Responses
+  payload directly to `${CODEX_BASE_URL}/responses`, defaults `store` to `false`,
+  strips stateful fields (`previous_response_id`, `conversation`, `input_items`,
+  `prompt_cache_key`, `background`, `max_output_tokens`, `stream_options`), and
+  streams upstream Responses events back as SSE. `GET /v1/responses/<id>`,
+  `DELETE /v1/responses/<id>`, `POST /v1/responses/<id>/cancel`, and
+  `GET /v1/responses/<id>/input_items` are supported as well. Persisted
+  Responses survive rotator restarts via `<configDir>/responses.json` with
+  atomic writes and a 1.5 s debounce.
+- `POST /v1/chat/completions` uses an explicit Chat ↔ Responses conversion for
+  multimodal input, tools, reasoning, usage, and SSE chunks. Codex streaming
+  is the only path that emits a single SSE delta per upstream event.
+- `GET /v1/models` lists the Codex catalog (`owned_by: "openai-codex"`). The
+  safe base catalog contains `gpt-5.6-terra` and `gpt-5.6-luna`; `gpt-5.6-sol`
+  is also recognised but is reserved for paid Codex plans and may return an
+  upstream `4xx` on free-tier accounts. Authenticated discovery can add more
+  IDs that match the Codex pattern, but no cross-provider models exposed by
+  the same endpoint are pulled in.
+
+Optional Codex environment variables (defaults from
+[`docs/integrations/codex.md`](integrations/codex.md)):
+
+| Variable | Default |
+|---|---|
+| `CODEX_OAUTH_CLIENT_ID` | Codex CLI public client id |
+| `CODEX_OAUTH_AUTHORIZE_URL` | `https://auth.openai.com/oauth/authorize` |
+| `CODEX_OAUTH_TOKEN_URL` | `https://auth.openai.com/oauth/token` |
+| `CODEX_OAUTH_REDIRECT_URI` | `http://localhost:1455/auth/callback` |
+| `CODEX_OAUTH_CALLBACK_HOST` | `127.0.0.1` |
+| `CODEX_OAUTH_CALLBACK_PORT` | `1455` |
+| `CODEX_OAUTH_SCOPE` | `openid profile email offline_access` |
+| `CODEX_BASE_URL` | `https://chatgpt.com/backend-api/codex` |
+| `CODEX_USAGE_URL` | `https://chatgpt.com/backend-api/wham/usage` |
+
+Model names are matched per provider: Codex models are sent only to Codex
+credentials, Ollama models only to Ollama credentials, and Google models only to
+Google credentials. There is no automatic cross-provider fallback — a Codex
+request never lands on an Antigravity or Ollama account and vice versa.
 
 ## accounts.json
 
@@ -145,11 +195,12 @@ The main configuration file. Created automatically by the `login` command, and e
 | Field | Description |
 |-------|-------------|
 | `email` | Account email (auto-filled by login) |
-| `provider` | `google-antigravity` (default/legacy) or `ollama` — selects the credential fields required and the upstream routing |
+| `provider` | `google-antigravity` (default/legacy), `ollama`, or `openai-codex` — selects the credential fields required and upstream routing |
 | `refreshToken` | Google OAuth refresh token (auto-filled by `login`, Google accounts only) |
 | `projectId` | Google Cloud project ID discovered during login (Google accounts only) |
 | `projectSource` | Optional metadata: `google` when discovered from Google, `manual` if edited by hand |
 | `apiKey` | Ollama Cloud API key (Ollama accounts only; never expires, see `ollama.com/settings/keys`) |
+| `codexRefreshToken` / `codexAccountId` | Legacy Codex fields read and migrated into `credentials`; prefer `credentials[].refreshToken` and `credentials[].providerAccountId` |
 | `label` | Display name on the dashboard (auto-filled, defaults to email username) |
 | `tier` | Optional: `ultra`, `pro`, `plus`, `free`, or `unknown` — used by `tier-first` and `hybrid` routing policies |
 

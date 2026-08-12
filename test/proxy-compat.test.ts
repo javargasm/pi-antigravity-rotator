@@ -5,6 +5,7 @@ import { openAIToAntigravityBody } from "../src/compat.js";
 import {
 	classifyUpstreamResponse,
 	forwardRequest,
+	providerAdapterForModel,
 	withRotation,
 	type RequestBody,
 } from "../src/proxy.js";
@@ -107,6 +108,42 @@ function createRotatorStub(account: AccountRuntime): AccountRotator {
 }
 
 describe("proxy compat integration", () => {
+	it("does not select Codex for a non-Codex model in a contaminated catalog", () => {
+		const provider = providerAdapterForModel(
+			createAccount(),
+			"claude-sonnet-4-6",
+			{
+				getCodexModels: () => ["claude-sonnet-4-6"],
+			} as unknown as AccountRotator,
+		);
+
+		assert.notEqual(provider.id, "openai-codex");
+	});
+
+	it("selects Codex for an explicitly requested paid-only Codex model", () => {
+		const provider = providerAdapterForModel(
+			createAccount(),
+			"gpt-5.6-sol",
+			{
+				getCodexModels: () => ["gpt-5.6-terra", "gpt-5.6-luna"],
+			} as unknown as AccountRotator,
+		);
+
+		assert.equal(provider.id, "openai-codex");
+	});
+
+	it("selects Google for Claude when Codex is the primary credential", () => {
+		const account = createAccount();
+		account.config.credentials = [
+			{ provider: "openai-codex", refreshToken: "codex-refresh" },
+			{ provider: "google-antigravity", refreshToken: "google-refresh", projectId: "google-project" },
+		];
+
+		const provider = providerAdapterForModel(account, "claude-sonnet-4-6");
+
+		assert.equal(provider.id, "google-antigravity");
+	});
+
 	it("cascades daily 404 to prod and preserves the compat payload", async () => {
 		const capturesDaily: Capture[] = [];
 		const capturesProd: Capture[] = [];

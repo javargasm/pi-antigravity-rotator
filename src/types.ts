@@ -42,7 +42,7 @@ export type RoutingRejectionReason =
  * and an Ollama Cloud API key).
  */
 export interface ProviderCredential {
-  /** Provider id: "google-antigravity" or "ollama". */
+  /** Provider id: "google-antigravity", "ollama", or "openai-codex". */
   provider: string;
   /** Ollama Cloud: static API key (never expires). */
   apiKey?: string;
@@ -50,6 +50,8 @@ export interface ProviderCredential {
   refreshToken?: string;
   /** Google Antigravity: Cloud project id. */
   projectId?: string;
+  /** Codex/ChatGPT workspace or account id from the OAuth identity claim. */
+  providerAccountId?: string;
   // How the projectId was obtained.
   projectSource?: "google" | "manual";
   /** Optional HTTP(S) or SOCKS5 egress proxy for this provider credential. */
@@ -79,6 +81,10 @@ export interface AccountConfig {
   refreshToken?: string;
   /** @deprecated legacy Google Antigravity Cloud project id. */
   projectId?: string;
+  /** @deprecated legacy Codex refresh token, migrated into credentials. */
+  codexRefreshToken?: string;
+  /** @deprecated legacy Codex account id, migrated into credentials. */
+  codexAccountId?: string;
   /** @deprecated migrated into credentials. */
   projectSource?: "google" | "manual";
   /** @deprecated use credentials[].proxyUrl for provider-scoped routing. */
@@ -220,6 +226,8 @@ export interface ModelSpecConfig {
 export interface ModelQuota {
   modelKey: string;
   displayName: string;
+  /** Owner of this quota pool when the account has several providers. */
+  providerId?: string;
   percentRemaining: number;
   /** Raw usage fraction (0..1) when the provider reports one (Ollama). */
   usageRaw?: number;
@@ -350,6 +358,14 @@ export interface AccountRuntime {
   config: AccountConfig;
   accessToken: string | null;
   tokenExpires: number;
+  /** Provider-scoped access tokens. Legacy Google/Ollama state still uses the fields above. */
+  providerTokens?: Record<
+    string,
+    { accessToken: string | null; tokenExpires: number }
+  >;
+  /** Provider-local auth failures/cooldowns; Google/Ollama remain routable. */
+  invalidProviders?: Record<string, string>;
+  providerCooldowns?: Record<string, number>;
   // Rotation tracking (per-model via rotator)
   requestsSinceRotation: number;
   totalRequests: number;
@@ -476,6 +492,7 @@ export interface StatusResponse {
   };
   routingDiagnostics: Record<string, RoutingModelDiagnostics>;
   ollamaModels: string[];
+  codexModels?: string[];
   // Present only when at least one account carries an ollama credential.
   modelTierAccess?: Record<string, ModelTierAccess>;
   predictions: Record<string, ExhaustionPrediction>;
@@ -538,6 +555,10 @@ export interface AccountStatus {
   lastError: string | null;
   consecutiveErrors: number;
   hasValidToken: boolean;
+  /** Provider-scoped authentication failures; sibling providers may remain usable. */
+  invalidProviders?: Record<string, string>;
+  /** Provider-scoped cooldown deadlines, kept separate from account breakers. */
+  providerCooldowns?: Record<string, number>;
   quota: ModelQuota[];
   inFlightRequests: number;
   inFlightByModel: Record<string, number>;
@@ -723,6 +744,25 @@ export const MODEL_PRICING: Record<
     cachingStoragePer1MPerHour: 1.0,
   },
   "gpt-oss-120b-medium": { inputPer1M: 2.0, outputPer1M: 10.0 },
+
+  // OpenAI Codex GPT-5.6 models — official OpenAI API pricing checked
+  // 2026-08-11. Token usage currently records aggregate input/output tokens;
+  // cache rates are retained for spend metadata but are not applied separately.
+  "gpt-5.6-sol": {
+    inputPer1M: 5.0,
+    outputPer1M: 30.0,
+    cachingPer1M: 0.50,
+  },
+  "gpt-5.6-terra": {
+    inputPer1M: 2.0,
+    outputPer1M: 12.0,
+    cachingPer1M: 0.20,
+  },
+  "gpt-5.6-luna": {
+    inputPer1M: 0.20,
+    outputPer1M: 1.20,
+    cachingPer1M: 0.02,
+  },
 
   // Ollama Cloud model pricing (USD per 1M tokens). Sourced from the
   // ~/ollama-rotator project (verified 2026-08-09).

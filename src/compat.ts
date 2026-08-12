@@ -78,6 +78,22 @@ import type {
   CompatCompletion,
   ResponsesConversionResult,
 } from "./providers/google-antigravity/translators.js";
+import {
+  isCodexRequestModel,
+  isCodexProviderModelId,
+  getCodexModels,
+} from "./providers/openai-codex/catalog.js";
+import { serveCodexChat, serveCodexResponses } from "./providers/openai-codex/compat.js";
+
+function isCodexModelForRotator(rotator: AccountRotator, model: string): boolean {
+  if (isCodexRequestModel(model)) return true;
+  if (!isCodexProviderModelId(model)) return false;
+  try {
+    return rotator.getCodexModels?.().includes(model) ?? false;
+  } catch {
+    return false;
+  }
+}
 
 export {
   isRecord,
@@ -100,6 +116,7 @@ export {
   validateOpenAIChatCompletionRequest,
   validateOpenAIResponsesRequest,
   validateAnthropicMessagesRequest,
+  isCodexModelForRotator,
 };
 export type {
   ModelSpec,
@@ -1683,7 +1700,31 @@ export function serveOpenAIModels(
       },
     }),
   );
-  const ollamaModels = rotator?.getOllamaModels?.() ?? [];
+  const hasActiveProvider = (providerId: string): boolean =>
+    rotator?.hasActiveProvider(providerId) ?? false;
+  const ollamaModels = hasActiveProvider("ollama")
+    ? rotator?.getOllamaModels?.() ?? []
+    : [];
+  if (hasActiveProvider("openai-codex")) {
+    for (const model of getCodexModels()) {
+      catalog.push({
+        id: model.id,
+        object: "model",
+        created: 0,
+        owned_by: "openai-codex",
+        context_window: model.contextWindow,
+        max_model_len: model.contextWindow,
+        meta: {
+          context_length: model.contextWindow,
+          family: "openai-codex",
+          provider: "openai-codex",
+          reasoning: model.reasoning,
+          multimodal: model.multimodal,
+          tool_calling: model.tools,
+        },
+      });
+    }
+  }
   for (const id of ollamaModels) {
     catalog.push({
       id,
@@ -1865,6 +1906,16 @@ export async function handleOpenAIChatCompletions(
   }
   const apiKeyHash = auth.key?.tokenHash || (auth.rawKey ? hashKey(auth.rawKey) : null);
 
+  if (isCodexModelForRotator(rotator, validation.value.model)) {
+    await serveCodexChat(req, res, rotator, validation.value, {
+      callType: "chat_completion",
+      apiKeyHash,
+      requesterIp: req.socket?.remoteAddress || null,
+      rawRequest: validation.value,
+    });
+    return;
+  }
+
   const compMode = parseCompressionMode(
     req.headers["x-rotator-compression"],
     rotator?.getConfig?.()?.compressionMode,
@@ -1990,6 +2041,16 @@ export async function handleOpenAIResponsesCreate(
     return;
   }
   const apiKeyHash = auth.key?.tokenHash || (auth.rawKey ? hashKey(auth.rawKey) : null);
+
+  if (isCodexModelForRotator(rotator, validation.value.model)) {
+    await serveCodexResponses(req, res, rotator, validation.value, {
+      callType: "responses",
+      apiKeyHash,
+      requesterIp: req.socket?.remoteAddress || null,
+      rawRequest: validation.value,
+    });
+    return;
+  }
 
   let converted: ResponsesConversionResult;
   try {

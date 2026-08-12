@@ -23,7 +23,6 @@ import {
   REQUEST_GOOG_API_CLIENT,
   REQUEST_CLIENT_METADATA,
   ANTIGRAVITY_ENDPOINTS,
-  KICKSTART_MODEL_FOR_QUOTA_POOL,
   OLLAMA_TAGS_URL,
   OLLAMA_USER_AGENT,
   TAGS_CACHE_TTL_MS,
@@ -59,6 +58,14 @@ import {
 import type { QuotaFetchContext } from "./providers/adapter.js";
 import { logger } from "./logger.js";
 import { getAccountProxyDispatcher } from "./providers/proxy-dispatcher.js";
+import {
+  fetchCodexCatalog,
+  getCodexModels,
+  isCodexRequestModel,
+  isCodexProviderModelId,
+} from "./providers/openai-codex/catalog.js";
+import { CodexOAuthError } from "./providers/openai-codex/oauth.js";
+import { CODEX_QUOTA_MODEL_KEY } from "./providers/openai-codex/quota.js";
 import { getUpdateInfo } from "./version-check.js";
 import { getNotifications } from "./notification-poller.js";
 import { getConfiguredAdminToken } from "./admin-auth.js";
@@ -119,6 +126,7 @@ export class AccountRotator {
   private static readonly MAX_LATENCY_RECORDS = 200;
   private requestLog: StatusResponse["requestLog"] = [];
   private ollamaModels = new Set<string>();
+  private codexModels = new Set<string>(getCodexModels().map((model) => model.id));
   private readonly usagePredictor = new UsagePredictor();
   private lastOllamaCatalogFetch = 0;
 
@@ -128,6 +136,41 @@ export class AccountRotator {
 
   getOllamaModels(): string[] {
     return [...this.ollamaModels];
+  }
+
+  hasActiveProvider(providerId: string): boolean {
+    return this.accounts.some(
+      (account) =>
+        !account.disabled &&
+        !account.flagged &&
+        hasCredential(account.config, providerId),
+    );
+  }
+
+  setCodexModels(models: string[]): void {
+    this.codexModels = new Set(
+      models
+        .map((model) => model.trim())
+        .filter((model): model is string => isCodexProviderModelId(model)),
+    );
+  }
+
+  getCodexModels(): string[] {
+    return [...this.codexModels];
+  }
+
+  async primeCodexCatalog(): Promise<void> {
+    const account = this.accounts.find(
+      (candidate) => hasCredential(candidate.config, "openai-codex") && !candidate.disabled && !candidate.flagged,
+    );
+    if (!account) return;
+    try {
+      await this.ensureValidTokenForProvider(account, "openai-codex");
+      const models = await fetchCodexCatalog(account);
+      this.setCodexModels(models.map((model) => model.id));
+    } catch {
+      // The verified base allowlist stays active when discovery is unavailable.
+    }
   }
 
   /** Fetch the Ollama Cloud catalog once at startup so provider-aware routing and /v1/models work before the first quota poll. */
@@ -585,7 +628,7 @@ export class AccountRotator {
   private logConsolidatedPoll(account: AccountRuntime): void {
     const stash = account.lastPollByProvider;
     if (!stash) return;
-    const ordered = ["google-antigravity", "ollama"]
+    const ordered = ["google-antigravity", "ollama", "openai-codex"]
       .filter((pid) => stash[pid])
       .map((pid) => `${pid}: ${stash[pid]}`);
     if (ordered.length > 0) {
@@ -602,13 +645,16 @@ export class AccountRotator {
     const available = this.accounts.filter((a) => !a.disabled && !a.flagged);
     for (const account of available) {
       try {
-        await this.ensureValidToken(account);
         const quotaCtx: QuotaFetchContext = {
           log: (message) => this.log(message),
           markFlagged: (acc, reason, options) =>
             this.markFlagged(acc, reason, options),
           reportQuotaPollFlag: (acc, statusCode, errorText) =>
             this.reportQuotaPollFlag(acc, statusCode, errorText),
+          markProviderInvalid: (acc, providerId, reason) =>
+            this.markProviderInvalid(acc, providerId, reason),
+          setProviderCooldown: (acc, providerId, durationMs) =>
+            this.setProviderCooldown(acc, providerId, durationMs),
         };
         // Parent-account model: poll quota for every provider credential
         // the account holds (Google OAuth pools + Ollama usage pools).
@@ -617,7 +663,12 @@ export class AccountRotator {
         );
         if (providerIds.size === 0) providerIds.add(primaryProviderId(account.config));
         for (const pid of providerIds) {
-          await getProviderAdapter(pid).fetchQuota(account, quotaCtx);
+          try {
+            await this.ensureValidTokenForProvider(account, pid);
+            await getProviderAdapter(pid).fetchQuota(account, quotaCtx);
+          } catch {
+            // One invalid provider credential must not suppress sibling pools.
+          }
         }
       } catch {
         // Token refresh or quota fetch failed, skip this account
@@ -633,20 +684,19 @@ export class AccountRotator {
       // pools (100% quota with resetTime very close to a full 5h or 7d window — timer exists but
       // untouched). Deduplicates by upstream model within this cycle.
       if (this.autoWarmupEnabled && account.allowFreshWindowStartsOverride) {
-        const idlePools = account.quota.filter((q) => this.isQuotaIdleForKickstart(q));
+        const idlePools = account.quota.filter(
+          (q) =>
+            this.isQuotaIdleForKickstart(q) &&
+            this.getKickstartTarget(account, q.modelKey) !== null,
+        );
         if (idlePools.length > 0) {
           const alreadySent =
             this.warmupSentThisCycle.get(account.config.email) ?? new Set<string>();
           const upstreamToQuotaKey = new Map<string, string>();
           for (const q of idlePools) {
-            // Dispatch warmup by pool owner: the session pool belongs to
-            // Ollama; every other pool key is a Google OAuth pool.
-            const warmupAdapter =
-              q.modelKey === "session"
-                ? getProviderAdapter("ollama")
-                : getProviderForAccount(account.config);
-            const upstream =
-              warmupAdapter.getKickstartModelForPool(q.modelKey) ?? q.modelKey;
+            const target = this.getKickstartTarget(account, q.modelKey);
+            if (!target) continue;
+            const upstream = target.upstreamModel;
             if (!upstreamToQuotaKey.has(upstream)) {
               upstreamToQuotaKey.set(upstream, q.modelKey);
             }
@@ -739,7 +789,10 @@ export class AccountRotator {
 
   // Get quota % for a specific model on an account. Returns -1 if no data.
   private getModelQuota(account: AccountRuntime, modelKey: string): number {
-    const q = account.quota.find((q) => q.modelKey === modelKey);
+    const q = account.quota.find((q) => q.modelKey === modelKey) ??
+      (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
+        ? account.quota.find((candidate) => candidate.modelKey === CODEX_QUOTA_MODEL_KEY)
+        : undefined);
     return q ? q.percentRemaining : -1;
   }
 
@@ -748,7 +801,10 @@ export class AccountRotator {
     account: AccountRuntime,
     modelKey: string,
   ): "fresh" | "5h" | "7d" {
-    const q = account.quota.find((q) => q.modelKey === modelKey);
+    const q = account.quota.find((q) => q.modelKey === modelKey) ??
+      (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
+        ? account.quota.find((candidate) => candidate.modelKey === CODEX_QUOTA_MODEL_KEY)
+        : undefined);
     return q?.timerType ?? "fresh";
   }
 
@@ -763,6 +819,32 @@ export class AccountRotator {
     if (remaining <= 0) return false;
     const within = (target: number) => Math.abs(remaining - target) < 600_000;
     return within(5 * 3600 * 1000) || within(7 * 24 * 3600 * 1000);
+  }
+
+  /**
+   * Resolve kickstart by quota-pool owner, never by the account's primary
+   * provider. Parent accounts may hold several credentials, and Codex pools
+   * deliberately have no kickstart implementation.
+   */
+  private getKickstartTarget(
+    account: AccountRuntime,
+    quotaModelKey: string,
+  ): { providerId: string; adapter: ReturnType<typeof getProviderAdapter>; upstreamModel: string } | null {
+    const quota = account.quota.find((candidate) => candidate.modelKey === quotaModelKey);
+    const providerId =
+      quota?.providerId ??
+      (quotaModelKey === "session"
+        ? "ollama"
+        : quotaModelKey === CODEX_QUOTA_MODEL_KEY ||
+            quotaModelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
+          ? "openai-codex"
+          : DEFAULT_PROVIDER);
+    if (!hasCredential(account.config, providerId)) return null;
+
+    const adapter = getProviderAdapter(providerId);
+    const upstreamModel = adapter.getKickstartModelForPool(quotaModelKey);
+    if (!upstreamModel) return null;
+    return { providerId, adapter, upstreamModel };
   }
 
   // Timer priority for a specific model:
@@ -1483,13 +1565,18 @@ export class AccountRotator {
     }
 
     if (modelKey && state) {
-      const restored = await this.restorePreferredModelAccount(
-        modelKey,
-        now,
-        state,
-        idx,
-      );
-      if (restored) return restored;
+      try {
+        const restored = await this.restorePreferredModelAccount(
+          modelKey,
+          now,
+          state,
+          idx,
+        );
+        if (restored) return restored;
+      } catch (error) {
+        if (!this.isCodexPoolKey(modelKey)) throw error;
+        return this.rotateModelForRequest(modelKey, now, idx);
+      }
     }
 
     if (current && modelKey && !this.isProviderEligibleForKey(current, modelKey)) {
@@ -1551,12 +1638,15 @@ export class AccountRotator {
       }
       this.startRequest(current, modelKey ?? undefined);
       try {
-        await this.ensureValidToken(current);
+        await this.ensureValidTokenForModel(current, modelKey);
         if (modelKey) this.countModelAssignment(modelKey);
         return current;
       } catch (err) {
         this.refundTokenBucket(current, Date.now());
         this.finishRequest(current, modelKey ?? undefined);
+        if (modelKey && this.isCodexPoolKey(modelKey)) {
+          return this.rotateModelForRequest(modelKey, now, idx);
+        }
         throw err;
       }
     }
@@ -1642,7 +1732,15 @@ export class AccountRotator {
       this.log(
         `[${modelKey}] Rotated to ${best.config.label || best.config.email} [${timerType}] (quota: ${quota >= 0 ? quota + "%" : "unknown"})`,
       );
-      return this.activateModelAccount(modelKey, best, stickyAccountIndex);
+      try {
+        return await this.activateModelAccount(modelKey, best, stickyAccountIndex);
+      } catch (error) {
+        if (!this.isCodexPoolKey(modelKey)) throw error;
+        // A bad Codex refresh token is provider-scoped. The failed account is
+        // marked invalid by ensureValidTokenForProvider, so retry selection
+        // with the next Codex account without touching Google/Ollama pools.
+        return this.rotateModel(modelKey, now, this.accounts.indexOf(best));
+      }
     }
 
     if (
@@ -1707,7 +1805,7 @@ export class AccountRotator {
     await this.saveState();
     this.startRequest(account, modelKey);
     try {
-      await this.ensureValidToken(account);
+      await this.ensureValidTokenForModel(account, modelKey);
       return account;
     } catch (err) {
       this.refundTokenBucket(account, Date.now());
@@ -2303,8 +2401,11 @@ export class AccountRotator {
   ): void {
     const now = Date.now();
     const modelKey = model
-      ? (resolveQuotaModelKey(model) ?? "__default__")
+      ? (this.resolvePoolKeyForModel(model) ?? resolveQuotaModelKey(model) ?? "__default__")
       : "__default__";
+    if (model && (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`) || isCodexRequestModel(model))) {
+      this.setProviderCooldown(account, "openai-codex", cooldownMs);
+    }
     account.cooldownsByModel[modelKey] = now + cooldownMs;
     account.quotaExhaustedAt = now;
 
@@ -2323,6 +2424,10 @@ export class AccountRotator {
     providerResourceExhausted = false,
   ): void {
     const now = Date.now();
+    if (model && isCodexRequestModel(model)) {
+      this.setProviderCooldown(account, "openai-codex", cooldownMs);
+      return;
+    }
     if (providerResourceExhausted) {
       // Account-level daily/weekly quota exhaustion is not a model outage:
       // the account already gets an individual cooldown from markExhausted,
@@ -2331,7 +2436,7 @@ export class AccountRotator {
       return;
     }
     const modelKey = model
-      ? (resolveQuotaModelKey(model) ?? "__default__")
+      ? (this.resolvePoolKeyForModel(model) ?? resolveQuotaModelKey(model) ?? "__default__")
       : "__default__";
     const windowMs =
       this.config.projectCircuitBreakerWindowMs ?? 10 * 60 * 1000;
@@ -2612,6 +2717,75 @@ export class AccountRotator {
     }
   }
 
+  async ensureValidTokenForProvider(
+    account: AccountRuntime,
+    providerId: string,
+  ): Promise<void> {
+    const adapter = getProviderAdapter(providerId);
+    try {
+      await adapter.ensureValidToken(account);
+    } catch (error) {
+      if (
+        providerId === "openai-codex" &&
+        (error instanceof CodexOAuthError ||
+          (typeof error === "object" && error !== null &&
+            (error as { reloginRequired?: unknown }).reloginRequired === true))
+      ) {
+        const reason = error instanceof Error
+          ? error.message
+          : "Codex credential requires re-authentication";
+        this.markProviderInvalid(account, providerId, reason);
+      }
+      throw error;
+    }
+  }
+
+  private isCodexPoolKey(modelKey: string): boolean {
+    return modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`);
+  }
+
+  private async ensureValidTokenForModel(
+    account: AccountRuntime,
+    modelKey: string | null,
+  ): Promise<void> {
+    if (modelKey?.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)) {
+      await this.ensureValidTokenForProvider(account, "openai-codex");
+      return;
+    }
+    if (modelKey === "session") {
+      await this.ensureValidTokenForProvider(account, "ollama");
+      return;
+    }
+    await this.ensureValidToken(account);
+  }
+
+  markProviderInvalid(
+    account: AccountRuntime,
+    providerId: string,
+    reason: string,
+  ): void {
+    account.invalidProviders ??= {};
+    account.invalidProviders[providerId] = reason;
+    account.providerTokens ??= {};
+    account.providerTokens[providerId] = { accessToken: null, tokenExpires: 0 };
+    account.lastError = reason;
+    this.log(`${account.config.email}: ${providerId} credential requires re-authentication`, "warn");
+    this.scheduleStateSave();
+  }
+
+  setProviderCooldown(
+    account: AccountRuntime,
+    providerId: string,
+    durationMs: number,
+  ): void {
+    account.providerCooldowns ??= {};
+    account.providerCooldowns[providerId] = Math.max(
+      account.providerCooldowns[providerId] ?? 0,
+      Date.now() + Math.max(0, durationMs),
+    );
+    this.scheduleStateSave();
+  }
+
   private isAvailable(account: AccountRuntime, now: number): boolean {
     if (account.disabled) return false;
     if (account.flagged) return false;
@@ -2626,6 +2800,10 @@ export class AccountRotator {
     now: number,
   ): boolean {
     if (!this.isAvailable(account, now)) return false;
+    if (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)) {
+      if (account.invalidProviders?.["openai-codex"]) return false;
+      if ((account.providerCooldowns?.["openai-codex"] ?? 0) > now) return false;
+    }
     const modelCooldown = account.cooldownsByModel[modelKey] ?? 0;
     if (modelCooldown > now) return false;
     // Ollama Cloud (pool key "session") imposes no per-account concurrency
@@ -2701,6 +2879,11 @@ export class AccountRotator {
     account: AccountRuntime,
     modelKey: string,
   ): boolean {
+    if (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)) {
+      return hasCredential(account.config, "openai-codex") &&
+        !account.invalidProviders?.["openai-codex"] &&
+        (account.providerCooldowns?.["openai-codex"] ?? 0) <= Date.now();
+    }
     if (modelKey === "session") {
       return hasCredential(account.config, "ollama");
     }
@@ -2715,6 +2898,9 @@ export class AccountRotator {
   }
 
   private resolvePoolKeyForModel(model: string): string | null {
+    if (this.codexModels.has(model) || isCodexRequestModel(model)) {
+      return `${CODEX_QUOTA_MODEL_KEY}:${model}`;
+    }
     if (this.ollamaModels.has(model)) return "session";
     return resolveQuotaModelKey(model) ?? null;
   }
@@ -2754,7 +2940,7 @@ export class AccountRotator {
     if (this.protectivePauseUntil > now)
       retryTimes.push(this.protectivePauseUntil);
     const modelKey = model
-      ? (resolveQuotaModelKey(model) ?? "__default__")
+      ? (this.resolvePoolKeyForModel(model) ?? resolveQuotaModelKey(model) ?? "__default__")
       : "__default__";
     const dailyResetAt = nextUtcDayStartMs(now);
     const modelBreaker = this.modelBreakers[modelKey] ?? 0;
@@ -2837,6 +3023,8 @@ export class AccountRotator {
         lastError: a.lastError,
         consecutiveErrors: a.consecutiveErrors,
         hasValidToken: !!(a.accessToken && a.tokenExpires > now),
+        invalidProviders: a.invalidProviders,
+        providerCooldowns: a.providerCooldowns,
         quota: a.quota,
         inFlightRequests: a.inFlightRequests,
         inFlightByModel: a.inFlightByModel,
@@ -2939,6 +3127,7 @@ export class AccountRotator {
       notifications: getNotifications(),
       hostedOAuthConfigured: isHostedOAuthConfigured(),
       ollamaModels: this.getOllamaModels(),
+      codexModels: this.getCodexModels(),
       modelTierAccess: this.accounts.some((a) =>
         hasCredential(a.config, "ollama"),
       )
@@ -3425,8 +3614,18 @@ export class AccountRotator {
       };
     }
 
+    const target = this.getKickstartTarget(account, quotaModelKey);
+    if (!target) {
+      return {
+        ok: false,
+        status: 409,
+        upstreamModel: "",
+        error: "quota pool has no configured kickstart provider",
+      };
+    }
+
     try {
-      await this.ensureValidToken(account);
+      await this.ensureValidTokenForProvider(account, target.providerId);
     } catch (err) {
       return {
         ok: false,
@@ -3436,18 +3635,13 @@ export class AccountRotator {
       };
     }
 
-    const kickstartAdapter =
-      quotaModelKey === "session"
-        ? getProviderAdapter("ollama")
-        : getProviderForAccount(account.config);
+    const kickstartAdapter = target.adapter;
     const isOllamaAccount = kickstartAdapter.id === "ollama";
     if (!account.accessToken && !isOllamaAccount) {
       return { ok: false, status: 401, upstreamModel: "", error: "no access token" };
     }
 
-    const upstreamModel =
-      kickstartAdapter.getKickstartModelForPool(quotaModelKey) ??
-      quotaModelKey;
+    const upstreamModel = target.upstreamModel;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -3579,7 +3773,11 @@ export class AccountRotator {
       return { ok: false, error: "account not found", results: [] };
     }
 
-    const idlePools = account.quota.filter((q) => this.isQuotaIdleForKickstart(q));
+    const idlePools = account.quota.filter(
+      (q) =>
+        this.isQuotaIdleForKickstart(q) &&
+        this.getKickstartTarget(account, q.modelKey) !== null,
+    );
     if (idlePools.length === 0) {
       return { ok: true, results: [] };
     }
@@ -3587,7 +3785,9 @@ export class AccountRotator {
     // Deduplicate: group quota pool keys by their upstream model
     const upstreamToQuotaPools = new Map<string, string[]>();
     for (const q of idlePools) {
-      const upstream = KICKSTART_MODEL_FOR_QUOTA_POOL[q.modelKey] ?? q.modelKey;
+      const target = this.getKickstartTarget(account, q.modelKey);
+      if (!target) continue;
+      const upstream = target.upstreamModel;
       const list = upstreamToQuotaPools.get(upstream) ?? [];
       list.push(q.modelKey);
       upstreamToQuotaPools.set(upstream, list);

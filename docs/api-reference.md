@@ -63,9 +63,9 @@ The admin token is auto-generated on first run and saved to `.admin-token`. Over
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/v1/models` | List available models |
+| `GET` | `/v1/models` | List available models. Each entry includes an `owned_by` field marking its provider (`google-antigravity`, `ollama`, or `openai-codex`). |
 | `POST` | `/v1/chat/completions` | Chat completions (streaming and non-streaming) |
-| `POST` | `/v1/responses` | OpenAI Responses API (for Codex-style agents) |
+| `POST` | `/v1/responses` | OpenAI Responses API (for Codex-style agents; persisted Codex Responses survive restarts via `<configDir>/responses.json`) |
 | `GET` | `/v1/responses/<id>` | Retrieve a stored Responses result |
 | `DELETE` | `/v1/responses/<id>` | Delete a stored Responses result |
 | `POST` | `/v1/responses/<id>/cancel` | Cancel an in-progress Responses result |
@@ -112,3 +112,4 @@ Returns full JSON status including:
 - Circuit breaker states
 - Daily budget counters
 - Token usage statistics
+- Per-provider quota keys: Antigravity `claude` / `gemini`, Ollama `session` / `weekly`, Codex `openai-codex` (and `openai-codex-spark` when the endpoint exposes it)

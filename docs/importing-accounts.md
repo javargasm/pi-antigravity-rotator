@@ -28,3 +28,5 @@ Se aceptan un array de cuentas, un objeto con la propiedad `accounts` o una cuen
 `project_id` es obligatorio. El importador no inventa un proyecto compartido ni usa `default-project` cuando falta; las entradas incompletas se omiten y el comando termina con código de error, sin imprimir tokens.
 
 La operación es idempotente: al repetirla no crea cuentas duplicadas. Si ya existe una cuenta con el mismo email, conserva sus credenciales Ollama y agrega o actualiza la credencial Google Antigravity.
+
+> **Nota:** este importador sólo cubre credenciales Google Antigravity. Para importar credenciales OpenAI Codex desde un export del Codex CLI (`~/.codex/auth.json`), usa `tuxevil-rotator login --provider openai-codex --import <ruta>` — ver [Codex](integrations/codex.md).

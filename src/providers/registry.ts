@@ -9,6 +9,7 @@
 import type { ProviderAdapter } from "./adapter.js";
 import { googleAntigravityAdapter } from "./google-antigravity/index.js";
 import { ollamaAdapter } from "./ollama/index.js";
+import { openaiCodexAdapter } from "./openai-codex/index.js";
 import { logger } from "../logger.js";
 import {
   DEFAULT_PROVIDER,
@@ -31,6 +32,7 @@ export {
 const PROVIDERS: Record<string, ProviderAdapter> = {
   "google-antigravity": googleAntigravityAdapter,
   ollama: ollamaAdapter,
+  "openai-codex": openaiCodexAdapter,
 };
 
 export function getProviderAdapter(providerId: string): ProviderAdapter {
@@ -67,4 +69,3 @@ export function getProviderForAccount(
     return getProviderAdapter(DEFAULT_PROVIDER);
   }
 }
-

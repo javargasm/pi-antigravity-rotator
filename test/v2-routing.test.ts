@@ -112,6 +112,59 @@ describe("v2 routing and status", () => {
     }
   });
 
+  it("does not send an Ollama kickstart from a Codex-only account", async () => {
+    const rotator = new AccountRotator({
+      ...makeConfig(),
+      accounts: [
+        {
+          email: "codex-kickstart@example.com",
+          credentials: [
+            {
+              provider: "openai-codex",
+              refreshToken: "refresh",
+              providerAccountId: "acct-codex",
+            },
+          ],
+        },
+      ],
+    }) as any;
+    rotator.stopQuotaPolling();
+    const account = rotator.accounts[0];
+    account.providerTokens = {
+      "openai-codex": {
+        accessToken: "codex-access-token",
+        tokenExpires: Date.now() + 120_000,
+      },
+    };
+    account.quota = [
+      {
+        modelKey: "session",
+        displayName: "Ollama Cloud",
+        providerId: "ollama",
+        percentRemaining: 100,
+        resetTime: null,
+        timerType: "fresh",
+      },
+    ];
+
+    let fetchCalled = false;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCalled = true;
+      return new Response("unauthorized", { status: 401 });
+    }) as typeof fetch;
+    try {
+      const result = await rotator.kickstartAllFreshTimers(
+        "codex-kickstart@example.com",
+      );
+      assert.deepEqual(result.results, []);
+      assert.equal(account.flagged, false);
+      assert.equal(fetchCalled, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("surfaces admin exposure warnings in status when token is missing", () => {
     const rotator = new AccountRotator(makeConfig());
     rotator.stopQuotaPolling();

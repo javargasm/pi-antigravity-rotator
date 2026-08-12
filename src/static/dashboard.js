@@ -40,6 +40,17 @@ function isIdleForKickstart(q, now) {
   return isRolling5h || isRolling7d;
 }
 
+function isKickstartSupported(q) {
+  if (!q) return false;
+  if (q.providerId === "openai-codex") return false;
+  var key = String(q.modelKey || "");
+  return (
+    key !== "openai-codex" &&
+    key !== "openai-codex-spark" &&
+    key.indexOf("openai-codex:") !== 0
+  );
+}
+
 function renderQuotaBars(account) {
   var quota = account.quota;
   if (!quota || quota.length === 0) return "";
@@ -60,7 +71,7 @@ function renderQuotaBars(account) {
           : '<button class="btn-clear-flight" title="No in-flight requests for ' +
             escapeHtml(q.displayName) +
             '" disabled>Clear</button>';
-      var idle = isIdleForKickstart(q, now);
+      var idle = isKickstartSupported(q) && isIdleForKickstart(q, now);
       var kickstartBtn = "";
       var color = quotaBarColor(q.percentRemaining);
       var timerClass = "timer-" + q.timerType;
@@ -472,7 +483,7 @@ function renderAccounts(data) {
           : "Allow Fresh On This Account") +
         "</button>" +
         ((a.quota || []).some(function (q) {
-          return isIdleForKickstart(q, Date.now());
+          return isKickstartSupported(q) && isIdleForKickstart(q, Date.now());
         })
           ? '<button class="btn-enable" onclick="kickstartAllTimers(\'' +
             jsString(a.email) +
@@ -1061,6 +1072,11 @@ var TOKEN_MODEL_COLORS = {
   "gemini-3.6-flash-tiered": "#38bdf8",
   "gemini-3-flash": "#93c5fd", // Gemini 3 Flash (Azul pastel claro)
 
+  // Codex Pool (Amarillos) — de más caro a más barato
+  "gpt-5.6-sol": "#a16207", // GPT-5.6 Sol (Amarillo oscuro/marrón mostaza)
+  "gpt-5.6-terra": "#eab308", // GPT-5.6 Terra (Amarillo vivo)
+  "gpt-5.6-luna": "#fde047", // GPT-5.6 Luna (Amarillo pastel suave)
+
   // Ollama Pool (Verdes) — de más caro a más barato por familia
   "kimi-k3": "#047857", // Familia Kimi (Verde bosque/esmeralda oscuro)
   "kimi-k2.7-code": "#047857",
@@ -1100,6 +1116,11 @@ function getModelColor(model) {
   if (lower.indexOf("3.5-flash") !== -1) return "#2563eb";
   if (lower.indexOf("3.6-flash") !== -1) return "#38bdf8";
   if (lower.indexOf("gemini") !== -1 || lower.indexOf("3-flash") !== -1) return "#93c5fd";
+
+  // Codex pool (Amarillos)
+  if (lower.indexOf("gpt-5.6-sol") !== -1) return "#a16207";
+  if (lower.indexOf("gpt-5.6-terra") !== -1) return "#eab308";
+  if (lower.indexOf("gpt-5.6-luna") !== -1) return "#fde047";
 
   // Ollama pool (Verdes)
   if (lower.indexOf("kimi") !== -1) return "#047857";
@@ -1141,6 +1162,10 @@ var MODEL_PRICING_CLIENT = {
   "gemini-3.6-flash-low": { input: 1.5, output: 7.5 },
   "gemini-3.6-flash-tiered": { input: 1.5, output: 7.5 },
   "gpt-oss-120b-medium": { input: 2.0, output: 10.0 },
+  // OpenAI Codex GPT-5.6 models — mirrors MODEL_PRICING in types.ts.
+  "gpt-5.6-sol": { input: 5.0, output: 30.0 },
+  "gpt-5.6-terra": { input: 2.0, output: 12.0 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2 },
   // Ollama Cloud models — mirrors MODEL_PRICING in src/types.ts
   "gpt-oss:20b": { input: 0.075, output: 0.3 },
   "gpt-oss:120b": { input: 0.15, output: 0.6 },
@@ -1192,6 +1217,23 @@ function calcSavingsFromBuckets(buckets) {
     });
   });
   return { totalUsd: totalUsd, byModel: byModel };
+}
+
+function formatSavingsUsd(usd) {
+  if (!(usd > 0)) return "";
+  if (usd >= 0.01) return usd.toFixed(2);
+  if (usd >= 0.0001) return usd.toFixed(4);
+  if (usd >= 0.000001) return usd.toFixed(6);
+  return usd.toFixed(8);
+}
+
+function formatModelSavingsLabel(modelSavings) {
+  if (!modelSavings || !(modelSavings.totalUsd > 0)) return "";
+  return (
+    ' <span style="color:var(--green)">$' +
+    formatSavingsUsd(modelSavings.totalUsd) +
+    "</span>"
+  );
 }
 
 window.__tokenView = "1h";
@@ -1655,12 +1697,7 @@ function renderTokenChart(tokenUsage) {
   legend.innerHTML = models
     .map(function (m) {
       var modelSavings = (savings.byModel || {})[m];
-      var savingsLabel =
-        modelSavings && modelSavings.totalUsd > 0.01
-          ? ' <span style="color:var(--green)">$' +
-            modelSavings.totalUsd.toFixed(2) +
-            "</span>"
-          : "";
+      var savingsLabel = formatModelSavingsLabel(modelSavings);
       return (
         '<div style="display:flex;align-items:center;gap:4px">' +
         '<div style="width:10px;height:10px;border-radius:2px;background:' +

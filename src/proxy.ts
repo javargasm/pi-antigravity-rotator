@@ -15,6 +15,10 @@ import {
   resolveQuotaModelKey,
   resolveDisplayModelKey,
 } from "./types.js";
+import {
+  isCodexRequestModel,
+  isCodexProviderModelId,
+} from "./providers/openai-codex/catalog.js";
 import type { AccountRuntime } from "./types.js";
 import type { AccountRotator } from "./rotator.js";
 import { DEFAULT_PROVIDER, getProviderAdapter, getProviderForAccount } from "./providers/registry.js";
@@ -96,15 +100,29 @@ import type { FlagEventData } from "./telemetry.js";
  * The rotator is required only when it exposes `getOllamaModels()`; test
  * stubs that omit it fall back to the credentials-only dispatch.
  */
-function providerAdapterForModel(
+export function providerAdapterForModel(
   account: AccountRuntime,
   model: string | undefined,
-  rotator?: { getOllamaModels?: () => string[] },
+  rotator?: { getOllamaModels?: () => string[]; getCodexModels?: () => string[] },
 ): ProviderAdapter {
   const creds = account.config.credentials ?? [];
+  let isCodex = Boolean(model && isCodexRequestModel(model));
+  try {
+    if (
+      model &&
+      isCodexProviderModelId(model) &&
+      rotator?.getCodexModels?.().includes(model)
+    ) isCodex = true;
+  } catch {
+    // Ignore catalog read failures and retain the safe static allowlist.
+  }
+  if (isCodex) {
+    // Codex models are provider-owned and never fall back to Google/Ollama.
+    return getProviderAdapter("openai-codex");
+  }
   if (creds.length > 0) {
     const onlyOllama = creds.every((c) => c.provider === "ollama");
-    const onlyGoogle = creds.every((c) => c.provider !== "ollama");
+    const onlyGoogle = creds.every((c) => c.provider === DEFAULT_PROVIDER);
     if (onlyOllama) return getProviderAdapter("ollama");
     if (onlyGoogle) return getProviderAdapter(DEFAULT_PROVIDER);
   }
@@ -120,7 +138,20 @@ function providerAdapterForModel(
   if (isOllamaModel) {
     return getProviderAdapter("ollama");
   }
-  return getProviderForAccount(account.config);
+  if (creds.some((credential) => credential.provider === DEFAULT_PROVIDER)) {
+    return getProviderAdapter(DEFAULT_PROVIDER);
+  }
+  const fallback = getProviderForAccount(account.config);
+  return fallback.id === "openai-codex"
+    ? getProviderAdapter(DEFAULT_PROVIDER)
+    : fallback;
+}
+
+function routingModelKey(rotator: AccountRotator, model: string): string {
+  const resolver = (rotator as unknown as {
+    resolveQuotaModelKeyForDisplay?: (value: string) => string | null;
+  }).resolveQuotaModelKeyForDisplay;
+  return resolver?.call(rotator, model) ?? resolveQuotaModelKey(model) ?? model;
 }
 import { startVersionChecker, performSelfUpdate } from "./version-check.js";
 import { startNotificationPoller } from "./notification-poller.js";
@@ -453,6 +484,23 @@ async function handleUpstreamAccountAction(
     recordFailureAttempt,
   } = options;
 
+  if (
+    provider.id === "openai-codex" &&
+    (action.kind === "flagged-401" ||
+      action.kind === "flagged-403" ||
+      action.kind === "forbidden")
+  ) {
+    const status = action.kind === "flagged-401" ? 401 : 403;
+    const message = `Codex credential rejected (${status}); re-authentication required`;
+    writeLog(`[${label}] ${message}`, "warn");
+    rotator.markProviderInvalid(account, "openai-codex", message);
+    logRequestEnd(status, `endpoint=${action.endpoint}`);
+    if (!options.canRetry) return buildFailureDecision(options, status, message);
+    const nextAccount = await rotateAndRelease();
+    if (nextAccount) return { kind: "retry" };
+    return buildNoReplacementDecision(options, `no replacement Codex account remained after ${label} was rejected`);
+  }
+
   if (action.kind === "rate-limited") {
     writeLog(
       `[${label}] 429 rate limited${action.providerResourceExhausted ? " (RESOURCE_EXHAUSTED)" : ""}, cooldown ${Math.ceil(action.cooldownMs / 1000)}s. Error text: ${action.errorText.slice(0, 300)}`,
@@ -476,8 +524,10 @@ async function handleUpstreamAccountAction(
       `cooldownMs=${action.cooldownMs}${action.providerResourceExhausted ? " resourceExhausted=true" : ""} endpoint=${action.endpoint}`,
     );
 
+    const shouldRetryProviderRateLimit =
+      provider.id === "openai-codex" || action.providerResourceExhausted;
     if (
-      action.providerResourceExhausted &&
+      shouldRetryProviderRateLimit &&
       options.canRetry &&
       provider.shouldRetryOnQuotaExhaustion(account, model, action.errorText)
     ) {
@@ -1080,6 +1130,7 @@ export async function withRotation<T>(
     response: Response,
     context: RotationAttemptContext,
   ) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<RotationOutcome<T>> {
   const sendNoAccountsAvailable = (
     reason: string,
@@ -1112,7 +1163,7 @@ export async function withRotation<T>(
     if (nextAccount) {
       rotator.finishRequest(
         nextAccount,
-        resolveQuotaModelKey(model) ?? undefined,
+        routingModelKey(rotator, model),
       );
     }
     return nextAccount;
@@ -1128,7 +1179,7 @@ export async function withRotation<T>(
     }
 
     const label = account.config.label || account.config.email;
-    const modelKey = resolveQuotaModelKey(model) ?? model;
+    const modelKey = routingModelKey(rotator, model);
     const displayModelKey = resolveDisplayModelKey(body.displayModel || model);
     const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
     const requestStartMs = Date.now();
@@ -1173,10 +1224,14 @@ export async function withRotation<T>(
         model,
         rotator,
       );
+      // A parent account may carry Google + Codex credentials; refresh the
+      // selected provider, never merely the account's primary provider.
+      await provider.ensureValidToken(account);
       const forwarded = await provider.forwardRequest(
         account,
         { ...body },
         originalHeaders,
+        signal,
       );
       const { response, endpoint } = forwarded;
       const context: RotationAttemptContext = {
@@ -1281,7 +1336,7 @@ export async function withRotation<T>(
       }
       continue;
     } finally {
-      rotator.finishRequest(account, resolveQuotaModelKey(model) ?? undefined);
+      rotator.finishRequest(account, routingModelKey(rotator, model));
     }
   }
 
@@ -1444,7 +1499,7 @@ async function handleProxyRequest(
     if (nextAccount) {
       rotator.finishRequest(
         nextAccount,
-        resolveQuotaModelKey(body.model) ?? undefined,
+        routingModelKey(rotator, body.model),
       );
     }
     return nextAccount;
@@ -1579,6 +1634,7 @@ async function handleProxyRequest(
         body.model,
         rotator,
       );
+      await provider.ensureValidToken(account);
       const forwarded = await provider.forwardRequest(
         account,
         { ...body },
@@ -1744,7 +1800,7 @@ async function handleProxyRequest(
     } finally {
       rotator.finishRequest(
         account,
-        resolveQuotaModelKey(body.model) ?? undefined,
+        routingModelKey(rotator, body.model),
       );
       if (onComplete) onComplete();
     }

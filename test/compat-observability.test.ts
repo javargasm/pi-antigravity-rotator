@@ -55,6 +55,7 @@ const endpointOverrides = ANTIGRAVITY_ENDPOINTS as unknown as string[];
 const originalEndpoints = [...endpointOverrides];
 const ollamaEndpointOverrides = OLLAMA_CHAT_ENDPOINTS as unknown as string[];
 const originalOllamaEndpoints = [...ollamaEndpointOverrides];
+const originalCodexBaseUrl = process.env.CODEX_BASE_URL;
 let ollamaCatalog: string[] = [];
 
 afterEach(() => {
@@ -65,6 +66,8 @@ afterEach(() => {
     ...originalOllamaEndpoints,
   );
   endpointOverrides.splice(0, endpointOverrides.length, ...originalEndpoints);
+  if (originalCodexBaseUrl === undefined) delete process.env.CODEX_BASE_URL;
+  else process.env.CODEX_BASE_URL = originalCodexBaseUrl;
   resetResponsesStoreForTests();
   stopVersionChecker();
   stopNotificationPoller();
@@ -150,14 +153,42 @@ function createOllamaAccount(): AccountRuntime {
   };
 }
 
+function createCodexAccount(): AccountRuntime {
+  const account = createAccount();
+  account.config = {
+    ...account.config,
+    provider: "openai-codex",
+    credentials: [{
+      provider: "openai-codex",
+      refreshToken: "codex-refresh",
+      providerAccountId: "codex-account",
+    }],
+  };
+  account.providerTokens = {
+    "openai-codex": {
+      accessToken: "codex-access-token",
+      tokenExpires: Date.now() + 120_000,
+    },
+  };
+  return account;
+}
+
 function createRotatorStub(
   tracking: Tracking,
   useOllamaAccount = false,
+  useCodexAccount = false,
 ): AccountRotator {
-  const account = useOllamaAccount ? createOllamaAccount() : createAccount();
+  const account = useCodexAccount
+    ? createCodexAccount()
+    : useOllamaAccount
+      ? createOllamaAccount()
+      : createAccount();
   return {
     getActiveAccount: async () => account,
     getOllamaModels: () => ollamaCatalog,
+    getCodexModels: () => useCodexAccount ? ["gpt-5.6-luna"] : [],
+    hasActiveProvider: (providerId: string) =>
+      providerId === "ollama" && useOllamaAccount,
     getRetryAfterMs: () => 0,
     resolveQuotaModelKeyForDisplay: () => "gemini-3.5-flash",
     rotateToNext: async () => null,
@@ -426,6 +457,123 @@ function assertCompatObservability(
 }
 
 describe("compat observability", () => {
+  it("records Codex Chat and Responses requests in spend and token usage tracking", async () => {
+    const upstream = await listenServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end([
+          "event: response.output_text.delta",
+          'data: {"type":"response.output_text.delta","delta":"pong"}',
+          "",
+          "event: response.completed",
+          'data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"pong"}]}],"usage":{"input_tokens":13,"output_tokens":5}}}',
+          "",
+        ].join("\n"));
+      });
+    });
+    process.env.CODEX_BASE_URL = upstream.url;
+
+    const tracking = createTracking();
+    const proxy = await startTestProxy(createRotatorStub(tracking, false, true));
+    const port = (proxy.address() as AddressInfo).port;
+
+    try {
+      const chatResponse = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          messages: [{ role: "user", content: "ping" }],
+        }),
+      });
+      assert.equal(chatResponse.status, 200);
+      await chatResponse.text();
+
+      const streamedChatResponse = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          messages: [{ role: "user", content: "ping" }],
+          stream: true,
+        }),
+      });
+      assert.equal(streamedChatResponse.status, 200);
+      await streamedChatResponse.text();
+
+      const responsesResponse = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          input: "ping",
+          stream: true,
+        }),
+      });
+      assert.equal(responsesResponse.status, 200);
+      await responsesResponse.text();
+
+      await waitFor(() => tracking.requestLogs.length === 3);
+      assert.deepEqual(
+        tracking.requestLogs.map((entry) => [entry.model, entry.statusCode, entry.inputTokens, entry.outputTokens]),
+        [
+          ["gpt-5.6-luna", 200, 13, 5],
+          ["gpt-5.6-luna", 200, 13, 5],
+          ["gpt-5.6-luna", 200, 13, 5],
+        ],
+      );
+      assert.deepEqual(
+        tracking.tokenUsage.map((entry) => [entry.model, entry.inputTokens, entry.outputTokens]),
+        [
+          ["gpt-5.6-luna", 13, 5],
+          ["gpt-5.6-luna", 13, 5],
+          ["gpt-5.6-luna", 13, 5],
+        ],
+      );
+    } finally {
+      await closeHttpServer(proxy);
+      await closeServer(upstream.server);
+    }
+  });
+
+  it("records failed Codex upstream responses without token usage", async () => {
+    const upstream = await listenServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "invalid Codex request" } }));
+      });
+    });
+    process.env.CODEX_BASE_URL = upstream.url;
+
+    const tracking = createTracking();
+    const proxy = await startTestProxy(createRotatorStub(tracking, false, true));
+    const port = (proxy.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          messages: [{ role: "user", content: "ping" }],
+        }),
+      });
+      assert.equal(response.status, 400);
+      await response.text();
+      await waitFor(() => tracking.requestLogs.length === 1);
+      assert.equal(tracking.requestLogs[0].model, "gpt-5.6-luna");
+      assert.equal(tracking.requestLogs[0].statusCode, 400);
+      assert.equal(tracking.requestLogs[0].inputTokens, 0);
+      assert.equal(tracking.requestLogs[0].outputTokens, 0);
+      assert.equal(tracking.tokenUsage.length, 0);
+    } finally {
+      await closeHttpServer(proxy);
+      await closeServer(upstream.server);
+    }
+  });
+
   it("records request log, latency, and token usage for successful compat routes", async () => {
     const upstream = await listenServer((req, res) => {
       req.resume();
@@ -798,7 +946,7 @@ describe("compat observability", () => {
   it("lists ollama models on /v1/models with owned_by ollama", async () => {
     ollamaCatalog = ["gpt-oss:20b", "nemotron-nano:8b"];
     const tracking = createTracking();
-    const rotator = createRotatorStub(tracking);
+    const rotator = createRotatorStub(tracking, true);
     const proxy = await startTestProxy(rotator);
     const port = (proxy.address() as AddressInfo).port;
     try {

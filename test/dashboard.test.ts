@@ -127,6 +127,140 @@ describe("dashboard", () => {
     assert.equal(qwen, "#0f766e");
     assert.equal(glm, "#10b981");
     assert.equal(gptOss20b, "#dcfce7");
+
+    // Codex Pool (Yellow spectrum)
+    assert.equal(getModelColor("gpt-5.6-sol"), "#a16207");
+    assert.equal(getModelColor("gpt-5.6-terra"), "#eab308");
+    assert.equal(getModelColor("gpt-5.6-luna"), "#fde047");
+
+    // Codex pool must differ from other pools
+    assert.notEqual(getModelColor("gpt-5.6-sol"), getModelColor("claude-opus-4-6-thinking"));
+    assert.notEqual(getModelColor("gpt-5.6-terra"), getModelColor("gemini-3.1-pro"));
+    assert.notEqual(getModelColor("gpt-5.6-luna"), getModelColor("kimi-k3"));
+  });
+
+  it("shows sub-cent savings for low-volume priced models", () => {
+    const js = readDashboardJs();
+    const sandbox: Record<string, unknown> = {
+      window: { location: { search: "" } } as Record<string, unknown>,
+      URLSearchParams: globalThis.URLSearchParams,
+      EventSource: function () {},
+      setInterval: () => {},
+      clearInterval: () => {},
+      setTimeout: () => {},
+      clearTimeout: () => {},
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: {
+        getElementById: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener: () => {},
+      },
+    };
+    const script = new Script(
+      js +
+        "\nthis.calcSavingsFromBuckets = calcSavingsFromBuckets;" +
+        "\nthis.formatModelSavingsLabel = formatModelSavingsLabel;",
+    );
+    script.runInNewContext(sandbox);
+
+    const calcSavingsFromBuckets = sandbox.calcSavingsFromBuckets as (
+      buckets: Array<Record<string, unknown>>,
+    ) => { byModel: Record<string, { totalUsd: number }> };
+    const formatModelSavingsLabel = sandbox.formatModelSavingsLabel as (
+      savings: { totalUsd: number },
+    ) => string;
+    const savings = calcSavingsFromBuckets([
+      {
+        byModel: {
+          "gpt-oss-120b-medium": { inputTokens: 686, outputTokens: 413 },
+        },
+      },
+    ]);
+
+    assert.equal(savings.byModel["gpt-oss-120b-medium"].totalUsd, 0.005502);
+    assert.match(
+      formatModelSavingsLabel(savings.byModel["gpt-oss-120b-medium"]),
+      /\$0\.0055/,
+    );
+    assert.equal(formatModelSavingsLabel({ totalUsd: 0 }), "");
+  });
+
+  it("calculates savings for Codex GPT-5.6 models", () => {
+    const js = readDashboardJs();
+    const sandbox: Record<string, unknown> = {
+      window: { location: { search: "" } } as Record<string, unknown>,
+      URLSearchParams: globalThis.URLSearchParams,
+      EventSource: function () {},
+      fetch: () => Promise.resolve(),
+      setInterval: () => {},
+      clearInterval: () => {},
+      setTimeout: () => {},
+      clearTimeout: () => {},
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: {
+        getElementById: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener: () => {},
+      },
+    };
+    const script = new Script(js + "\nthis.calcSavingsFromBuckets = calcSavingsFromBuckets;");
+    script.runInNewContext(sandbox);
+
+    const calcSavingsFromBuckets = sandbox.calcSavingsFromBuckets as (
+      buckets: Array<Record<string, unknown>>,
+    ) => { byModel: Record<string, { totalUsd: number }> };
+    const savings = calcSavingsFromBuckets([
+      {
+        byModel: {
+          "gpt-5.6-sol": { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+          "gpt-5.6-terra": { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+          "gpt-5.6-luna": { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+        },
+      },
+    ]);
+
+    assert.equal(savings.byModel["gpt-5.6-sol"].totalUsd, 35);
+    assert.equal(savings.byModel["gpt-5.6-terra"].totalUsd, 14);
+    assert.equal(savings.byModel["gpt-5.6-luna"].totalUsd, 1.4);
+  });
+
+  it("does not offer kickstart controls for Codex quota pools", () => {
+    const js = readDashboardJs();
+    const sandbox: Record<string, unknown> = {
+      window: { location: { search: "" } } as Record<string, unknown>,
+      URLSearchParams: globalThis.URLSearchParams,
+      EventSource: function () {},
+      setInterval: () => {},
+      clearInterval: () => {},
+      setTimeout: () => {},
+      clearTimeout: () => {},
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: {
+        getElementById: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener: () => {},
+      },
+    };
+    const script = new Script(
+      js +
+        "\nthis.isKickstartSupported = isKickstartSupported;",
+    );
+    script.runInNewContext(sandbox);
+    const isKickstartSupported = sandbox.isKickstartSupported as (
+      quota: Record<string, unknown>,
+    ) => boolean;
+
+    assert.equal(
+      isKickstartSupported({ modelKey: "openai-codex", providerId: "openai-codex" }),
+      false,
+    );
+    assert.equal(
+      isKickstartSupported({ modelKey: "session", providerId: "ollama" }),
+      true,
+    );
   });
 
   it("includes optional admin-token client support", () => {

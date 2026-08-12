@@ -353,6 +353,14 @@ export function convertToolChoiceToGemini(
   return { functionCallingConfig: { mode: "AUTO" } };
 }
 
+function forcesToolUse(toolChoice: unknown): boolean {
+  if (toolChoice === "required") return true;
+  return isRecord(toolChoice) &&
+    toolChoice.type === "function" &&
+    ((isRecord(toolChoice.function) && isNonEmptyString(toolChoice.function.name)) ||
+      isNonEmptyString(toolChoice.name));
+}
+
 export function validateMessages(value: unknown): value is ChatMessage[] {
   return (
     Array.isArray(value) &&
@@ -1089,26 +1097,27 @@ export function openAIToAntigravityBody(
     }
   }
 
-  if (isClaude) {
-    while (contents.at(-1)?.role === "model") {
-      const lastContent = contents.at(-1);
-      const hasFunctionCall =
-        lastContent?.parts.some((p: any) => isRecord(p) && p.functionCall) ??
-        false;
-      if (hasFunctionCall) {
-        contents.pop();
-        continue;
-      }
-      contents.push({
-        role: "user",
-        parts: [
-          {
-            text: "Continue from the previous assistant message. Do not repeat completed tool calls unless new user input asks for them.",
-          },
-        ],
-      });
-      break;
+  // Google rejects compatibility requests whose final contents turn is a
+  // model turn. Claude additionally needs dangling tool-call turns removed;
+  // other models keep the call history but still need a user turn to resume.
+  while (contents.at(-1)?.role === "model") {
+    const lastContent = contents.at(-1);
+    const hasFunctionCall =
+      lastContent?.parts.some((p: any) => isRecord(p) && p.functionCall) ??
+      false;
+    if (isClaude && hasFunctionCall) {
+      contents.pop();
+      continue;
     }
+    contents.push({
+      role: "user",
+      parts: [
+        {
+          text: "Continue from the previous assistant message. Do not repeat completed tool calls unless new user input asks for them.",
+        },
+      ],
+    });
+    break;
   }
 
   if (contents.length === 0)
@@ -1135,7 +1144,7 @@ export function openAIToAntigravityBody(
   }
 
   let thinkingConfigObj: Record<string, unknown> | undefined;
-  if (modelFamily === "claude" && isThinking) {
+  if (modelFamily === "claude" && isThinking && !forcesToolUse(input.tool_choice)) {
     const tb = modelSpec.thinkingBudget;
     thinkingConfigObj = { include_thoughts: true, thinking_budget: tb };
     if (!maxOutputTokens || maxOutputTokens <= tb) {
@@ -1144,7 +1153,7 @@ export function openAIToAntigravityBody(
         `Adjusted Claude maxOutputTokens → ${maxOutputTokens}`,
       );
     }
-  } else if (isThinking) {
+  } else if (isThinking && modelFamily !== "claude") {
     const tb = modelSpec.thinkingBudget;
     thinkingConfigObj =
       tb === -1

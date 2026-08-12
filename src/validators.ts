@@ -68,6 +68,11 @@ export function validateAccountConfig(value: unknown, path = "account"): Validat
 			if (proxyError) errors.push(`${cpath}.${proxyError}`);
 			if (cred.provider === "ollama") {
 				if (!isNonEmptyString(cred.apiKey)) errors.push(`${cpath}.apiKey must be a non-empty string`);
+			} else if (cred.provider === "openai-codex") {
+				if (!isNonEmptyString(cred.refreshToken)) errors.push(`${cpath}.refreshToken must be a non-empty string`);
+				if (cred.providerAccountId !== undefined && !isNonEmptyString(cred.providerAccountId)) {
+					errors.push(`${cpath}.providerAccountId must be a non-empty string when provided`);
+				}
 			} else {
 				if (!isNonEmptyString(cred.refreshToken)) errors.push(`${cpath}.refreshToken must be a non-empty string`);
 				if (!isNonEmptyString(cred.projectId)) errors.push(`${cpath}.projectId must be a non-empty string`);
@@ -77,6 +82,10 @@ export function validateAccountConfig(value: unknown, path = "account"): Validat
 		const provider = typeof value.provider === "string" ? value.provider : "google-antigravity";
 		if (provider === "ollama") {
 			if (!isNonEmptyString(value.apiKey)) errors.push(`${path}.apiKey must be a non-empty string`);
+		} else if (provider === "openai-codex") {
+			if (!isNonEmptyString(value.codexRefreshToken ?? value.refreshToken)) {
+				errors.push(`${path}.codexRefreshToken or refreshToken must be a non-empty string`);
+			}
 		} else {
 			if (!isNonEmptyString(value.refreshToken)) errors.push(`${path}.refreshToken must be a non-empty string`);
 			if (!isNonEmptyString(value.projectId)) errors.push(`${path}.projectId must be a non-empty string`);
