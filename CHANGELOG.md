@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.1.0] - 2026-08-12
+
+### Added
+- **OpenAI Codex OAuth provider**: Support for OpenAI Codex authentication and accounts (`gpt-5.6-codex`, `gpt-5.6-codex-mini`, `gpt-5.6-codex-max`, `codex-sol-4-6`).
+- **Web & CLI OAuth login**: Integrated Codex provider tab in `/login` and `/login-cli` for PKCE OAuth authentication.
+- **Codex pricing & dashboard visualizer**: Added cost tracking and yellow color spectrum mapping for Codex GPT-5.6 models in token usage charts.
+- **Tool calling translation & compat**: Tool calls and chat completions automatically translate between OpenAI Codex and proxy formats.
+
+### Fixed
+- **Provider catalog isolation**: Prevented non-Codex and Google models from polluting Codex discovery routing.
+- **Isolated provider kickstarts**: Provider kickstart pools operate independently without triggering unneeded OAuth refresh flows.
+- **Codex usage & spend tracking**: Fixed recording of usage and spend for Codex compat requests.
+- **Gemini turn bug fix**: Prevented model-ending compat requests for Gemini models.
+
 ## [3.0.0] - 2026-08-11
 
 ### Changed
