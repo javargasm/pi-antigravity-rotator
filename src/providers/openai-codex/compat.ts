@@ -1,10 +1,16 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import type { RequestBody } from "../../proxy.js";
-import { flattenHeaders, withRotation } from "../../proxy.js";
+import {
+  flattenHeaders,
+  type RotationAttemptContext,
+  type RotationOutcome,
+  withRotation,
+} from "../../proxy.js";
 import type { AccountRotator } from "../../rotator.js";
 import type { OpenAIChatCompletionRequest, OpenAIResponsesRequest, CompatCompletion, OpenAIToolCall } from "../google-antigravity/translators.js";
 import { buildRotatorResponseHeaders } from "../../response-headers.js";
+import { logSpend } from "../../spend-logger.js";
 import {
   buildCodexPayload,
   createCodexStreamAccumulator,
@@ -19,6 +25,81 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function writeJson(res: ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}): void {
   res.writeHead(status, { "content-type": "application/json", ...headers });
   res.end(JSON.stringify(value));
+}
+
+export interface CodexCompatOptions {
+  callType?: string;
+  apiKeyHash?: string | null;
+  requesterIp?: string | null;
+  rawRequest?: unknown;
+}
+
+function recordCodexTokenUsage(
+  rotator: AccountRotator,
+  model: string,
+  completion: CompatCompletion,
+): void {
+  if (completion.inputTokens > 0 || completion.outputTokens > 0) {
+    rotator.recordTokenUsage(model, completion.inputTokens, completion.outputTokens);
+  }
+}
+
+function recordCodexOutcome(
+  rotator: AccountRotator,
+  body: RequestBody,
+  context: RotationAttemptContext,
+  statusCode: number,
+  completion: CompatCompletion,
+  options?: CodexCompatOptions,
+  totalMs = Date.now() - context.requestStartMs,
+): void {
+  const ttfbMs = completion.firstByteMs ?? totalMs;
+  rotator.recordLatency(body.displayModel || body.model, ttfbMs, totalMs);
+  rotator.recordRequestLog({
+    model: context.displayModelKey,
+    account: context.label,
+    statusCode,
+    ttfbMs,
+    totalMs,
+    inputTokens: completion.inputTokens,
+    outputTokens: completion.outputTokens,
+  });
+  logSpend({
+    requestId: context.requestId,
+    apiKeyHash: options?.apiKeyHash || null,
+    model: context.displayModelKey,
+    accountEmail: context.label,
+    callType: options?.callType || "compat",
+    status: statusCode >= 200 && statusCode < 300 ? "success" : "failure",
+    promptTokens: completion.inputTokens,
+    completionTokens: completion.outputTokens,
+    totalTokens: completion.inputTokens + completion.outputTokens,
+    startTime: new Date(context.requestStartMs).toISOString(),
+    endTime: new Date().toISOString(),
+    ttfbMs,
+    durationMs: totalMs,
+    requestMessages: options?.rawRequest || body.request || body,
+    responseContent: completion.rawResponse || (completion.text ? { text: completion.text } : null),
+    requesterIp: options?.requesterIp || null,
+  });
+}
+
+function recordCodexFailure(
+  rotator: AccountRotator,
+  body: RequestBody,
+  outcome: RotationOutcome<CompatCompletion>,
+  options?: CodexCompatOptions,
+): void {
+  if (outcome.ok || !outcome.context) return;
+  recordCodexOutcome(
+    rotator,
+    body,
+    outcome.context,
+    outcome.status,
+    { text: "", inputTokens: 0, outputTokens: 0 },
+    options,
+    outcome.totalMs,
+  );
 }
 
 function messageContent(value: unknown): unknown {
@@ -293,14 +374,35 @@ async function pipeNativeResponses(
   res: ServerResponse,
   context: { account?: { healthScore: number }; requestStartMs: number; label: string; retries: number },
   model: string,
-): Promise<void> {
+): Promise<CompatCompletion> {
   res.writeHead(response.status, upstreamHeaders(response, context, model));
-  if (!response.body) { res.end(); return; }
+  if (!response.body) {
+    res.end();
+    return { text: "", inputTokens: 0, outputTokens: 0 };
+  }
   const stream = Readable.fromWeb(response.body as import("node:stream/web").ReadableStream);
+  const accumulator = createCodexStreamAccumulator();
+  const streamStartMs = Date.now();
+  let firstByteMs: number | undefined;
   const close = (): void => { if (!stream.destroyed) stream.destroy(); };
   req.once("close", close);
-  try { for await (const chunk of stream) { if (!res.writableEnded) res.write(chunk); } }
-  finally { req.off("close", close); if (!res.writableEnded) res.end(); }
+  try {
+    for await (const chunk of stream) {
+      if (firstByteMs === undefined) firstByteMs = Date.now() - streamStartMs;
+      accumulator.append(chunk.toString());
+      if (!res.writableEnded) res.write(chunk);
+    }
+  } finally {
+    req.off("close", close);
+    if (!res.writableEnded) res.end();
+  }
+  const usage = accumulator.final();
+  return {
+    text: accumulator.getText(),
+    inputTokens: usage?.inputTokens ?? 0,
+    outputTokens: usage?.outputTokens ?? 0,
+    firstByteMs,
+  };
 }
 
 function emitChatChunk(res: ServerResponse, model: string, id: string, delta: Record<string, unknown>, finishReason: string | null = null, usage?: Record<string, number>): void {
@@ -313,17 +415,23 @@ async function pipeCodexAsChat(
   res: ServerResponse,
   model: string,
   context: { account?: { healthScore: number }; requestStartMs: number; label: string; retries: number },
-): Promise<void> {
+): Promise<CompatCompletion> {
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", ...upstreamHeaders(response, context, model) });
   const id = `chatcmpl-${Date.now().toString(36)}`;
   emitChatChunk(res, model, id, { role: "assistant" });
-  if (!response.body) { emitChatChunk(res, model, id, {}, "stop"); res.end("data: [DONE]\n\n"); return; }
+  if (!response.body) {
+    emitChatChunk(res, model, id, {}, "stop");
+    res.end("data: [DONE]\n\n");
+    return { text: "", inputTokens: 0, outputTokens: 0 };
+  }
   const stream = Readable.fromWeb(response.body as import("node:stream/web").ReadableStream);
   let buffer = "";
   let eventName = "";
   let inputTokens = 0;
   let outputTokens = 0;
   let toolIndex = 0;
+  const streamStartMs = Date.now();
+  let firstByteMs: number | undefined;
   const close = (): void => { if (!stream.destroyed) stream.destroy(); };
   req.once("close", close);
   const handle = (payload: string, event: string): void => {
@@ -346,6 +454,7 @@ async function pipeCodexAsChat(
   };
   try {
     for await (const chunk of stream) {
+      if (firstByteMs === undefined) firstByteMs = Date.now() - streamStartMs;
       buffer += chunk.toString();
       let newline = buffer.indexOf("\n");
       while (newline >= 0) {
@@ -360,6 +469,7 @@ async function pipeCodexAsChat(
   emitChatChunk(res, model, id, {}, toolIndex > 0 ? "tool_calls" : "stop");
   if (inputTokens > 0 || outputTokens > 0) emitChatChunk(res, model, id, {}, null, { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: inputTokens + outputTokens });
   res.end("data: [DONE]\n\n");
+  return { text: "", inputTokens, outputTokens, firstByteMs };
 }
 
 export async function serveCodexResponses(
@@ -367,6 +477,7 @@ export async function serveCodexResponses(
   res: ServerResponse,
   rotator: AccountRotator,
   request: OpenAIResponsesRequest,
+  options?: CodexCompatOptions,
 ): Promise<void> {
   const body: RequestBody = { project: "", model: request.model, request: buildCodexPayload({ project: "", model: request.model, request }) };
   const controller = new AbortController();
@@ -376,8 +487,10 @@ export async function serveCodexResponses(
   try {
     const outcome = await withRotation(rotator, request.model, flattenHeaders(req.headers), body, async (response, context) => {
       if (request.stream) {
-        await pipeNativeResponses(response, req, res, context, request.model);
-        return { text: "", inputTokens: 0, outputTokens: 0 } as CompatCompletion;
+        const completion = await pipeNativeResponses(response, req, res, context, request.model);
+        recordCodexTokenUsage(rotator, request.model, completion);
+        recordCodexOutcome(rotator, body, context, response.status, completion, options);
+        return completion;
       }
       const raw = await response.text();
       const headers = upstreamHeaders(response, context, request.model);
@@ -386,8 +499,11 @@ export async function serveCodexResponses(
         ? JSON.parse(raw) as unknown
         : codexResponseJson(completion, request.model);
       writeJson(res, response.status, responseBody, headers);
+      recordCodexTokenUsage(rotator, request.model, completion);
+      recordCodexOutcome(rotator, body, context, response.status, completion, options);
       return completion;
     }, controller.signal);
+    recordCodexFailure(rotator, body, outcome, options);
     if (!outcome.ok && !res.headersSent) writeJson(res, outcome.status, { error: { message: outcome.errorText, type: "upstream_error" } });
   } finally {
     req.off("aborted", abort);
@@ -400,6 +516,7 @@ export async function serveCodexChat(
   res: ServerResponse,
   rotator: AccountRotator,
   request: OpenAIChatCompletionRequest,
+  options?: CodexCompatOptions,
 ): Promise<void> {
   const codexRequest = chatToCodexResponsesRequest(request);
   const body: RequestBody = { project: "", model: request.model, request: codexRequest };
@@ -410,8 +527,10 @@ export async function serveCodexChat(
   try {
     const outcome = await withRotation(rotator, request.model, flattenHeaders(req.headers), body, async (response, context) => {
       if (request.stream) {
-        await pipeCodexAsChat(response, req, res, request.model, context);
-        return { text: "", inputTokens: 0, outputTokens: 0 } as CompatCompletion;
+        const completion = await pipeCodexAsChat(response, req, res, request.model, context);
+        recordCodexTokenUsage(rotator, request.model, completion);
+        recordCodexOutcome(rotator, body, context, response.status, completion, options);
+        return completion;
       }
       const raw = await response.text();
       const completion = parseCodexResponseBody(raw);
@@ -424,8 +543,11 @@ export async function serveCodexChat(
         choices: [{ index: 0, message: { role: "assistant", content: hasTools ? null : completion.text, ...(hasTools ? { tool_calls: completion.toolCalls } : {}), ...(completion.thinkingText ? { reasoning_content: completion.thinkingText } : {}) }, finish_reason: hasTools ? "tool_calls" : "stop" }],
         usage: { prompt_tokens: completion.inputTokens, completion_tokens: completion.outputTokens, total_tokens: completion.inputTokens + completion.outputTokens },
       }, upstreamHeaders(response, context, request.model));
+      recordCodexTokenUsage(rotator, request.model, completion);
+      recordCodexOutcome(rotator, body, context, response.status, completion, options);
       return completion;
     }, controller.signal);
+    recordCodexFailure(rotator, body, outcome, options);
     if (!outcome.ok && !res.headersSent) writeJson(res, outcome.status, { error: { message: outcome.errorText, type: "upstream_error" } });
   } finally {
     req.off("aborted", abort);

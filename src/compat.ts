@@ -1907,7 +1907,12 @@ export async function handleOpenAIChatCompletions(
   const apiKeyHash = auth.key?.tokenHash || (auth.rawKey ? hashKey(auth.rawKey) : null);
 
   if (isCodexModelForRotator(rotator, validation.value.model)) {
-    await serveCodexChat(req, res, rotator, validation.value);
+    await serveCodexChat(req, res, rotator, validation.value, {
+      callType: "chat_completion",
+      apiKeyHash,
+      requesterIp: req.socket?.remoteAddress || null,
+      rawRequest: validation.value,
+    });
     return;
   }
 
@@ -2038,7 +2043,12 @@ export async function handleOpenAIResponsesCreate(
   const apiKeyHash = auth.key?.tokenHash || (auth.rawKey ? hashKey(auth.rawKey) : null);
 
   if (isCodexModelForRotator(rotator, validation.value.model)) {
-    await serveCodexResponses(req, res, rotator, validation.value);
+    await serveCodexResponses(req, res, rotator, validation.value, {
+      callType: "responses",
+      apiKeyHash,
+      requesterIp: req.socket?.remoteAddress || null,
+      rawRequest: validation.value,
+    });
     return;
   }
 

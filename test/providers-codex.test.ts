@@ -203,6 +203,14 @@ describe("openai-codex import and payload", () => {
     );
     assert.equal(request.input_items, undefined);
     assert.equal(request.background, undefined);
+    const stringInputRequest = sanitizeCodexResponsesRequest({
+      input: "hello",
+      max_output_tokens: 16,
+    }, "gpt-5.6-luna");
+    assert.deepEqual(stringInputRequest.input, [
+      { role: "user", content: [{ type: "input_text", text: "hello" }] },
+    ]);
+    assert.equal("max_output_tokens" in stringInputRequest, false);
   });
 
   it("extracts Responses usage and chooses the worst quota window", () => {

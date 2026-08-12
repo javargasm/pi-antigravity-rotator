@@ -57,6 +57,12 @@ export function sanitizeCodexResponsesRequest(
   sanitized.instructions = codexInstructions(sanitized.instructions);
   sanitized.store = false;
   sanitized.stream = true;
+  if (typeof sanitized.input === "string") {
+    sanitized.input = [{
+      role: "user",
+      content: [{ type: "input_text", text: sanitized.input }],
+    }];
+  }
   if (Array.isArray(sanitized.tools)) {
     sanitized.tools = sanitized.tools.map(codexFunctionTool);
   }
@@ -68,6 +74,7 @@ export function sanitizeCodexResponsesRequest(
   delete sanitized.input_items;
   delete sanitized.background;
   delete sanitized.prompt_cache_key;
+  delete sanitized.max_output_tokens;
   // The proxy owns streaming; this field is not accepted by the internal endpoint.
   delete sanitized.stream_options;
   return sanitized;
