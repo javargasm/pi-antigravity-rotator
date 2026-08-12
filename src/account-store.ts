@@ -10,7 +10,7 @@ import {
   saveAccountsConfig,
 } from "./config-storage.js";
 import { applyConfigDefaults, getDefaultConfig } from "./config-defaults.js";
-import { hasCredential } from "./providers/credential-helpers.js";
+import { hasCredential, sortAccountCredentials } from "./providers/credential-helpers.js";
 import { normalizeAccountConfig } from "./config-normalize.js";
 import { validateAccountConfig } from "./validators.js";
 
@@ -107,7 +107,7 @@ function mergeCredentials(
     incomingByProvider.delete(cred.provider);
   }
   for (const cred of incomingByProvider.values()) out.push(cred);
-  return out;
+  return sortAccountCredentials(out);
 }
 
 function assertCodexIdentityCompatible(

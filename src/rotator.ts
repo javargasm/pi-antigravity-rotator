@@ -56,6 +56,7 @@ import {
   primaryProviderId,
   findProviderForModel,
   getProviderIdForPoolKey,
+  PROVIDER_ORDER,
 } from "./providers/registry.js";
 import type { QuotaFetchContext } from "./providers/adapter.js";
 import { logger } from "./logger.js";
@@ -631,7 +632,7 @@ export class AccountRotator {
   private logConsolidatedPoll(account: AccountRuntime): void {
     const stash = account.lastPollByProvider;
     if (!stash) return;
-    const ordered = ["google-antigravity", "ollama", "openai-codex", "opencode-zen"]
+    const ordered = PROVIDER_ORDER
       .filter((pid) => stash[pid])
       .map((pid) => `${pid}: ${stash[pid]}`);
     if (ordered.length > 0) {

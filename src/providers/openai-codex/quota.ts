@@ -3,6 +3,7 @@ import type { QuotaFetchContext } from "../adapter.js";
 import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
 import { getCodexAccountId, getCodexTokenState } from "./credentials.js";
 import { CODEX_PROVIDER_ID } from "./oauth.js";
+import { sortQuotaPools } from "../registry.js";
 
 export const CODEX_QUOTA_MODEL_KEY = "openai-codex";
 export const CODEX_SPARK_QUOTA_MODEL_KEY = "openai-codex-spark";
@@ -215,5 +216,16 @@ function applyQuotaRows(account: AccountRuntime, snapshot: CodexQuotaSnapshot): 
   const other = (account.quota ?? []).filter(
     (quota) => quota.providerId !== CODEX_PROVIDER_ID,
   );
-  account.quota = [...other, ...codexQuotaRows(snapshot)];
+  const codexRows = codexQuotaRows(snapshot);
+  account.quota = sortQuotaPools([...other, ...codexRows]);
+
+  account.lastPollByProvider ??= {};
+  account.lastPollByProvider[CODEX_PROVIDER_ID] = codexRows
+    .map((q) => {
+      const remain = q.resetTime
+        ? Math.round((new Date(q.resetTime).getTime() - Date.now()) / 60000) + "m"
+        : "no_reset";
+      return `[${q.modelKey}: ${q.timerType} ${q.percentRemaining}% in ${remain}]`;
+    })
+    .join(" | ");
 }

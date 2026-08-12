@@ -15,6 +15,7 @@ import {
   SESSION_WINDOW_MS,
 } from "./usage-windows.js";
 import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
+import { sortQuotaPools } from "../registry.js";
 
 /**
  * Poll `GET /api/usage` for one account and store the parsed pool quotas.
@@ -66,7 +67,7 @@ export async function fetchProviderUsage(
     fresh.forEach(
       (q) => ((q as { providerId?: string }).providerId = "ollama"),
     );
-    account.quota = [...otherProviders, ...fresh];
+    account.quota = sortQuotaPools([...otherProviders, ...fresh]);
     account.lastQuotaPoll = Date.now();
     void recordUsagePoll(account.config.email, new Date().toISOString(), data);
 

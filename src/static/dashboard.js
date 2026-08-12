@@ -51,11 +51,33 @@ function isKickstartSupported(q) {
   );
 }
 
+function getQuotaItemProviderRank(q) {
+  var p = q.providerId;
+  if (!p) {
+    var k = String(q.modelKey || "");
+    if (k === "claude" || k === "gemini") p = "google-antigravity";
+    else if (k === "session" || k === "weekly") p = "ollama";
+    else if (k.indexOf("opencode") === 0 || k === "opencode-zen") p = "opencode-zen";
+    else if (k.indexOf("codex") === 0 || k.indexOf("openai-codex") === 0) p = "openai-codex";
+    else p = "google-antigravity";
+  }
+  var ranks = {
+    "google-antigravity": 1,
+    "ollama": 2,
+    "opencode-zen": 3,
+    "openai-codex": 4
+  };
+  return ranks[p] || 99;
+}
+
 function renderQuotaBars(account) {
   var quota = account.quota;
   if (!quota || quota.length === 0) return "";
+  var sortedQuota = quota.slice().sort(function (a, b) {
+    return getQuotaItemProviderRank(a) - getQuotaItemProviderRank(b);
+  });
   var now = Date.now();
-  var rows = quota
+  var rows = sortedQuota
     .map(function (q) {
       var inFlightForModel = (account.inFlightByModel || {})[q.modelKey] || 0;
       var clearButton =

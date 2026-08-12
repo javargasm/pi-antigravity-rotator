@@ -24,6 +24,13 @@ export {
   getCredential,
   type CredentialEntry,
   type AccountLike as ProviderCredentialLike,
+  PROVIDER_ORDER,
+  PROVIDER_ORDER_RANK,
+  getProviderIdForPoolKey,
+  getQuotaItemProviderId,
+  sortQuotaPools,
+  sortAccountCredentials,
+  type QuotaPoolLike,
 } from "./credential-helpers.js";
 
 const PROVIDERS: Record<string, ProviderAdapter> = {
@@ -62,14 +69,6 @@ export function findProviderForModel(
     }
   }
   return null;
-}
-
-export function getProviderIdForPoolKey(poolKey: string): string {
-  if (poolKey.startsWith("codex:")) return "openai-codex";
-  if (poolKey.startsWith("opencode-zen:")) return "opencode-zen";
-  if (poolKey === "session") return "ollama";
-  if (isKnownProvider(poolKey)) return poolKey;
-  return DEFAULT_PROVIDER;
 }
 
 export function getProviderForAccount(

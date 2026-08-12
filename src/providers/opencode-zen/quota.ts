@@ -6,6 +6,7 @@ import type { QuotaFetchContext } from "../adapter.js";
 import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
 import { OPENCODE_ZEN_MODELS_URL } from "./catalog.js";
 import { getOpenCodeZenApiKey, OPENCODE_ZEN_PROVIDER_ID } from "./credentials.js";
+import { sortQuotaPools } from "../registry.js";
 
 export async function fetchOpenCodeZenQuota(
   account: AccountRuntime,
@@ -54,7 +55,7 @@ export async function fetchOpenCodeZenQuota(
       timerType: "fresh",
     };
 
-    account.quota = [...otherProviders, freshQuota];
+    account.quota = sortQuotaPools([...otherProviders, freshQuota]);
     account.lastQuotaPoll = Date.now();
 
     account.lastPollByProvider ??= {};

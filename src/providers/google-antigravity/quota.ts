@@ -14,6 +14,7 @@ import {
 import { fetchWithRetry } from "../../fetch-with-retry.js";
 import type { QuotaFetchContext } from "../adapter.js";
 import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
+import { sortQuotaPools } from "../registry.js";
 
 /**
  * Extract per-model quotas from a Google quota response, preserving the
@@ -126,7 +127,7 @@ export async function fetchProviderQuota(
     fresh.forEach(
       (q) => ((q as { providerId?: string }).providerId = "google-antigravity"),
     );
-    account.quota = [...otherProviders, ...fresh];
+    account.quota = sortQuotaPools([...otherProviders, ...fresh]);
     account.lastQuotaPoll = Date.now();
 
     // Stash the provider-local poll log for the rotator to emit as a

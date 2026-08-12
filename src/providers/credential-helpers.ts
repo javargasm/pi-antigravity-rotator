@@ -77,3 +77,60 @@ export function getProviderProxyUrl(
   if (credential?.proxyUrl !== undefined) return credential.proxyUrl;
   return undefined;
 }
+
+export const PROVIDER_ORDER: string[] = [
+  "google-antigravity",
+  "ollama",
+  "opencode-zen",
+  "openai-codex",
+];
+
+export const PROVIDER_ORDER_RANK: Record<string, number> = {
+  "google-antigravity": 1,
+  ollama: 2,
+  "opencode-zen": 3,
+  "openai-codex": 4,
+};
+
+export function getProviderIdForPoolKey(poolKey: string): string {
+  if (poolKey.startsWith("codex:") || poolKey.startsWith("openai-codex")) return "openai-codex";
+  if (poolKey.startsWith("opencode-zen:") || poolKey === "opencode-zen") return "opencode-zen";
+  if (poolKey === "session" || poolKey === "weekly") return "ollama";
+  if (poolKey === "claude" || poolKey === "gemini") return "google-antigravity";
+  if (PROVIDER_ORDER_RANK[poolKey] !== undefined) return poolKey;
+  return DEFAULT_PROVIDER;
+}
+
+export type QuotaPoolLike = {
+  modelKey: string;
+  providerId?: string;
+};
+
+export function getQuotaItemProviderId(q: QuotaPoolLike): string {
+  if (q.providerId && PROVIDER_ORDER_RANK[q.providerId] !== undefined) {
+    return q.providerId;
+  }
+  return getProviderIdForPoolKey(q.modelKey);
+}
+
+export function sortQuotaPools<T extends QuotaPoolLike>(quotas: T[]): T[] {
+  return [...quotas].sort((a, b) => {
+    const rankA = PROVIDER_ORDER_RANK[getQuotaItemProviderId(a)] ?? 99;
+    const rankB = PROVIDER_ORDER_RANK[getQuotaItemProviderId(b)] ?? 99;
+    if (rankA !== rankB) {
+      return rankA - rankB;
+    }
+    return 0;
+  });
+}
+
+export function sortAccountCredentials<T extends { provider: string }>(credentials: T[]): T[] {
+  return [...credentials].sort((a, b) => {
+    const rankA = PROVIDER_ORDER_RANK[a.provider] ?? 99;
+    const rankB = PROVIDER_ORDER_RANK[b.provider] ?? 99;
+    if (rankA !== rankB) {
+      return rankA - rankB;
+    }
+    return 0;
+  });
+}

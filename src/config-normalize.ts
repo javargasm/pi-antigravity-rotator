@@ -3,7 +3,7 @@
 // account-store (write path) can use it without import cycles.
 
 import type { AccountConfig } from "./types.js";
-import { DEFAULT_PROVIDER } from "./providers/credential-helpers.js";
+import { DEFAULT_PROVIDER, sortAccountCredentials } from "./providers/credential-helpers.js";
 
 /**
  * Migrate a flat legacy account shape (provider/apiKey/refreshToken at the
@@ -73,10 +73,15 @@ export function normalizeAccountConfig(account: AccountConfig): AccountConfig {
   }
 
   if (credentials.length > 0) {
-    if (Array.isArray(account.credentials) && credentials.length === account.credentials.length) {
+    const sorted = sortAccountCredentials(credentials);
+    if (
+      Array.isArray(account.credentials) &&
+      credentials.length === account.credentials.length &&
+      JSON.stringify(sorted) === JSON.stringify(account.credentials)
+    ) {
       return account;
     }
-    return { ...account, credentials };
+    return { ...account, credentials: sorted };
   }
 
   // Mirror the flat legacy fields onto the parent-account credentials and

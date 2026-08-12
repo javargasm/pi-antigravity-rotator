@@ -95,7 +95,7 @@ describe("importAccountsToConfig", () => {
 
 		assert.deepEqual(
 			normalized.credentials?.map((credential) => credential.provider),
-			["openai-codex", "ollama", "google-antigravity"],
+			["google-antigravity", "ollama", "openai-codex"],
 		);
 		const google = normalized.credentials?.find(
 			(credential) => credential.provider === "google-antigravity",
