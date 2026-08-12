@@ -18,6 +18,7 @@ import {
 } from "../src/providers/openai-codex/forward.js";
 import {
   chatToCodexResponsesRequest,
+  parseCodexResponseBody,
   parseCodexResponse,
 } from "../src/providers/openai-codex/compat.js";
 import { isCodexModelForRotator } from "../src/compat.js";
@@ -186,6 +187,20 @@ describe("openai-codex import and payload", () => {
     assert.equal(request.store, false);
     assert.equal(request.stream, true);
     assert.equal(request.instructions, "You are a helpful assistant.");
+    assert.deepEqual(
+      sanitizeCodexResponsesRequest({
+        tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }],
+        tool_choice: { type: "function", function: { name: "lookup" } },
+      }, "gpt-5.6-luna"),
+      {
+        tools: [{ type: "function", name: "lookup", parameters: { type: "object" } }],
+        tool_choice: { type: "function", name: "lookup" },
+        model: "gpt-5.6-luna",
+        instructions: "You are a helpful assistant.",
+        store: false,
+        stream: true,
+      },
+    );
     assert.equal(request.input_items, undefined);
     assert.equal(request.background, undefined);
   });
@@ -279,5 +294,24 @@ describe("openai-codex import and payload", () => {
     assert.equal(completion.text, "done");
     assert.equal(completion.toolCalls?.[0]?.function.arguments, '{"q":"x"}');
     assert.equal(completion.inputTokens, 3);
+  });
+
+  it("preserves function calls when Codex returns SSE for a non-stream request", () => {
+    const completion = parseCodexResponseBody([
+      "event: response.output_item.added\n",
+      'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_1","name":"lookup"}}\n\n',
+      "event: response.function_call_arguments.delta\n",
+      'data: {"type":"response.function_call_arguments.delta","delta":"{\\"q\\":\\"x\\"}"}\n\n',
+      "event: response.output_item.done\n",
+      'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\\"q\\":\\"x\\"}"}}\n\n',
+      "event: response.completed\n",
+      'data: {"type":"response.completed","response":{"output":[],"usage":{"input_tokens":3,"output_tokens":2}}}\n\n',
+    ].join(""));
+    assert.equal(completion.text, "");
+    assert.deepEqual(completion.toolCalls?.[0], {
+      id: "call_1",
+      type: "function",
+      function: { name: "lookup", arguments: '{"q":"x"}' },
+    });
   });
 });

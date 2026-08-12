@@ -353,6 +353,14 @@ export function convertToolChoiceToGemini(
   return { functionCallingConfig: { mode: "AUTO" } };
 }
 
+function forcesToolUse(toolChoice: unknown): boolean {
+  if (toolChoice === "required") return true;
+  return isRecord(toolChoice) &&
+    toolChoice.type === "function" &&
+    ((isRecord(toolChoice.function) && isNonEmptyString(toolChoice.function.name)) ||
+      isNonEmptyString(toolChoice.name));
+}
+
 export function validateMessages(value: unknown): value is ChatMessage[] {
   return (
     Array.isArray(value) &&
@@ -1135,7 +1143,7 @@ export function openAIToAntigravityBody(
   }
 
   let thinkingConfigObj: Record<string, unknown> | undefined;
-  if (modelFamily === "claude" && isThinking) {
+  if (modelFamily === "claude" && isThinking && !forcesToolUse(input.tool_choice)) {
     const tb = modelSpec.thinkingBudget;
     thinkingConfigObj = { include_thoughts: true, thinking_budget: tb };
     if (!maxOutputTokens || maxOutputTokens <= tb) {
@@ -1144,7 +1152,7 @@ export function openAIToAntigravityBody(
         `Adjusted Claude maxOutputTokens → ${maxOutputTokens}`,
       );
     }
-  } else if (isThinking) {
+  } else if (isThinking && modelFamily !== "claude") {
     const tb = modelSpec.thinkingBudget;
     thinkingConfigObj =
       tb === -1

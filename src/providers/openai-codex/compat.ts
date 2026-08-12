@@ -155,18 +155,71 @@ export function parseCodexResponse(raw: string): CompatCompletion {
   };
 }
 
-function parseCodexResponseBody(raw: string): CompatCompletion {
+export function parseCodexResponseBody(raw: string): CompatCompletion {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("event:") && !trimmed.startsWith("data:")) {
     return parseCodexResponse(raw);
   }
   const accumulator = createCodexStreamAccumulator();
-  accumulator.append(raw);
+  let eventName = "";
+  const toolCalls: OpenAIToolCall[] = [];
+  let completed: CompatCompletion | null = null;
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim();
+      continue;
+    }
+    if (!line.startsWith("data:")) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    let parsed: Record<string, unknown>;
+    try { parsed = JSON.parse(payload) as Record<string, unknown>; } catch { continue; }
+    const type = eventName || (typeof parsed.type === "string" ? parsed.type : "");
+    if (type === "response.completed" && isRecord(parsed.response)) {
+      completed = parseCodexResponse(JSON.stringify(parsed.response));
+      continue;
+    }
+    if (type === "response.output_item.added" && isRecord(parsed.item) && parsed.item.type === "function_call") {
+      const item = parsed.item;
+      toolCalls.push({
+        id: typeof item.call_id === "string" ? item.call_id : `call_${toolCalls.length}`,
+        type: "function",
+        function: {
+          name: typeof item.name === "string" ? item.name : "unknown",
+          arguments: "",
+        },
+      });
+      continue;
+    }
+    if (type === "response.output_item.done" && isRecord(parsed.item) && parsed.item.type === "function_call") {
+      const item = parsed.item;
+      const call = toolCalls.find((candidate) => candidate.id === item.call_id);
+      if (call) {
+        if (typeof item.name === "string") call.function.name = item.name;
+        if (typeof item.arguments === "string") call.function.arguments = item.arguments;
+      }
+      continue;
+    }
+    if (type === "response.function_call_arguments.delta" && typeof parsed.delta === "string") {
+      const call = toolCalls.at(-1);
+      if (call) call.function.arguments += parsed.delta;
+      continue;
+    }
+    if (type === "response.output_text.delta" && typeof parsed.delta === "string") {
+      accumulator.append(`data: ${JSON.stringify({ delta: parsed.delta })}\n`);
+    }
+  }
+  if (completed) {
+    if (toolCalls.length > 0 && !completed.toolCalls) completed.toolCalls = toolCalls;
+    if (!completed.text) completed.text = accumulator.getText();
+    return completed;
+  }
   const usage = extractCodexUsage(raw);
   return {
     text: accumulator.getText(),
     inputTokens: usage?.inputTokens ?? 0,
     outputTokens: usage?.outputTokens ?? 0,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     rawResponse: {},
   };
 }
@@ -176,27 +229,39 @@ function codexResponseJson(
   model: string,
 ): Record<string, unknown> {
   const id = `resp-${Date.now().toString(36)}`;
+  const output: unknown[] = [];
+  if (completion.text || !completion.toolCalls?.length) {
+    output.push({
+      id: `${id}-msg`,
+      type: "message",
+      status: "completed",
+      role: "assistant",
+      content: [
+        {
+          type: "output_text",
+          text: completion.text,
+          annotations: [],
+        },
+      ],
+    });
+  }
+  for (const call of completion.toolCalls ?? []) {
+    output.push({
+      id: call.id,
+      type: "function_call",
+      call_id: call.id,
+      name: call.function.name,
+      arguments: call.function.arguments,
+      status: "completed",
+    });
+  }
   return {
     id,
     object: "response",
     created_at: Math.floor(Date.now() / 1000),
     status: "completed",
     model,
-    output: [
-      {
-        id: `${id}-msg`,
-        type: "message",
-        status: "completed",
-        role: "assistant",
-        content: [
-          {
-            type: "output_text",
-            text: completion.text,
-            annotations: [],
-          },
-        ],
-      },
-    ],
+    output,
     output_text: completion.text,
     usage: {
       input_tokens: completion.inputTokens,

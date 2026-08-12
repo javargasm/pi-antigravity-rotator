@@ -18,6 +18,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function codexFunctionTool(value: unknown): unknown {
+  if (!isRecord(value) || value.type !== "function") return value;
+  const source = isRecord(value.function) ? value.function : value;
+  const tool: Record<string, unknown> = {
+    type: "function",
+    name: source.name,
+  };
+  for (const field of ["description", "parameters", "strict"]) {
+    if (source[field] !== undefined) tool[field] = source[field];
+  }
+  return tool;
+}
+
+function codexToolChoice(value: unknown): unknown {
+  if (!isRecord(value) || value.type !== "function") return value;
+  if (isRecord(value.function)) {
+    return { type: "function", name: value.function.name };
+  }
+  return value;
+}
+
 export function codexBaseUrl(): string {
   return (process.env.CODEX_BASE_URL?.trim() || DEFAULT_CODEX_BASE_URL).replace(/\/$/, "");
 }
@@ -36,6 +57,12 @@ export function sanitizeCodexResponsesRequest(
   sanitized.instructions = codexInstructions(sanitized.instructions);
   sanitized.store = false;
   sanitized.stream = true;
+  if (Array.isArray(sanitized.tools)) {
+    sanitized.tools = sanitized.tools.map(codexFunctionTool);
+  }
+  if (sanitized.tool_choice !== undefined) {
+    sanitized.tool_choice = codexToolChoice(sanitized.tool_choice);
+  }
   delete sanitized.previous_response_id;
   delete sanitized.conversation;
   delete sanitized.input_items;

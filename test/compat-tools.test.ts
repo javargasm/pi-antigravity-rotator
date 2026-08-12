@@ -32,6 +32,16 @@ describe("OpenAI Compat Tool Calling", () => {
 		assert.strictEqual(request.tools, undefined);
 	});
 
+	it("disables Claude thinking when tool_choice forces a function", () => {
+		const result = openAIToAntigravityBody({
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "Call lookup" }],
+			tools: [{ type: "function", function: { name: "lookup" } }],
+			tool_choice: { type: "function", function: { name: "lookup" } },
+		});
+		assert.equal((result.request as any).generationConfig.thinkingConfig, undefined);
+	});
+
 	it("converts tools to Gemini functionDeclarations", () => {
 		const req: OpenAIChatCompletionRequest = {
 			model: "gemini-3-flash",
