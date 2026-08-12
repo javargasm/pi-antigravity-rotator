@@ -350,6 +350,7 @@ export function serveCliLogin(res: ServerResponse): void {
   <button class="tab active" data-panel="panel-google">Google (Antigravity)</button>
   <button class="tab" data-panel="panel-codex">OpenAI Codex</button>
   <button class="tab" data-panel="panel-ollama">Ollama Cloud</button>
+  <button class="tab" data-panel="panel-zen">OpenCode Zen</button>
 </div>
 
 <div class="panel active" id="panel-google">
@@ -404,6 +405,20 @@ ${codexAuthUrl && codexSessionId ? `<h3 style="margin:24px 0 8px;font-size:18px;
   <input id="email" name="email" class="field" placeholder="me@example.com (optional)" autocomplete="off" />
   <label for="apiKey">Ollama API key</label>
   <input id="apiKey" name="apiKey" class="field" type="password" placeholder="ollama-..." autocomplete="off" required />
+  <button type="submit" class="cta" style="cursor:pointer;border:none;font-family:inherit;font-size:16px;margin-top:12px;">
+    Connect Account
+  </button>
+</form>
+</div>
+
+<div class="panel" id="panel-zen">
+<p>Paste an OpenCode Zen API key to add the account to this rotator. The key is validated against opencode.ai/zen before saving.</p>
+<p class="mono">Create a key at https://opencode.ai/zen</p>
+<form id="zenForm" style="margin-top:12px;">
+  <label for="zenEmail">Account identifier (email or label)</label>
+  <input id="zenEmail" name="email" class="field" placeholder="me@example.com (optional)" autocomplete="off" />
+  <label for="zenApiKey">OpenCode Zen API key</label>
+  <input id="zenApiKey" name="apiKey" class="field" type="password" placeholder="sk-..." autocomplete="off" required />
   <button type="submit" class="cta" style="cursor:pointer;border:none;font-family:inherit;font-size:16px;margin-top:12px;">
     Connect Account
   </button>
@@ -551,6 +566,48 @@ if (codexForm) codexForm.addEventListener('submit', async (e) => {
   } finally {
     btn.disabled = false;
     btn.textContent = 'Connect Codex Account';
+  }
+});
+
+const zenForm = document.getElementById('zenForm');
+if (zenForm) zenForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const btn = form.querySelector('button[type=submit]');
+  const apiKey = form.apiKey.value.trim();
+  const email = form.email.value.trim();
+  if (!apiKey) { showResult('<div class="note error">Please paste an API key.</div>'); return; }
+  btn.disabled = true;
+  btn.textContent = 'Validating...';
+  showResult('<div class="note">Checking the key against opencode.ai/zen...</div>');
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token') || '';
+    const res = await fetch('/api/cli-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Rotator-Admin-Token': token } : {}) },
+      body: JSON.stringify({ provider: 'opencode-zen', email, apiKey }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showResult('<div class="note" style="border-left-color:var(--accent);background:rgba(30,107,82,0.12);">' +
+        '<strong>' + (data.email || '') + '</strong> ' + (data.isNew ? 'added' : 'updated') + ' successfully. The rotator will start using OpenCode Zen on the next poll.</div>');
+    } else {
+      var zenErrDiv = document.createElement('div');
+      zenErrDiv.className = 'note error';
+      zenErrDiv.textContent = data.error || 'Unknown error';
+      document.getElementById('result').innerHTML = '';
+      document.getElementById('result').appendChild(zenErrDiv);
+    }
+  } catch (err) {
+    var zenErr2 = document.createElement('div');
+    zenErr2.className = 'note error';
+    zenErr2.textContent = 'Request failed: ' + err.message;
+    document.getElementById('result').innerHTML = '';
+    document.getElementById('result').appendChild(zenErr2);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Connect Account';
   }
 });
 </script>

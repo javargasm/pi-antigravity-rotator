@@ -116,6 +116,14 @@ describe("serveCliLogin", () => {
 		assert.match(state.body, /id="codexPasteForm"/);
 	});
 
+	it("includes an OpenCode Zen panel", () => {
+		const { res, state } = mockRes();
+		serveCliLogin(res);
+		assert.match(state.body, /id="panel-zen"/);
+		assert.match(state.body, /OpenCode Zen API key/);
+		assert.match(state.body, /id="zenForm"/);
+	});
+
 	it("uses independent values for the browser session and OAuth state", () => {
 		const { res, state } = mockRes();
 		serveCliLogin(res);
