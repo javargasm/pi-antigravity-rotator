@@ -210,6 +210,20 @@ describe("OpenCode Zen Provider Adapter", () => {
     assert.equal(parsed.outputTokens, 4);
   });
 
+  it("parses SSE tool_calls across split chunks in parseOpenAiJson", () => {
+    const rawSse =
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-webfetch-123","type":"function","function":{"name":"WebFetch","arguments":""}}]}}]}\n\n' +
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"url\\":\\"https://example.com\\"}"}}]}}]}\n\n' +
+      'data: [DONE]\n\n';
+
+    const parsed = parseOpenAiJson(rawSse);
+    assert.ok(parsed.toolCalls);
+    assert.equal(parsed.toolCalls.length, 1);
+    assert.equal(parsed.toolCalls[0].id, "call-webfetch-123");
+    assert.equal(parsed.toolCalls[0].function.name, "WebFetch");
+    assert.equal(parsed.toolCalls[0].function.arguments, '{"url":"https://example.com"}');
+  });
+
   it("converts Anthropic messages request to OpenAI chat request", () => {
     const anthropicReq = {
       model: "deepseek-v4-flash-free",

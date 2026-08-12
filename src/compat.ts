@@ -215,6 +215,33 @@ export function parseOpenAiJson(raw: string): CompatCompletion {
             if (typeof delta.content === "string") {
               text += delta.content;
             }
+            if (Array.isArray(delta.tool_calls)) {
+              for (const tc of delta.tool_calls) {
+                if (!isRecord(tc) || !isRecord(tc.function)) continue;
+                const tcIndex = typeof tc.index === "number" ? tc.index : 0;
+                const key = String(tcIndex);
+                let existing = toolCallsMap.get(key);
+                if (!existing) {
+                  const callId = typeof tc.id === "string" && tc.id ? tc.id : `call_${Date.now().toString(36)}_${toolCallIndex++}`;
+                  const name = typeof tc.function.name === "string" && tc.function.name ? tc.function.name : "unknown";
+                  existing = {
+                    id: callId,
+                    type: "function",
+                    function: { name, arguments: "" },
+                  };
+                  toolCallsMap.set(key, existing);
+                } else {
+                  if (typeof tc.id === "string" && tc.id) existing.id = tc.id;
+                  if (typeof tc.function.name === "string" && tc.function.name && existing.function.name === "unknown") {
+                    existing.function.name = tc.function.name;
+                  }
+                }
+                const argsDelta = typeof tc.function.arguments === "string" ? tc.function.arguments : "";
+                if (argsDelta) {
+                  existing.function.arguments += argsDelta;
+                }
+              }
+            }
           }
         }
       } catch {
@@ -595,6 +622,15 @@ async function streamCompatSse(
   let tailBuffer = "";
   let reqClosed = false;
   let streamError: string | undefined;
+  interface OpenAiStreamingToolState {
+    id: string;
+    name: string;
+    arguments: string;
+    anthropicBlockIndex?: number;
+    anthropicStarted?: boolean;
+    openaiToolCallIndex: number;
+  }
+  const openAiStreamingTools = new Map<number, OpenAiStreamingToolState>();
   const emitOllamaLine = (line: string): void => {
     try {
       const parsed = JSON.parse(line) as Record<string, unknown>;
@@ -746,49 +782,109 @@ async function streamCompatSse(
       if (Array.isArray(delta.tool_calls)) {
         for (const tc of delta.tool_calls) {
           if (!isRecord(tc) || !isRecord(tc.function)) continue;
-          const name = typeof tc.function.name === "string" ? tc.function.name : "unknown";
-          const args = typeof tc.function.arguments === "string"
-            ? tc.function.arguments
-            : JSON.stringify(tc.function.arguments ?? {});
-          const callId = typeof tc.id === "string" ? tc.id : `call_${Date.now().toString(36)}_${toolCallIndex++}`;
-          if (format === "openai") {
-            openaiToolCalls.push({
+          const tcIndex = typeof tc.index === "number" ? tc.index : 0;
+          let state = openAiStreamingTools.get(tcIndex);
+          if (!state) {
+            const callId = typeof tc.id === "string" && tc.id ? tc.id : `call_${Date.now().toString(36)}_${toolCallIndex++}`;
+            const name = typeof tc.function.name === "string" && tc.function.name ? tc.function.name : "unknown";
+            state = {
               id: callId,
-              type: "function",
-              function: { name, arguments: args },
-            });
+              name,
+              arguments: "",
+              openaiToolCallIndex: toolCallIndex - 1,
+            };
+            openAiStreamingTools.set(tcIndex, state);
+          } else {
+            if (typeof tc.id === "string" && tc.id) state.id = tc.id;
+            if (typeof tc.function.name === "string" && tc.function.name && state.name === "unknown") {
+              state.name = tc.function.name;
+            }
+          }
+
+          const argsDelta = typeof tc.function.arguments === "string" ? tc.function.arguments : "";
+          if (argsDelta) {
+            state.arguments += argsDelta;
+          }
+
+          if (format === "openai") {
+            const existingRecord = openaiToolCalls.find((c) => c.id === state!.id);
+            if (existingRecord) {
+              existingRecord.function.name = state.name;
+              existingRecord.function.arguments = state.arguments;
+            } else {
+              openaiToolCalls.push({
+                id: state.id,
+                type: "function",
+                function: { name: state.name, arguments: state.arguments },
+              });
+            }
+
             res.write(
-              `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { tool_calls: [{ index: toolCallIndex - 1, id: callId, type: "function", function: { name, arguments: args } }] }, finish_reason: null }] })}\n\n`,
+              `data: ${JSON.stringify({
+                id,
+                object: "chat.completion.chunk",
+                created,
+                model,
+                choices: [{
+                  index: 0,
+                  delta: {
+                    tool_calls: [{
+                      index: tcIndex,
+                      ...(tc.id ? { id: state.id } : {}),
+                      ...(tc.type ? { type: "function" } : {}),
+                      function: {
+                        ...(tc.function.name ? { name: state.name } : {}),
+                        arguments: argsDelta,
+                      },
+                    }],
+                  },
+                  finish_reason: null,
+                }],
+              })}\n\n`,
             );
           } else {
-            if (anthropicActiveBlockType !== null) {
+            if (!state.anthropicStarted) {
+              if (anthropicActiveBlockType !== null) {
+                res.write(
+                  `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`,
+                );
+                anthropicActiveBlockType = null;
+              }
+              anthropicActiveBlockIndex++;
+              state.anthropicBlockIndex = anthropicActiveBlockIndex;
+              state.anthropicStarted = true;
+              anthropicHasToolUse = true;
+
+              anthropicToolCalls.push({
+                id: state.id,
+                type: "function",
+                function: { name: state.name, arguments: state.arguments },
+              });
+
               res.write(
-                `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`,
+                `event: content_block_start\ndata: ${JSON.stringify({
+                  type: "content_block_start",
+                  index: state.anthropicBlockIndex,
+                  content_block: { type: "tool_use", id: state.id, name: state.name, input: {} },
+                })}\n\n`,
               );
-              anthropicActiveBlockType = null;
+            } else {
+              const rec = anthropicToolCalls.find((c) => c.id === state!.id);
+              if (rec) {
+                rec.function.name = state.name;
+                rec.function.arguments = state.arguments;
+              }
             }
-            anthropicActiveBlockIndex++;
-            anthropicHasToolUse = true;
-            anthropicToolCalls.push({
-              id: callId,
-              type: "function",
-              function: { name, arguments: args },
-            });
-            let parsedInput: unknown;
-            try {
-              parsedInput = JSON.parse(args);
-            } catch {
-              parsedInput = {};
+
+            if (argsDelta) {
+              res.write(
+                `event: content_block_delta\ndata: ${JSON.stringify({
+                  type: "content_block_delta",
+                  index: state.anthropicBlockIndex,
+                  delta: { type: "input_json_delta", partial_json: argsDelta },
+                })}\n\n`,
+              );
             }
-            res.write(
-              `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: anthropicActiveBlockIndex, content_block: { type: "tool_use", id: callId, name, input: {} } })}\n\n`,
-            );
-            res.write(
-              `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: anthropicActiveBlockIndex, delta: { type: "input_json_delta", partial_json: JSON.stringify(parsedInput) } })}\n\n`,
-            );
-            res.write(
-              `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`,
-            );
           }
         }
       }
@@ -1008,6 +1104,13 @@ async function streamCompatSse(
         res.write(
           `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`,
         );
+      }
+      for (const toolState of openAiStreamingTools.values()) {
+        if (toolState.anthropicStarted) {
+          res.write(
+            `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: toolState.anthropicBlockIndex })}\n\n`,
+          );
+        }
       }
       const anthropicStopReason = anthropicHasToolUse ? "tool_use" : "end_turn";
       // message_delta carries output_tokens; also include input_tokens so Hermes shows full context count
