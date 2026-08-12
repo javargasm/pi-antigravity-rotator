@@ -797,14 +797,14 @@ export const MODEL_PRICING: Record<
   "nemotron-3-super":            { inputPer1M: 0.60,   outputPer1M: 1.80 },
   "nemotron-3-ultra":            { inputPer1M: 0.60,   outputPer1M: 1.80 },
 
-  // OpenCode Zen free models (cost: 0 USD per 1M tokens)
-  "deepseek-v4-flash-free":      { inputPer1M: 0.0,    outputPer1M: 0.0 },
-  "nemotron-3.5-lightning-free": { inputPer1M: 0.0,    outputPer1M: 0.0 },
-  "nemotron-3-ultra-free":       { inputPer1M: 0.0,    outputPer1M: 0.0 },
-  "mimo-v2.5-free":              { inputPer1M: 0.0,    outputPer1M: 0.0 },
-  "hy3-free":                    { inputPer1M: 0.0,    outputPer1M: 0.0 },
-  "ling-3.0-tiny-free":          { inputPer1M: 0.0,    outputPer1M: 0.0 },
-  "laguna-s-2.1-free":           { inputPer1M: 0.0,    outputPer1M: 0.0 },
+  // OpenCode Zen free models — equivalent market rates (USD per 1M tokens) for savings tracking
+  "deepseek-v4-flash-free":      { inputPer1M: 0.14,   outputPer1M: 0.28,  cachingPer1M: 0.0028 },
+  "nemotron-3.5-lightning-free": { inputPer1M: 0.35,   outputPer1M: 1.05 },
+  "nemotron-3-ultra-free":       { inputPer1M: 0.60,   outputPer1M: 1.80 },
+  "mimo-v2.5-free":              { inputPer1M: 0.15,   outputPer1M: 0.60 },
+  "hy3-free":                    { inputPer1M: 0.25,   outputPer1M: 1.00 },
+  "ling-3.0-tiny-free":          { inputPer1M: 0.05,   outputPer1M: 0.20 },
+  "laguna-s-2.1-free":           { inputPer1M: 0.20,   outputPer1M: 0.80 },
 };
 
 // Which Ollama Cloud models respond on which subscription tiers, verified

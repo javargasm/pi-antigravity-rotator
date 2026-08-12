@@ -358,6 +358,15 @@ const MODEL_PRICING = {
 	"nemotron-3-nano:30b":         { inputPer1M: 0.50,  outputPer1M: 1.50 },
 	"nemotron-3-super":            { inputPer1M: 0.60,  outputPer1M: 1.80 },
 	"nemotron-3-ultra":            { inputPer1M: 0.60,  outputPer1M: 1.80 },
+
+	// OpenCode Zen free models — mirrors MODEL_PRICING in src/types.ts
+	"deepseek-v4-flash-free":      { inputPer1M: 0.14,  outputPer1M: 0.28 },
+	"nemotron-3.5-lightning-free": { inputPer1M: 0.35,  outputPer1M: 1.05 },
+	"nemotron-3-ultra-free":       { inputPer1M: 0.60,  outputPer1M: 1.80 },
+	"mimo-v2.5-free":              { inputPer1M: 0.15,  outputPer1M: 0.60 },
+	"hy3-free":                    { inputPer1M: 0.25,  outputPer1M: 1.00 },
+	"ling-3.0-tiny-free":          { inputPer1M: 0.05,  outputPer1M: 0.20 },
+	"laguna-s-2.1-free":           { inputPer1M: 0.20,  outputPer1M: 0.80 },
 };
 
 function getModelPricing(model) {

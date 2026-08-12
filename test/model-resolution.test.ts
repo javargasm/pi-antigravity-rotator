@@ -72,6 +72,13 @@ describe("model resolution", () => {
 		assert.ok(MODEL_PRICING["gpt-5.6-sol"]);
 		assert.ok(MODEL_PRICING["gpt-5.6-terra"]);
 		assert.ok(MODEL_PRICING["gpt-5.6-luna"]);
+		assert.ok(MODEL_PRICING["deepseek-v4-flash-free"]);
+		assert.ok(MODEL_PRICING["nemotron-3.5-lightning-free"]);
+		assert.ok(MODEL_PRICING["nemotron-3-ultra-free"]);
+		assert.ok(MODEL_PRICING["mimo-v2.5-free"]);
+		assert.ok(MODEL_PRICING["hy3-free"]);
+		assert.ok(MODEL_PRICING["ling-3.0-tiny-free"]);
+		assert.ok(MODEL_PRICING["laguna-s-2.1-free"]);
 	});
 
 	it("uses official Codex GPT-5.6 text-token pricing", () => {
