@@ -71,6 +71,19 @@ under `credentials: [{ provider: "openai-codex", refreshToken, providerAccountId
 [Codex integration](integrations/codex.md) for the OAuth variables, model
 catalog, quota behaviour, and the internal endpoints used by the provider.
 
+## OpenCode Zen Accounts
+
+OpenCode Zen uses static API keys (`sk-...`) for free-tier model access (`opencode.ai/zen/v1`):
+
+```bash
+tuxevil-rotator login --provider opencode-zen
+```
+
+The CLI prompts for an optional email/label and your OpenCode Zen API key. The account is stored with
+`provider: "opencode-zen"` (or added to an existing email row under `credentials: [{ provider: "opencode-zen", apiKey }]`) and is validated against the model catalog before saving. The dashboard page at `/login-cli` also includes an **OpenCode Zen** tab for web-based key entry.
+
+Supported models: `deepseek-v4-flash-free`, `nemotron-3.5-lightning-free`, `nemotron-3-ultra-free`, `mimo-v2.5-free`, `hy3-free`, `ling-3.0-tiny-free`, and `laguna-s-2.1-free`. Rate limits are tracked on a per-model basis to prevent temporary 429s on one model from blocking others.
+
 ## Migrating from the Legacy Ollama Rotator
 
 If you previously ran the standalone `ollama-rotator` (config dir
@@ -127,13 +140,13 @@ The dashboard (`/dashboard`) provides a full account management UI:
 | Field | Description |
 |-------|-------------|
 | `email` | Account email (auto-filled by login) |
-| `provider` | Legacy field: `google-antigravity` (default), `ollama`, or `openai-codex`. New accounts use `credentials[]` instead. |
+| `provider` | Legacy field: `google-antigravity` (default), `ollama`, `openai-codex`, or `opencode-zen`. New accounts use `credentials[]` instead. |
 | `refreshToken` | Legacy Google OAuth refresh token (auto-filled by `login`, Google accounts only) |
 | `projectId` | Google Cloud project ID discovered during login (Google accounts only) |
 | `projectSource` | Optional metadata: `google` when discovered from Google, `manual` if edited by hand |
-| `apiKey` | Legacy Ollama Cloud API key (Ollama accounts only; never expires, see `ollama.com/settings/keys`) |
+| `apiKey` | API key (Ollama Cloud, OpenCode Zen; never expires) |
 | `codexRefreshToken` / `codexAccountId` | Legacy Codex fields; prefer `credentials[]` (see below) |
-| `credentials[].provider` | `google-antigravity`, `ollama`, or `openai-codex`. Selects the credential fields required and upstream routing. |
+| `credentials[].provider` | `google-antigravity`, `ollama`, `openai-codex`, or `opencode-zen`. Selects the credential fields required and upstream routing. |
 | `credentials[].refreshToken` | OAuth refresh token for the credential's provider (Antigravity, Codex) |
 | `credentials[].providerAccountId` | ChatGPT account id from the Codex OAuth identity claim (Codex only) |
 | `credentials[].proxyUrl` | Optional provider-scoped egress proxy: `http://`, `https://`, `socks5://`, or `socks5h://`. Credentials may be embedded in the URL. |

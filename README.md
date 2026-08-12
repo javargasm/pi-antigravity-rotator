@@ -28,7 +28,7 @@
 
 Multi-account load balancing, per-model quota routing, account health scoring, access control with Virtual Keys, and cost auditing — via a single local endpoint that any agent can use. Even with a single account.
 
-Originally built as a multi-account rotator for Google Antigravity. It now generalizes that rotation layer across any free-tier LLM provider with per-account credentials: today Google Antigravity and Ollama Cloud, designed so the next free-tier provider slots in without forking the engine.
+Originally built as a multi-account rotator for Google Antigravity. It now generalizes that rotation layer across free-tier LLM providers with per-account credentials: Google Antigravity, Ollama Cloud, OpenAI Codex, and OpenCode Zen, designed so new providers slot in without modifying core engine logic.
 
 > **⚠️ WARNING:** Using this proxy may put connected accounts at risk of Terms of Service enforcement, including restriction, suspension, or permanent bans. Use at your own risk.
 

@@ -46,8 +46,8 @@ If either variable is missing, the rotator falls back to the legacy client and e
 
 ## Providers
 
-The rotator routes through three provider families. Each account in `accounts.json`
-carries a `provider` field selecting its family (default when absent: `google-antigravity`,
+The rotator routes through four provider families. Each account in `accounts.json`
+carries credentials specifying its provider (default when absent: `google-antigravity`,
 i.e. legacy configs).
 
 | Provider | ID | Credential | Add accounts |
@@ -55,6 +55,7 @@ i.e. legacy configs).
 | Google Antigravity | `google-antigravity` | OAuth refresh token (auto-discovered project) | `tuxevil-rotator login` |
 | Ollama Cloud | `ollama` | Static API key from `ollama.com/settings/keys` (never expires) | `tuxevil-rotator login --provider ollama` |
 | OpenAI Codex | `openai-codex` | ChatGPT OAuth refresh token, stored per provider credential | `tuxevil-rotator login --provider openai-codex` |
+| OpenCode Zen | `opencode-zen` | Static API key from `opencode.ai/zen/v1` (never expires) | `tuxevil-rotator login --provider opencode-zen` |
 
 Codex can also import an existing Codex CLI or compatible export without putting
 tokens in shell history:
