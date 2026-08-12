@@ -1072,6 +1072,11 @@ var TOKEN_MODEL_COLORS = {
   "gemini-3.6-flash-tiered": "#38bdf8",
   "gemini-3-flash": "#93c5fd", // Gemini 3 Flash (Azul pastel claro)
 
+  // Codex Pool (Amarillos) — de más caro a más barato
+  "gpt-5.6-sol": "#a16207", // GPT-5.6 Sol (Amarillo oscuro/marrón mostaza)
+  "gpt-5.6-terra": "#eab308", // GPT-5.6 Terra (Amarillo vivo)
+  "gpt-5.6-luna": "#fde047", // GPT-5.6 Luna (Amarillo pastel suave)
+
   // Ollama Pool (Verdes) — de más caro a más barato por familia
   "kimi-k3": "#047857", // Familia Kimi (Verde bosque/esmeralda oscuro)
   "kimi-k2.7-code": "#047857",
@@ -1111,6 +1116,11 @@ function getModelColor(model) {
   if (lower.indexOf("3.5-flash") !== -1) return "#2563eb";
   if (lower.indexOf("3.6-flash") !== -1) return "#38bdf8";
   if (lower.indexOf("gemini") !== -1 || lower.indexOf("3-flash") !== -1) return "#93c5fd";
+
+  // Codex pool (Amarillos)
+  if (lower.indexOf("gpt-5.6-sol") !== -1) return "#a16207";
+  if (lower.indexOf("gpt-5.6-terra") !== -1) return "#eab308";
+  if (lower.indexOf("gpt-5.6-luna") !== -1) return "#fde047";
 
   // Ollama pool (Verdes)
   if (lower.indexOf("kimi") !== -1) return "#047857";

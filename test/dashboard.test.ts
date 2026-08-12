@@ -127,6 +127,16 @@ describe("dashboard", () => {
     assert.equal(qwen, "#0f766e");
     assert.equal(glm, "#10b981");
     assert.equal(gptOss20b, "#dcfce7");
+
+    // Codex Pool (Yellow spectrum)
+    assert.equal(getModelColor("gpt-5.6-sol"), "#a16207");
+    assert.equal(getModelColor("gpt-5.6-terra"), "#eab308");
+    assert.equal(getModelColor("gpt-5.6-luna"), "#fde047");
+
+    // Codex pool must differ from other pools
+    assert.notEqual(getModelColor("gpt-5.6-sol"), getModelColor("claude-opus-4-6-thinking"));
+    assert.notEqual(getModelColor("gpt-5.6-terra"), getModelColor("gemini-3.1-pro"));
+    assert.notEqual(getModelColor("gpt-5.6-luna"), getModelColor("kimi-k3"));
   });
 
   it("shows sub-cent savings for low-volume priced models", () => {
