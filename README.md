@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/github/license/tuxevil/tuxevil-rotator?logo=opensourceinitiative)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/tuxevil/tuxevil-rotator/ci.yml?logo=github&label=CI)](https://github.com/tuxevil/tuxevil-rotator/actions)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Docker Image](https://img.shields.io/badge/ghcr.io-tuxevil--tuxevil--rotator-blue?logo=docker)](https://github.com/tuxevil/tuxevil-rotator/pkgs/container/tuxevil-rotator)
+[![Docker Image](https://img.shields.io/badge/ghcr.io-tuxevil--rotator-blue?logo=docker)](https://github.com/tuxevil/tuxevil-rotator/pkgs/container/tuxevil-rotator)
 [![Stars](https://img.shields.io/github/stars/tuxevil/tuxevil-rotator?style=social)](https://github.com/tuxevil/tuxevil-rotator/stargazers)
 
 [![Installations](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Ftelemetry.tuxevil.com%2Fv1%2Fpublic-stats&query=%24.installsFormatted&label=installations&color=6366f1)](https://telemetry.tuxevil.com/v1/public-stats)
