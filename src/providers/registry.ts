@@ -15,10 +15,6 @@ import { logger } from "../logger.js";
 import {
   DEFAULT_PROVIDER,
   primaryProviderId,
-  hasCredential,
-  getCredential,
-  type CredentialEntry,
-  type AccountLike as ProviderCredentialLike,
 } from "./credential-helpers.js";
 
 export {

@@ -50,16 +50,19 @@ export async function forwardRequest(
   const forwardHeaders: Record<string, string> = {};
   for (const [key, value] of Object.entries(originalHeaders)) {
     const lower = key.toLowerCase();
-    if (!HOP_BY_HOP.has(lower) && lower !== "authorization") {
+    if (
+      !HOP_BY_HOP.has(lower) &&
+      lower !== "authorization" &&
+      lower !== "content-type" &&
+      lower !== "accept"
+    ) {
       forwardHeaders[key] = value;
     }
   }
 
   forwardHeaders["Authorization"] = `Bearer ${apiKey}`;
   forwardHeaders["Content-Type"] = "application/json";
-  if (!forwardHeaders["Accept"] && !forwardHeaders["accept"]) {
-    forwardHeaders["Accept"] = payload.stream === true ? "text/event-stream" : "application/json";
-  }
+  forwardHeaders["Accept"] = payload.stream === true ? "text/event-stream" : "application/json";
 
   const endpoint = OPENCODE_ZEN_CHAT_URL;
   const response = await fetch(endpoint, {
