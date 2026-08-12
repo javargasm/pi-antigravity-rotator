@@ -54,20 +54,23 @@ import {
   convertResponsesToChatRequest,
   openAIToAntigravityBody,
   anthropicToAntigravityBody,
+  convertAnthropicToolsToOpenAI,
+  convertAnthropicToolChoice,
+  convertAnthropicMessagesToOpenAI,
+  extractText,
   validateOpenAIChatCompletionRequest,
   validateOpenAIResponsesRequest,
   validateAnthropicMessagesRequest,
   buildResponsesResponse,
   saveResponsesEntry,
   toolArgumentsToObject,
-  toolArgumentsToString,
 } from "./providers/google-antigravity/translators.js";
 import {
   openAIToOllamaBody,
   anthropicToOllamaBody,
   parseOllamaNdjson,
 } from "./providers/ollama/translators.js";
-import { OPENCODE_ZEN_CATALOG } from "./providers/opencode-zen/catalog.js";
+import { OPENCODE_ZEN_CATALOG, isOpenCodeZenModel } from "./providers/opencode-zen/catalog.js";
 import { OPENCODE_ZEN_PROVIDER_ID } from "./providers/opencode-zen/index.js";
 import type {
   ChatMessage,
@@ -152,6 +155,89 @@ export function logValidationFailure(scope: string, payload: unknown): void {
 // Cache and stores have been moved to src/compat/cache.ts
 
 // Helper and translation functions have been moved to src/providers/google-antigravity/translators.ts
+
+export function anthropicToOpenAIChatRequest(
+  input: AnthropicMessagesRequest,
+): OpenAIChatCompletionRequest {
+  const systemText =
+    typeof input.system === "string"
+      ? input.system
+      : Array.isArray(input.system)
+        ? extractText(input.system as ChatMessage["content"])
+        : "";
+  const tools = convertAnthropicToolsToOpenAI(input.tools);
+  const toolChoice = convertAnthropicToolChoice(input.tool_choice);
+  const convertedMessages = convertAnthropicMessagesToOpenAI(input.messages);
+  return {
+    model: input.model,
+    stream: input.stream,
+    temperature: input.temperature,
+    max_tokens: input.max_tokens,
+    tools: tools as OpenAIChatCompletionRequest["tools"],
+    tool_choice: toolChoice as OpenAIChatCompletionRequest["tool_choice"],
+    messages: [
+      ...(systemText ? [{ role: "system" as const, content: systemText }] : []),
+      ...convertedMessages,
+    ],
+  };
+}
+
+export function parseOpenAiJson(raw: string): CompatCompletion {
+  let text = "";
+  let thinkingText = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let responseId: string | undefined;
+  const toolCallsMap = new Map<string, OpenAIToolCall>();
+  let toolCallIndex = 0;
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof parsed.id === "string") responseId = parsed.id;
+    if (isRecord(parsed.usage)) {
+      if (typeof parsed.usage.prompt_tokens === "number") inputTokens = parsed.usage.prompt_tokens;
+      if (typeof parsed.usage.completion_tokens === "number") outputTokens = parsed.usage.completion_tokens;
+    }
+    if (Array.isArray(parsed.choices) && parsed.choices.length > 0) {
+      const choice = parsed.choices[0];
+      if (isRecord(choice) && isRecord(choice.message)) {
+        const msg = choice.message;
+        if (typeof msg.content === "string") {
+          text = msg.content;
+        }
+        if (typeof msg.reasoning_content === "string") {
+          thinkingText = msg.reasoning_content;
+        }
+        if (Array.isArray(msg.tool_calls)) {
+          for (const tc of msg.tool_calls) {
+            if (!isRecord(tc) || !isRecord(tc.function)) continue;
+            const name = typeof tc.function.name === "string" ? tc.function.name : "unknown";
+            const args = typeof tc.function.arguments === "string"
+              ? tc.function.arguments
+              : JSON.stringify(tc.function.arguments ?? {});
+            const callId = typeof tc.id === "string" ? tc.id : `call_${Date.now().toString(36)}_${toolCallIndex++}`;
+            toolCallsMap.set(name + callId, {
+              id: callId,
+              type: "function",
+              function: { name, arguments: args },
+            });
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore invalid JSON
+  }
+
+  return {
+    text,
+    thinkingText,
+    inputTokens,
+    outputTokens,
+    responseId,
+    toolCalls: Array.from(toolCallsMap.values()),
+  };
+}
 
 export function parseAntigravitySse(raw: string): CompatCompletion {
   let text = "";
@@ -421,7 +507,7 @@ async function streamCompatSse(
   context?: RotationAttemptContext,
   rotator?: AccountRotator,
   compressionStats?: CompressionStats | null,
-  upstream: "google" | "ollama" = "google",
+  upstream: "google" | "ollama" | "opencode-zen" = "google",
 ): Promise<CompatCompletion> {
   const nodeStream = Readable.fromWeb(
     body as import("node:stream/web").ReadableStream,
@@ -553,6 +639,131 @@ async function streamCompatSse(
       // Ignore malformed NDJSON lines
     }
   };
+  const emitOpenAiSseLine = (line: string): void => {
+    if (!line.startsWith("data:")) return;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === "[DONE]") return;
+    try {
+      const parsed = JSON.parse(payload) as Record<string, unknown>;
+      if (!isRecord(parsed)) return;
+
+      if (isRecord(parsed.usage)) {
+        if (typeof parsed.usage.prompt_tokens === "number") inputTokens = parsed.usage.prompt_tokens;
+        if (typeof parsed.usage.completion_tokens === "number") outputTokens = parsed.usage.completion_tokens;
+      }
+
+      if (!Array.isArray(parsed.choices) || parsed.choices.length === 0) return;
+      const choice = parsed.choices[0];
+      if (!isRecord(choice)) return;
+
+      const delta = isRecord(choice.delta) ? choice.delta : {};
+      const reasoningText = typeof delta.reasoning_content === "string" ? delta.reasoning_content : "";
+      const deltaText = typeof delta.content === "string" ? delta.content : "";
+
+      if (reasoningText) {
+        if (format === "openai") {
+          res.write(
+            `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { reasoning_content: reasoningText }, finish_reason: null }] })}\n\n`,
+          );
+        } else {
+          if (anthropicActiveBlockType !== "thinking") {
+            if (anthropicActiveBlockType === "text") {
+              res.write(
+                `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`,
+              );
+            }
+            anthropicActiveBlockIndex = 0;
+            anthropicActiveBlockType = "thinking";
+            res.write(
+              `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: anthropicActiveBlockIndex, content_block: { type: "thinking", thinking: "" } })}\n\n`,
+            );
+          }
+          res.write(
+            `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: anthropicActiveBlockIndex, delta: { type: "thinking_delta", thinking: reasoningText } })}\n\n`,
+          );
+        }
+      }
+
+      if (deltaText) {
+        text += deltaText;
+        if (format === "openai") {
+          res.write(
+            `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content: deltaText }, finish_reason: null }] })}\n\n`,
+          );
+        } else {
+          if (anthropicActiveBlockType !== "text") {
+            if (anthropicActiveBlockType === "thinking") {
+              res.write(
+                `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`,
+              );
+              anthropicActiveBlockIndex = 1;
+            } else {
+              anthropicActiveBlockIndex = 0;
+            }
+            anthropicActiveBlockType = "text";
+            res.write(
+              `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: anthropicActiveBlockIndex, content_block: { type: "text", text: "" } })}\n\n`,
+            );
+          }
+          res.write(
+            `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: anthropicActiveBlockIndex, delta: { type: "text_delta", text: deltaText } })}\n\n`,
+          );
+        }
+      }
+
+      if (Array.isArray(delta.tool_calls)) {
+        for (const tc of delta.tool_calls) {
+          if (!isRecord(tc) || !isRecord(tc.function)) continue;
+          const name = typeof tc.function.name === "string" ? tc.function.name : "unknown";
+          const args = typeof tc.function.arguments === "string"
+            ? tc.function.arguments
+            : JSON.stringify(tc.function.arguments ?? {});
+          const callId = typeof tc.id === "string" ? tc.id : `call_${Date.now().toString(36)}_${toolCallIndex++}`;
+          if (format === "openai") {
+            openaiToolCalls.push({
+              id: callId,
+              type: "function",
+              function: { name, arguments: args },
+            });
+            res.write(
+              `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { tool_calls: [{ index: toolCallIndex - 1, id: callId, type: "function", function: { name, arguments: args } }] }, finish_reason: null }] })}\n\n`,
+            );
+          } else {
+            if (anthropicActiveBlockType !== null) {
+              res.write(
+                `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`,
+              );
+              anthropicActiveBlockType = null;
+            }
+            anthropicActiveBlockIndex++;
+            anthropicHasToolUse = true;
+            anthropicToolCalls.push({
+              id: callId,
+              type: "function",
+              function: { name, arguments: args },
+            });
+            let parsedInput: unknown;
+            try {
+              parsedInput = JSON.parse(args);
+            } catch {
+              parsedInput = {};
+            }
+            res.write(
+              `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: anthropicActiveBlockIndex, content_block: { type: "tool_use", id: callId, name, input: {} } })}\n\n`,
+            );
+            res.write(
+              `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: anthropicActiveBlockIndex, delta: { type: "input_json_delta", partial_json: JSON.stringify(parsedInput) } })}\n\n`,
+            );
+            res.write(
+              `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`,
+            );
+          }
+        }
+      }
+    } catch {
+      // Ignore malformed SSE lines
+    }
+  };
   const closeUpstreamForClient = (): void => {
     reqClosed = true;
     if (!nodeStream.destroyed) nodeStream.destroy();
@@ -579,6 +790,10 @@ async function streamCompatSse(
 
         if (upstream === "ollama") {
           if (line) emitOllamaLine(line);
+          continue;
+        }
+        if (upstream === "opencode-zen") {
+          if (line) emitOpenAiSseLine(line);
           continue;
         }
         if (!line.startsWith("data:")) continue;
@@ -1470,9 +1685,11 @@ async function completeViaRotator(
       async (response, context) => {
         if (streamMode === "none") {
           const raw = await response.text();
-          const completion = isOllamaUpstream(body.model)
-            ? parseOllamaNdjson(raw)
-            : parseAntigravitySse(raw);
+          const completion = isOpenCodeZenModel(body.model)
+            ? parseOpenAiJson(raw)
+            : isOllamaUpstream(body.model)
+              ? parseOllamaNdjson(raw)
+              : parseAntigravitySse(raw);
           if (completion.inputTokens > 0 || completion.outputTokens > 0) {
             rotator.recordTokenUsage(
               body.displayModel || body.model,
@@ -1500,7 +1717,11 @@ async function completeViaRotator(
             context,
             rotator,
             options?.compressionStats,
-            isOllamaUpstream(body.model) ? "ollama" : "google",
+            isOpenCodeZenModel(body.model)
+              ? "opencode-zen"
+              : isOllamaUpstream(body.model)
+                ? "ollama"
+                : "google",
           );
           if (completion.inputTokens > 0 || completion.outputTokens > 0) {
             rotator.recordTokenUsage(
@@ -1952,11 +2173,14 @@ export async function handleOpenAIChatCompletions(
 
   const started = Date.now();
   const streamMode = validation.value.stream ? "openai" : "none";
+  const bodyToForward: RequestBody = isOpenCodeZenModel(chatReq.model)
+    ? { project: "", model: chatReq.model, request: chatReq }
+    : (rotator?.getOllamaModels?.().includes(chatReq.model) ? openAIToOllamaBody(chatReq) : openAIToAntigravityBody(chatReq));
   const result = await completeViaRotator(
     req,
     res,
     rotator,
-    (rotator?.getOllamaModels?.().includes(chatReq.model) ? openAIToOllamaBody(chatReq) : openAIToAntigravityBody(chatReq)),
+    bodyToForward,
     streamMode,
     {
       callType: "chat_completion",
@@ -2100,7 +2324,9 @@ export async function handleOpenAIResponsesCreate(
     ? { ...converted.chatRequest, messages: compRes.messages }
     : converted.chatRequest;
 
-  const requestBody = (rotator?.getOllamaModels?.().includes(chatRequest.model) ? openAIToOllamaBody(chatRequest) : openAIToAntigravityBody(chatRequest));
+  const requestBody: RequestBody = isOpenCodeZenModel(chatRequest.model)
+    ? { project: "", model: chatRequest.model, request: chatRequest }
+    : (rotator?.getOllamaModels?.().includes(chatRequest.model) ? openAIToOllamaBody(chatRequest) : openAIToAntigravityBody(chatRequest));
   requestBody.requestId = responseId;
 
   if (validation.value.store !== false) {
@@ -2352,11 +2578,14 @@ export async function handleAnthropicMessages(
 
   const started = Date.now();
   const streamMode = validation.value.stream ? "anthropic" : "none";
+  const bodyToForward: RequestBody = isOpenCodeZenModel(anthropicReq.model)
+    ? { project: "", model: anthropicReq.model, request: anthropicToOpenAIChatRequest(anthropicReq) }
+    : (rotator?.getOllamaModels?.().includes(anthropicReq.model) ? anthropicToOllamaBody(anthropicReq) : anthropicToAntigravityBody(anthropicReq));
   const result = await completeViaRotator(
     req,
     res,
     rotator,
-    (rotator?.getOllamaModels?.().includes(anthropicReq.model) ? anthropicToOllamaBody(anthropicReq) : anthropicToAntigravityBody(anthropicReq)),
+    bodyToForward,
     streamMode,
     {
       callType: "anthropic",

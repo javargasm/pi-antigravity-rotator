@@ -66,6 +66,8 @@ import {
 } from "./providers/openai-codex/catalog.js";
 import { CodexOAuthError } from "./providers/openai-codex/oauth.js";
 import { CODEX_QUOTA_MODEL_KEY } from "./providers/openai-codex/quota.js";
+import { isOpenCodeZenModel } from "./providers/opencode-zen/catalog.js";
+import { OPENCODE_ZEN_PROVIDER_ID } from "./providers/opencode-zen/credentials.js";
 import { getUpdateInfo } from "./version-check.js";
 import { getNotifications } from "./notification-poller.js";
 import { getConfiguredAdminToken } from "./admin-auth.js";
@@ -2756,6 +2758,10 @@ export class AccountRotator {
       await this.ensureValidTokenForProvider(account, "ollama");
       return;
     }
+    if (modelKey === OPENCODE_ZEN_PROVIDER_ID || (modelKey && isOpenCodeZenModel(modelKey))) {
+      await this.ensureValidTokenForProvider(account, OPENCODE_ZEN_PROVIDER_ID);
+      return;
+    }
     await this.ensureValidToken(account);
   }
 
@@ -2803,6 +2809,10 @@ export class AccountRotator {
     if (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)) {
       if (account.invalidProviders?.["openai-codex"]) return false;
       if ((account.providerCooldowns?.["openai-codex"] ?? 0) > now) return false;
+    }
+    if (modelKey === OPENCODE_ZEN_PROVIDER_ID || isOpenCodeZenModel(modelKey)) {
+      if (account.invalidProviders?.[OPENCODE_ZEN_PROVIDER_ID]) return false;
+      if ((account.providerCooldowns?.[OPENCODE_ZEN_PROVIDER_ID] ?? 0) > now) return false;
     }
     const modelCooldown = account.cooldownsByModel[modelKey] ?? 0;
     if (modelCooldown > now) return false;
@@ -2887,6 +2897,11 @@ export class AccountRotator {
     if (modelKey === "session") {
       return hasCredential(account.config, "ollama");
     }
+    if (modelKey === OPENCODE_ZEN_PROVIDER_ID || isOpenCodeZenModel(modelKey)) {
+      return hasCredential(account.config, OPENCODE_ZEN_PROVIDER_ID) &&
+        !account.invalidProviders?.[OPENCODE_ZEN_PROVIDER_ID] &&
+        (account.providerCooldowns?.[OPENCODE_ZEN_PROVIDER_ID] ?? 0) <= Date.now();
+    }
     // Google pools (claude/gemini) require a google credential. A dual
     // account (google + ollama) must stay eligible here — it can serve both.
     return hasCredential(account.config, DEFAULT_PROVIDER);
@@ -2898,6 +2913,7 @@ export class AccountRotator {
   }
 
   private resolvePoolKeyForModel(model: string): string | null {
+    if (isOpenCodeZenModel(model)) return OPENCODE_ZEN_PROVIDER_ID;
     if (this.codexModels.has(model) || isCodexRequestModel(model)) {
       return `${CODEX_QUOTA_MODEL_KEY}:${model}`;
     }

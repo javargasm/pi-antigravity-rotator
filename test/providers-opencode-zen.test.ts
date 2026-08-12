@@ -18,6 +18,7 @@ import {
   getBenchmarkSpec,
 } from "../src/providers/opencode-zen/forward.js";
 import { fetchOpenCodeZenQuota } from "../src/providers/opencode-zen/quota.js";
+import { parseOpenAiJson, anthropicToOpenAIChatRequest } from "../src/compat.js";
 import type { AccountRuntime } from "../src/types.js";
 import type { QuotaFetchContext } from "../src/providers/adapter.js";
 
@@ -167,5 +168,49 @@ describe("OpenCode Zen Provider Adapter", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("parses OpenAI JSON response correctly", () => {
+    const rawJson = JSON.stringify({
+      id: "chatcmpl-123",
+      object: "chat.completion",
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: "Hello from DeepSeek!",
+            reasoning_content: "Thinking step 1",
+          },
+        },
+      ],
+      usage: {
+        prompt_tokens: 15,
+        completion_tokens: 5,
+      },
+    });
+
+    const parsed = parseOpenAiJson(rawJson);
+    assert.equal(parsed.text, "Hello from DeepSeek!");
+    assert.equal(parsed.thinkingText, "Thinking step 1");
+    assert.equal(parsed.inputTokens, 15);
+    assert.equal(parsed.outputTokens, 5);
+    assert.equal(parsed.responseId, "chatcmpl-123");
+  });
+
+  it("converts Anthropic messages request to OpenAI chat request", () => {
+    const anthropicReq = {
+      model: "deepseek-v4-flash-free",
+      messages: [{ role: "user" as const, content: "Hi" }],
+      system: "You are helpful",
+      max_tokens: 100,
+    };
+
+    const converted = anthropicToOpenAIChatRequest(anthropicReq);
+    assert.equal(converted.model, "deepseek-v4-flash-free");
+    assert.equal(converted.messages.length, 2);
+    assert.equal(converted.messages[0].role, "system");
+    assert.equal(converted.messages[0].content, "You are helpful");
+    assert.equal(converted.messages[1].role, "user");
+    assert.equal(converted.messages[1].content, "Hi");
   });
 });
