@@ -1152,6 +1152,10 @@ var MODEL_PRICING_CLIENT = {
   "gemini-3.6-flash-low": { input: 1.5, output: 7.5 },
   "gemini-3.6-flash-tiered": { input: 1.5, output: 7.5 },
   "gpt-oss-120b-medium": { input: 2.0, output: 10.0 },
+  // OpenAI Codex GPT-5.6 models — mirrors MODEL_PRICING in types.ts.
+  "gpt-5.6-sol": { input: 5.0, output: 30.0 },
+  "gpt-5.6-terra": { input: 2.0, output: 12.0 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2 },
   // Ollama Cloud models — mirrors MODEL_PRICING in src/types.ts
   "gpt-oss:20b": { input: 0.075, output: 0.3 },
   "gpt-oss:120b": { input: 0.15, output: 0.6 },

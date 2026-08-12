@@ -69,6 +69,27 @@ describe("model resolution", () => {
 		assert.ok(MODEL_PRICING["claude-opus-4-6-thinking"]);
 		assert.ok(MODEL_PRICING["claude-sonnet-4-6"]);
 		assert.ok(MODEL_PRICING["gpt-oss-120b-medium"]);
+		assert.ok(MODEL_PRICING["gpt-5.6-sol"]);
+		assert.ok(MODEL_PRICING["gpt-5.6-terra"]);
+		assert.ok(MODEL_PRICING["gpt-5.6-luna"]);
+	});
+
+	it("uses official Codex GPT-5.6 text-token pricing", () => {
+		assert.deepEqual(MODEL_PRICING["gpt-5.6-sol"], {
+			inputPer1M: 5.0,
+			outputPer1M: 30.0,
+			cachingPer1M: 0.5,
+		});
+		assert.deepEqual(MODEL_PRICING["gpt-5.6-terra"], {
+			inputPer1M: 2.0,
+			outputPer1M: 12.0,
+			cachingPer1M: 0.2,
+		});
+		assert.deepEqual(MODEL_PRICING["gpt-5.6-luna"], {
+			inputPer1M: 0.2,
+			outputPer1M: 1.2,
+			cachingPer1M: 0.02,
+		});
 	});
 
 	it("has updated pricing for Gemini 3.5 Flash", () => {

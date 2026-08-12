@@ -176,6 +176,46 @@ describe("dashboard", () => {
     assert.equal(formatModelSavingsLabel({ totalUsd: 0 }), "");
   });
 
+  it("calculates savings for Codex GPT-5.6 models", () => {
+    const js = readDashboardJs();
+    const sandbox: Record<string, unknown> = {
+      window: { location: { search: "" } } as Record<string, unknown>,
+      URLSearchParams: globalThis.URLSearchParams,
+      EventSource: function () {},
+      fetch: () => Promise.resolve(),
+      setInterval: () => {},
+      clearInterval: () => {},
+      setTimeout: () => {},
+      clearTimeout: () => {},
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: {
+        getElementById: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener: () => {},
+      },
+    };
+    const script = new Script(js + "\nthis.calcSavingsFromBuckets = calcSavingsFromBuckets;");
+    script.runInNewContext(sandbox);
+
+    const calcSavingsFromBuckets = sandbox.calcSavingsFromBuckets as (
+      buckets: Array<Record<string, unknown>>,
+    ) => { byModel: Record<string, { totalUsd: number }> };
+    const savings = calcSavingsFromBuckets([
+      {
+        byModel: {
+          "gpt-5.6-sol": { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+          "gpt-5.6-terra": { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+          "gpt-5.6-luna": { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+        },
+      },
+    ]);
+
+    assert.equal(savings.byModel["gpt-5.6-sol"].totalUsd, 35);
+    assert.equal(savings.byModel["gpt-5.6-terra"].totalUsd, 14);
+    assert.equal(savings.byModel["gpt-5.6-luna"].totalUsd, 1.4);
+  });
+
   it("does not offer kickstart controls for Codex quota pools", () => {
     const js = readDashboardJs();
     const sandbox: Record<string, unknown> = {

@@ -745,6 +745,25 @@ export const MODEL_PRICING: Record<
   },
   "gpt-oss-120b-medium": { inputPer1M: 2.0, outputPer1M: 10.0 },
 
+  // OpenAI Codex GPT-5.6 models — official OpenAI API pricing checked
+  // 2026-08-11. Token usage currently records aggregate input/output tokens;
+  // cache rates are retained for spend metadata but are not applied separately.
+  "gpt-5.6-sol": {
+    inputPer1M: 5.0,
+    outputPer1M: 30.0,
+    cachingPer1M: 0.50,
+  },
+  "gpt-5.6-terra": {
+    inputPer1M: 2.0,
+    outputPer1M: 12.0,
+    cachingPer1M: 0.20,
+  },
+  "gpt-5.6-luna": {
+    inputPer1M: 0.20,
+    outputPer1M: 1.20,
+    cachingPer1M: 0.02,
+  },
+
   // Ollama Cloud model pricing (USD per 1M tokens). Sourced from the
   // ~/ollama-rotator project (verified 2026-08-09).
   "gpt-oss:20b":                 { inputPer1M: 0.075,  outputPer1M: 0.30 },

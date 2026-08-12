@@ -1,11 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  generateRequestId,
+	calculateCost,
+	generateRequestId,
   logSpend,
   getSpendLogs,
   getDailySpendSummary,
 } from "../src/spend-logger.js";
+
+test("calculateCost uses the official Codex GPT-5.6 rates", () => {
+	assert.equal(calculateCost("gpt-5.6-sol", 1_000_000, 1_000_000), 35);
+	assert.equal(calculateCost("gpt-5.6-terra", 1_000_000, 1_000_000), 14);
+	assert.equal(calculateCost("gpt-5.6-luna", 1_000_000, 1_000_000), 1.4);
+});
 
 test("generateRequestId produces unique prefixed strings", () => {
   const id1 = generateRequestId();
