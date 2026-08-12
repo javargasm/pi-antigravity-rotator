@@ -47,11 +47,11 @@ describe("openai-codex OAuth", () => {
   it("uses the current GPT-5.6 Codex catalog", () => {
     assert.deepEqual(
       CODEX_BASE_MODELS.map((model) => model.id),
-      ["gpt-5.6-terra", "gpt-5.6-luna"],
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
     );
     assert.equal(isCodexModel("gpt-5.6-luna"), true);
     assert.equal(isCodexModel("gpt-5-codex"), false);
-    assert.equal(isCodexModel("gpt-5.6-sol"), false);
+    assert.equal(isCodexModel("gpt-5.6-sol"), true);
     assert.equal(isCodexRequestModel("gpt-5.6-sol"), true);
   });
 
@@ -94,7 +94,7 @@ describe("openai-codex OAuth", () => {
     assert.equal(isCodexModel("claude-sonnet-4-6"), false);
     assert.equal(isCodexModel("gpt-oss-120b-medium"), false);
     assert.equal(isCodexModel("gpt-5.6-nova"), true);
-    assert.equal(isCodexModel("gpt-5.6-sol"), false);
+    assert.equal(isCodexModel("gpt-5.6-sol"), true);
   });
 
   it("does not route non-Codex models from a contaminated rotator catalog", () => {
@@ -106,7 +106,7 @@ describe("openai-codex OAuth", () => {
     assert.equal(isCodexModelForRotator(rotator, "gpt-oss-120b-medium"), false);
   });
 
-  it("routes known unsupported Codex models to Codex for the official error", () => {
+  it("routes paid-only Codex models to Codex", () => {
     const rotator = {
       getCodexModels: () => ["gpt-5.6-terra", "gpt-5.6-luna"],
     } as unknown as AccountRotator;

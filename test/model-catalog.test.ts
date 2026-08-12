@@ -37,6 +37,7 @@ describe("model discovery", () => {
 		) as { data: Array<{ id: string; owned_by: string }> };
 
 		assert.ok(payload.data.some((model) => model.owned_by === "openai-codex"));
+		assert.ok(payload.data.some((model) => model.id === "gpt-5.6-sol" && model.owned_by === "openai-codex"));
 		assert.ok(payload.data.some((model) => model.id === "gemma4:31b" && model.owned_by === "ollama"));
 	});
 

@@ -20,11 +20,8 @@ export interface CodexModel {
 // they influence routing.
 const CODEX_CONTEXT_WINDOW = 272_000;
 const CODEX_DISCOVERED_ID_PATTERN = /^gpt-5(?:\.\d+)?(?:-[a-z0-9]+)+$/i;
-// Known to belong to the Codex provider, but currently rejected by the
-// ChatGPT OAuth backend. Keep it out of the advertised catalog while routing
-// explicit requests to Codex so the client receives the provider's error.
-const CODEX_UNSUPPORTED_MODEL_IDS = new Set(["gpt-5.6-sol"]);
 export const CODEX_BASE_MODELS: readonly CodexModel[] = [
+  { id: "gpt-5.6-sol", contextWindow: CODEX_CONTEXT_WINDOW, reasoning: true, multimodal: true, tools: true, source: "allowlist" },
   { id: "gpt-5.6-terra", contextWindow: CODEX_CONTEXT_WINDOW, reasoning: true, multimodal: true, tools: true, source: "allowlist" },
   { id: "gpt-5.6-luna", contextWindow: CODEX_CONTEXT_WINDOW, reasoning: true, multimodal: true, tools: true, source: "allowlist" },
 ];
@@ -36,7 +33,7 @@ export function isCodexModel(model: string): boolean {
 }
 
 export function isCodexRequestModel(model: string): boolean {
-  return isCodexModel(model) || CODEX_UNSUPPORTED_MODEL_IDS.has(model.trim().toLowerCase());
+  return isCodexModel(model);
 }
 
 export function getCodexModel(model: string): CodexModel | undefined {
@@ -55,8 +52,7 @@ export function getCodexModels(): CodexModel[] {
 export function isCodexProviderModelId(value: unknown): value is string {
   return typeof value === "string" &&
     isSafeModelId(value) &&
-    CODEX_DISCOVERED_ID_PATTERN.test(value) &&
-    !CODEX_UNSUPPORTED_MODEL_IDS.has(value.toLowerCase());
+    CODEX_DISCOVERED_ID_PATTERN.test(value);
 }
 
 export function setDiscoveredCodexModels(models: CodexModel[]): void {

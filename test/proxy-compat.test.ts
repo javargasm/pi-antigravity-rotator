@@ -120,7 +120,7 @@ describe("proxy compat integration", () => {
 		assert.notEqual(provider.id, "openai-codex");
 	});
 
-	it("selects Codex for an explicitly requested unsupported Codex model", () => {
+	it("selects Codex for an explicitly requested paid-only Codex model", () => {
 		const provider = providerAdapterForModel(
 			createAccount(),
 			"gpt-5.6-sol",
