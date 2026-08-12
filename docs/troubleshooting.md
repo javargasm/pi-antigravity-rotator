@@ -53,6 +53,49 @@ Login now auto-provisions a Cloud Code companion project for new accounts via th
 2. Send one message to any model
 3. Re-run `tuxevil-rotator login`
 
+## Codex account disabled after `401` or `403`
+
+OpenAI Codex handles auth failures differently from Google: a `401` or `403`
+from `chatgpt.com/backend-api/codex` (or from the OAuth token endpoint) sets
+`reloginRequired: true` on the affected credential only — Antigravity and Ollama
+state are not touched. The same flag is set for OAuth errors with code
+`invalid_grant` or `refresh_token_reused` (the one-time refresh token was
+consumed by another client). The dashboard surfaces a `FLAGGED` badge for the
+Codex email and the rotator stops routing Codex requests through it until you
+re-authenticate:
+
+```bash
+tuxevil-rotator login --provider openai-codex
+```
+
+The CLI walks the same PKCE loopback flow as the initial setup. After the
+refresh token is rotated, the account is automatically re-enabled. See the
+[Codex integration guide](integrations/codex.md) for OAuth variables and the
+internal endpoint layout.
+
+## Codex quota bars not showing
+
+Codex quota polling goes through `${CODEX_USAGE_URL}` (default
+`https://chatgpt.com/backend-api/wham/usage`) with a 60 s cache and an 8 s
+timeout. Bars appear after the first successful poll cycle, which can take up
+to 5 minutes after startup. Common reasons they never appear:
+
+1. The account has no `openai-codex` credential (login with
+   `tuxevil-rotator login --provider openai-codex`).
+2. The access token refresh is failing (`401`/`403` from the OAuth endpoint) —
+   the credential is invalidated and quota polling stops. Re-authenticate as
+   above.
+3. The ChatGPT backend is unreachable from this host (corporate proxy, DNS
+   block, IPv6-only egress). Override `CODEX_USAGE_URL` to a self-hosted
+   receiver that proxies the same JSON, or open the egress to
+   `chatgpt.com`.
+
+A Codex quota bar can show `0% remaining` even on a brand-new account when the
+plan does not include a Codex subscription; the rotator still routes the
+request because the upstream will return its own error. Free-tier accounts may
+also receive a `4xx` on `gpt-5.6-sol` specifically — that model is reserved for
+paid plans and the rotator passes the upstream response back unchanged.
+
 ## Docker container can't write to data directory
 
 On Linux, `docker-data` must be writable by UID 1000 (the `node` user inside the container):

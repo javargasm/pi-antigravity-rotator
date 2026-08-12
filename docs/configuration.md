@@ -74,9 +74,47 @@ Ollama Cloud models are exposed on the standard OpenAI/Anthropic-compatible rout
 - `GET /v1/models` lists the Ollama catalog (`owned_by: "ollama"`).
 - When the `ollama` provider is enabled, the native `POST /api/chat` endpoint routes to it.
 
+OpenAI Codex models are exposed on the same standard routes, but the pool is
+isolated and runs in its own credential ring:
+
+- `POST /v1/responses` is the primary native route: it sends a Responses
+  payload directly to `${CODEX_BASE_URL}/responses`, defaults `store` to `false`,
+  strips stateful fields (`previous_response_id`, `conversation`, `input_items`,
+  `prompt_cache_key`, `background`, `max_output_tokens`, `stream_options`), and
+  streams upstream Responses events back as SSE. `GET /v1/responses/<id>`,
+  `DELETE /v1/responses/<id>`, `POST /v1/responses/<id>/cancel`, and
+  `GET /v1/responses/<id>/input_items` are supported as well. Persisted
+  Responses survive rotator restarts via `<configDir>/responses.json` with
+  atomic writes and a 1.5 s debounce.
+- `POST /v1/chat/completions` uses an explicit Chat ↔ Responses conversion for
+  multimodal input, tools, reasoning, usage, and SSE chunks. Codex streaming
+  is the only path that emits a single SSE delta per upstream event.
+- `GET /v1/models` lists the Codex catalog (`owned_by: "openai-codex"`). The
+  safe base catalog contains `gpt-5.6-terra` and `gpt-5.6-luna`; `gpt-5.6-sol`
+  is also recognised but is reserved for paid Codex plans and may return an
+  upstream `4xx` on free-tier accounts. Authenticated discovery can add more
+  IDs that match the Codex pattern, but no cross-provider models exposed by
+  the same endpoint are pulled in.
+
+Optional Codex environment variables (defaults from
+[`docs/integrations/codex.md`](integrations/codex.md)):
+
+| Variable | Default |
+|---|---|
+| `CODEX_OAUTH_CLIENT_ID` | Codex CLI public client id |
+| `CODEX_OAUTH_AUTHORIZE_URL` | `https://auth.openai.com/oauth/authorize` |
+| `CODEX_OAUTH_TOKEN_URL` | `https://auth.openai.com/oauth/token` |
+| `CODEX_OAUTH_REDIRECT_URI` | `http://localhost:1455/auth/callback` |
+| `CODEX_OAUTH_CALLBACK_HOST` | `127.0.0.1` |
+| `CODEX_OAUTH_CALLBACK_PORT` | `1455` |
+| `CODEX_OAUTH_SCOPE` | `openid profile email offline_access` |
+| `CODEX_BASE_URL` | `https://chatgpt.com/backend-api/codex` |
+| `CODEX_USAGE_URL` | `https://chatgpt.com/backend-api/wham/usage` |
+
 Model names are matched per provider: Codex models are sent only to Codex
 credentials, Ollama models only to Ollama credentials, and Google models only to
-Google credentials. There is no automatic cross-provider fallback.
+Google credentials. There is no automatic cross-provider fallback — a Codex
+request never lands on an Antigravity or Ollama account and vice versa.
 
 ## accounts.json
 

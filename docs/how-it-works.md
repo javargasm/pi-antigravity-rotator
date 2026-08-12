@@ -23,18 +23,31 @@ graph LR
     A[Your Agent] -->|OpenAI / Anthropic API| B[tuxevil-rotator]
     B -->|Smart Routing| C[Google Account 1]
     B -->|Smart Routing| D[Google Account 2]
-    B -->|Smart Routing| E[Google Account N]
-    C --> F[Google Antigravity]
-    D --> F
-    E --> F
+    B -->|Smart Routing| E[Ollama Cloud Account 1]
+    B -->|Smart Routing| F[Ollama Cloud Account 2]
+    B -->|Smart Routing| G[Codex Account 1]
+    B -->|Smart Routing| H[Codex Account 2]
+    C --> I[Google Antigravity]
+    D --> I
+    E --> J[Ollama Cloud]
+    F --> J
+    G --> K[OpenAI Codex]
+    H --> K
 
     subgraph Routing Engine
-        G[Quota Monitor] --> B
-        H[Health Scorer] --> B
-        I[Token Bucket] --> B
-        J[Circuit Breaker] --> B
+        L[Quota Monitor] --> B
+        M[Health Scorer] --> B
+        N[Token Bucket] --> B
+        O[Circuit Breaker] --> B
     end
 ```
+
+Each request is dispatched to one of three isolated provider pools based on the
+destination model: Google Antigravity, Ollama Cloud, or the isolated OpenAI
+Codex OAuth pool. A single email can carry credentials for any combination of
+the three; the rotator picks the right credential at request time. There is no
+cross-provider fallback — a Codex model never lands on a Google or Ollama
+account and vice versa.
 
 ## Per-Model Account Selection
 
@@ -74,7 +87,7 @@ cannot serve. A preferred account is discarded when its model quota reaches
 zero; cooldowns, circuit breakers, concurrency limits, and transient provider
 errors preserve the preference so routing can return to that account after it
 recovers. Both policies use the same provider eligibility and quota pools for
-Google Antigravity and Ollama Cloud.
+Google Antigravity, Ollama Cloud, and the isolated OpenAI Codex pool.
 
 The `hybrid` score formula:
 
@@ -102,15 +115,43 @@ healthScore = max(0, min(1,
 
 The health score is used as a tiebreaker in all policies and as a weighted factor in `hybrid`. It is visible in the Routing Inspector modal on the dashboard.
 
+## Provider Scopes
+
+Each request is dispatched to exactly one provider pool based on the requested
+model. The pools never share credentials or cooldowns, and a Codex model is
+never served by an Antigravity or Ollama account (and vice versa):
+
+| Pool | Provider id | Models | Quota keys | Project breaker | Provider-local cooldown |
+|------|-------------|--------|------------|-----------------|-------------------------|
+| Google Antigravity | `google-antigravity` | Gemini, Claude, gpt-oss variants | `claude`, `gemini` | Yes (`projectId` + model) | Yes (per-account) |
+| Ollama Cloud | `ollama` | Ollama Cloud catalog from `/api/tags` | `session`, `weekly` | No (Ollama has no project concept) | Yes (per-account) |
+| OpenAI Codex | `openai-codex` | `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol` (paid plans only) | `openai-codex`, `openai-codex-spark` (when present) | **Disabled** — Codex has no `projectId` | Yes (per-account, 30 s–5 min from `Retry-After`) |
+
+Codex-specific behaviour worth remembering:
+
+- A Codex account has its own health score, cooldown, and request-count counter.
+  Failure on a Codex credential never affects Antigravity or Ollama state, and
+  vice versa.
+- The Codex adapter skips the project circuit breaker
+  (`features.circuitBreakers: false`); the model circuit breaker and request-count
+  rotation still apply.
+- Quota polling hits `${CODEX_USAGE_URL}` (default
+  `https://chatgpt.com/backend-api/wham/usage`) every `quotaPollIntervalMs`, with
+  a 60 s cache, 250 ms throttle, and 8 s timeout.
+- `401`/`403` set `reloginRequired: true` on the account so the operator is
+  prompted to re-authenticate with `tuxevil-rotator login --provider openai-codex`.
+- Persisted Responses (`POST /v1/responses`) survive restarts via
+  `<configDir>/responses.json`.
+
 ## Rotation Triggers
 
 Three mechanisms trigger rotation, scoped to the specific model:
 
-1. **Quota-based** (primary) — Polls the Google quota API every 5 minutes. When a model's remaining quota drops by `rotateOnQuotaDrop` percentage points (default: 20%), that model rotates to the next account. Other models stay on their current accounts.
+1. **Quota-based** (primary) — Polls each provider's quota API on its own cadence (Antigravity and Ollama every 5 minutes by default; Codex `${CODEX_USAGE_URL}` with a 60 s cache). When a model's remaining quota drops by `rotateOnQuotaDrop` percentage points (default: 20%), that model rotates to the next eligible account in the same provider pool. Other models stay on their current accounts. Codex has its own quota keys (`openai-codex` and `openai-codex-spark`); Ollama tracks `session` and `weekly`; Antigravity tracks `claude` and `gemini`.
 
 2. **Request-count** (fallback) — Before forwarding a request, the rotator checks how many requests the current account has already served for that specific model and rotates once it reaches `requestsPerRotation` (default: 5). Per-model counters are persisted so restarts do not reset the threshold. By default this fallback is only used when quota data for that model is still unknown; set `useRequestCountRotationWhenQuotaUnknownOnly` to `false` to keep request-count rotation active even when quota telemetry exists.
 
-3. **429 containment** (reactive) — On provider rate limit, the account is marked exhausted with a parsed retry cooldown and the current request stops. Repeated unique-account 429s trip project/model and model-wide circuit breakers so retries cannot burn through the pool.
+3. **429 containment** (reactive) — On provider rate limit, the account is marked exhausted with a parsed retry cooldown and the current request stops. Repeated unique-account 429s trip the Antigravity project/model and model-wide circuit breakers so retries cannot burn through that pool. Codex skips the project circuit breaker (it has no `projectId`) but still participates in the model-wide breaker; Ollama has no project breaker either. Provider-local cooldowns never spill across pools.
 
 ## Fresh Windows
 

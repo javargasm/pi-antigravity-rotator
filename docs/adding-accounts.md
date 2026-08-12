@@ -39,6 +39,38 @@ The command prompts for a label and pastes the API key. The account is stored wi
 `provider: "ollama"` and is immediately usable for any model in the Ollama cloud
 catalog. No OAuth, no project binding, no key refresh needed.
 
+## OpenAI Codex Accounts
+
+OpenAI Codex uses ChatGPT OAuth (PKCE S256 + loopback callback) and runs in an
+isolated provider pool — a Codex model never falls back to Google or Ollama
+credentials:
+
+```bash
+tuxevil-rotator login --provider openai-codex
+```
+
+The CLI prints a one-shot `auth.openai.com` URL. With the default loopback
+callback the CLI captures the redirect automatically; otherwise the operator
+pastes the full callback URL back into the prompt. The dashboard page at
+`/login-cli` exposes the same flow under the **OpenAI Codex** tab.
+
+Existing Codex CLI auth exports can be imported instead of running the browser
+flow:
+
+```bash
+tuxevil-rotator login --provider openai-codex --import ~/.codex/auth.json
+```
+
+The importer accepts the nested `{ "tokens": { ... } }` shape used by the Codex
+CLI, `pi-ai`, `Hermes`, and provider-wrapped exports; it requires a
+`refresh_token` and never writes access tokens to disk.
+
+Codex accounts do not need a `projectId` or `tier`. The credential is stored
+under `credentials: [{ provider: "openai-codex", refreshToken, providerAccountId
+}]` on the same email row as any Antigravity or Ollama credential. See
+[Codex integration](integrations/codex.md) for the OAuth variables, model
+catalog, quota behaviour, and the internal endpoints used by the provider.
+
 ## Migrating from the Legacy Ollama Rotator
 
 If you previously ran the standalone `ollama-rotator` (config dir
@@ -94,10 +126,16 @@ The dashboard (`/dashboard`) provides a full account management UI:
 
 | Field | Description |
 |-------|-------------|
-| `email` | Google account email (auto-filled by login) |
-| `refreshToken` | OAuth refresh token (auto-filled by login) |
-| `projectId` | Cloud project ID discovered during login |
-| `projectSource` | `google` (auto-discovered) or `manual` (hand-edited) |
+| `email` | Account email (auto-filled by login) |
+| `provider` | Legacy field: `google-antigravity` (default), `ollama`, or `openai-codex`. New accounts use `credentials[]` instead. |
+| `refreshToken` | Legacy Google OAuth refresh token (auto-filled by `login`, Google accounts only) |
+| `projectId` | Google Cloud project ID discovered during login (Google accounts only) |
+| `projectSource` | Optional metadata: `google` when discovered from Google, `manual` if edited by hand |
+| `apiKey` | Legacy Ollama Cloud API key (Ollama accounts only; never expires, see `ollama.com/settings/keys`) |
+| `codexRefreshToken` / `codexAccountId` | Legacy Codex fields; prefer `credentials[]` (see below) |
+| `credentials[].provider` | `google-antigravity`, `ollama`, or `openai-codex`. Selects the credential fields required and upstream routing. |
+| `credentials[].refreshToken` | OAuth refresh token for the credential's provider (Antigravity, Codex) |
+| `credentials[].providerAccountId` | ChatGPT account id from the Codex OAuth identity claim (Codex only) |
 | `credentials[].proxyUrl` | Optional provider-scoped egress proxy: `http://`, `https://`, `socks5://`, or `socks5h://`. Credentials may be embedded in the URL. |
 | `label` | Display name on the dashboard (defaults to email username) |
 | `tier` | Optional: `ultra`, `pro`, `plus`, `free`, or `unknown` |
@@ -119,6 +157,12 @@ credential so network identities stay separate:
       "provider": "ollama",
       "apiKey": "ollama-key",
       "proxyUrl": "http://127.0.0.1:8080"
+    },
+    {
+      "provider": "openai-codex",
+      "refreshToken": "codex-rt-...",
+      "providerAccountId": "acct-codex",
+      "proxyUrl": "http://127.0.0.1:8081"
     }
   ]
 }

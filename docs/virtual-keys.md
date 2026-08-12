@@ -38,6 +38,12 @@ tuxevil-rotator keys generate \
   --user-id "alice" \
   --models "gemini-3.6-flash-high,claude-sonnet-4-6"
 
+# Restrict a key to one Codex model and one Ollama model
+tuxevil-rotator keys generate \
+  --alias "codex-only" \
+  --user-id "bob" \
+  --models "gpt-5.6-luna,minimax-m3"
+
 # Delete a key by its hash
 tuxevil-rotator keys delete <hash>
 ```
@@ -91,8 +97,16 @@ CI Pipeline  →  rk-ghi789  (Flash low only)
               ↓
         tuxevil-rotator
               ↓
-        Google Accounts (pooled)
+         Google Accounts (pooled)
 ```
+
+A key's `--models` list filters across all provider pools by exact model name
+or by comma-separated entries — Antigravity (`gemini-3.6-flash-high`,
+`claude-opus-4-6-thinking`, `gpt-oss-120b-medium`), Ollama Cloud
+(`gpt-oss:20b`, `gemma4:31b`, `minimax-m3`, `kimi-k3`), and the OpenAI Codex
+pool (`gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`) all use the same
+mechanism. Requests for models outside the list return `403 model_not_allowed`
+without consuming a Codex, Ollama, or Antigravity account.
 
 ## Spend Logging
 
