@@ -191,42 +191,74 @@ export function parseOpenAiJson(raw: string): CompatCompletion {
   const toolCallsMap = new Map<string, OpenAIToolCall>();
   let toolCallIndex = 0;
 
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (typeof parsed.id === "string") responseId = parsed.id;
-    if (isRecord(parsed.usage)) {
-      if (typeof parsed.usage.prompt_tokens === "number") inputTokens = parsed.usage.prompt_tokens;
-      if (typeof parsed.usage.completion_tokens === "number") outputTokens = parsed.usage.completion_tokens;
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("data:") || trimmed.includes("\ndata:")) {
+    const lines = trimmed.split("\n");
+    for (const line of lines) {
+      const lineTrimmed = line.trim();
+      if (!lineTrimmed.startsWith("data:")) continue;
+      const payload = lineTrimmed.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const parsed = JSON.parse(payload) as Record<string, unknown>;
+        if (isRecord(parsed.usage)) {
+          if (typeof parsed.usage.prompt_tokens === "number") inputTokens = parsed.usage.prompt_tokens;
+          if (typeof parsed.usage.completion_tokens === "number") outputTokens = parsed.usage.completion_tokens;
+        }
+        if (Array.isArray(parsed.choices) && parsed.choices.length > 0) {
+          const choice = parsed.choices[0];
+          if (isRecord(choice)) {
+            const delta = isRecord(choice.delta) ? choice.delta : isRecord(choice.message) ? choice.message : {};
+            if (typeof delta.reasoning_content === "string") {
+              thinkingText += delta.reasoning_content;
+            }
+            if (typeof delta.content === "string") {
+              text += delta.content;
+            }
+          }
+        }
+      } catch {
+        // Ignore bad SSE line
+      }
     }
-    if (Array.isArray(parsed.choices) && parsed.choices.length > 0) {
-      const choice = parsed.choices[0];
-      if (isRecord(choice) && isRecord(choice.message)) {
-        const msg = choice.message;
-        if (typeof msg.content === "string") {
-          text = msg.content;
-        }
-        if (typeof msg.reasoning_content === "string") {
-          thinkingText = msg.reasoning_content;
-        }
-        if (Array.isArray(msg.tool_calls)) {
-          for (const tc of msg.tool_calls) {
-            if (!isRecord(tc) || !isRecord(tc.function)) continue;
-            const name = typeof tc.function.name === "string" ? tc.function.name : "unknown";
-            const args = typeof tc.function.arguments === "string"
-              ? tc.function.arguments
-              : JSON.stringify(tc.function.arguments ?? {});
-            const callId = typeof tc.id === "string" ? tc.id : `call_${Date.now().toString(36)}_${toolCallIndex++}`;
-            toolCallsMap.set(name + callId, {
-              id: callId,
-              type: "function",
-              function: { name, arguments: args },
-            });
+  } else {
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof parsed.id === "string") responseId = parsed.id;
+      if (isRecord(parsed.usage)) {
+        if (typeof parsed.usage.prompt_tokens === "number") inputTokens = parsed.usage.prompt_tokens;
+        if (typeof parsed.usage.completion_tokens === "number") outputTokens = parsed.usage.completion_tokens;
+      }
+      if (Array.isArray(parsed.choices) && parsed.choices.length > 0) {
+        const choice = parsed.choices[0];
+        if (isRecord(choice) && isRecord(choice.message)) {
+          const msg = choice.message;
+          if (typeof msg.content === "string") {
+            text = msg.content;
+          }
+          if (typeof msg.reasoning_content === "string") {
+            thinkingText = msg.reasoning_content;
+          }
+          if (Array.isArray(msg.tool_calls)) {
+            for (const tc of msg.tool_calls) {
+              if (!isRecord(tc) || !isRecord(tc.function)) continue;
+              const name = typeof tc.function.name === "string" ? tc.function.name : "unknown";
+              const args = typeof tc.function.arguments === "string"
+                ? tc.function.arguments
+                : JSON.stringify(tc.function.arguments ?? {});
+              const callId = typeof tc.id === "string" ? tc.id : `call_${Date.now().toString(36)}_${toolCallIndex++}`;
+              toolCallsMap.set(name + callId, {
+                id: callId,
+                type: "function",
+                function: { name, arguments: args },
+              });
+            }
           }
         }
       }
+    } catch {
+      // Ignore invalid JSON
     }
-  } catch {
-    // Ignore invalid JSON
   }
 
   return {

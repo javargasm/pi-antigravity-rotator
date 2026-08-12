@@ -197,6 +197,19 @@ describe("OpenCode Zen Provider Adapter", () => {
     assert.equal(parsed.responseId, "chatcmpl-123");
   });
 
+  it("parses SSE fallback in parseOpenAiJson if raw response contains SSE lines", () => {
+    const rawSse =
+      'data: {"choices":[{"delta":{"reasoning_content":"Thinking..."}}]}\n\n' +
+      'data: {"choices":[{"delta":{"content":"Hello world!"}}],"usage":{"prompt_tokens":10,"completion_tokens":4}}\n\n' +
+      'data: [DONE]\n\n';
+
+    const parsed = parseOpenAiJson(rawSse);
+    assert.equal(parsed.text, "Hello world!");
+    assert.equal(parsed.thinkingText, "Thinking...");
+    assert.equal(parsed.inputTokens, 10);
+    assert.equal(parsed.outputTokens, 4);
+  });
+
   it("converts Anthropic messages request to OpenAI chat request", () => {
     const anthropicReq = {
       model: "deepseek-v4-flash-free",

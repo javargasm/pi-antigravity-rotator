@@ -34,6 +34,7 @@ export function buildOpenCodeZenPayload(body: RequestBody): Record<string, unkno
   return {
     ...request,
     model: body.model,
+    stream: Boolean(request.stream),
   };
 }
 
@@ -57,7 +58,7 @@ export async function forwardRequest(
   forwardHeaders["Authorization"] = `Bearer ${apiKey}`;
   forwardHeaders["Content-Type"] = "application/json";
   if (!forwardHeaders["Accept"] && !forwardHeaders["accept"]) {
-    forwardHeaders["Accept"] = payload.stream === false ? "application/json" : "text/event-stream";
+    forwardHeaders["Accept"] = payload.stream === true ? "text/event-stream" : "application/json";
   }
 
   const endpoint = OPENCODE_ZEN_CHAT_URL;
