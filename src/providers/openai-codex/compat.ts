@@ -45,6 +45,25 @@ function instructionText(value: unknown): string {
     .trim();
 }
 
+/** Convert Chat Completions function tools to the Responses tool shape. */
+function chatToolToResponsesTool(value: unknown): unknown {
+  if (!isRecord(value) || value.type !== "function" || !isRecord(value.function)) return value;
+  const fn = value.function;
+  const tool: Record<string, unknown> = {
+    type: "function",
+    name: fn.name,
+  };
+  for (const field of ["description", "parameters", "strict"]) {
+    if (fn[field] !== undefined) tool[field] = fn[field];
+  }
+  return tool;
+}
+
+function chatToolChoiceToResponsesChoice(value: unknown): unknown {
+  if (!isRecord(value) || value.type !== "function" || !isRecord(value.function)) return value;
+  return { type: "function", name: value.function.name };
+}
+
 /** Convert OpenAI Chat Completions messages into native Responses input items. */
 export function chatToCodexResponsesRequest(request: OpenAIChatCompletionRequest): Record<string, unknown> {
   const input: unknown[] = [];
@@ -82,8 +101,12 @@ export function chatToCodexResponsesRequest(request: OpenAIChatCompletionRequest
     stream: true,
     store: false,
   };
-  if (Array.isArray(request.tools) && request.tools.length > 0) result.tools = request.tools;
-  if (request.tool_choice !== undefined) result.tool_choice = request.tool_choice;
+  if (Array.isArray(request.tools) && request.tools.length > 0) {
+    result.tools = request.tools.map(chatToolToResponsesTool);
+  }
+  if (request.tool_choice !== undefined) {
+    result.tool_choice = chatToolChoiceToResponsesChoice(request.tool_choice);
+  }
   // The ChatGPT Codex OAuth endpoint rejects Responses' max_output_tokens
   // field, so keep the request compatible with its native contract. The
   // public Chat Completions limit cannot be represented on this endpoint.

@@ -255,11 +255,14 @@ describe("openai-codex import and payload", () => {
         { role: "tool", tool_call_id: "call_1", content: "result" },
       ],
       tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }],
+      tool_choice: { type: "function", function: { name: "lookup" } },
       stream: false,
     } as never);
   assert.equal(converted.instructions, "You are a helpful assistant.");
   assert.equal(converted.stream, true);
-  assert.equal("max_output_tokens" in converted, false);
+    assert.equal("max_output_tokens" in converted, false);
+    assert.deepEqual(converted.tools, [{ type: "function", name: "lookup", parameters: { type: "object" } }]);
+    assert.deepEqual(converted.tool_choice, { type: "function", name: "lookup" });
     assert.equal(converted.store, false);
     assert.deepEqual(converted.input, [
       { role: "user", content: [{ type: "input_text", text: "Call the tool" }] },
