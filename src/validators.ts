@@ -66,7 +66,7 @@ export function validateAccountConfig(value: unknown, path = "account"): Validat
 			if (!isNonEmptyString(cred.provider)) errors.push(`${cpath}.provider must be a non-empty string`);
 			const proxyError = getProxyConfigurationError(cred.proxyUrl);
 			if (proxyError) errors.push(`${cpath}.${proxyError}`);
-			if (cred.provider === "ollama") {
+			if (cred.provider === "ollama" || cred.provider === "opencode-zen") {
 				if (!isNonEmptyString(cred.apiKey)) errors.push(`${cpath}.apiKey must be a non-empty string`);
 			} else if (cred.provider === "openai-codex") {
 				if (!isNonEmptyString(cred.refreshToken)) errors.push(`${cpath}.refreshToken must be a non-empty string`);
@@ -80,7 +80,7 @@ export function validateAccountConfig(value: unknown, path = "account"): Validat
 		}
 	} else {
 		const provider = typeof value.provider === "string" ? value.provider : "google-antigravity";
-		if (provider === "ollama") {
+		if (provider === "ollama" || provider === "opencode-zen") {
 			if (!isNonEmptyString(value.apiKey)) errors.push(`${path}.apiKey must be a non-empty string`);
 		} else if (provider === "openai-codex") {
 			if (!isNonEmptyString(value.codexRefreshToken ?? value.refreshToken)) {

@@ -19,6 +19,8 @@ import {
   isCodexRequestModel,
   isCodexProviderModelId,
 } from "./providers/openai-codex/catalog.js";
+import { isOpenCodeZenModel } from "./providers/opencode-zen/catalog.js";
+import { OPENCODE_ZEN_PROVIDER_ID } from "./providers/opencode-zen/index.js";
 import type { AccountRuntime } from "./types.js";
 import type { AccountRotator } from "./rotator.js";
 import { DEFAULT_PROVIDER, getProviderAdapter, getProviderForAccount } from "./providers/registry.js";
@@ -106,6 +108,9 @@ export function providerAdapterForModel(
   rotator?: { getOllamaModels?: () => string[]; getCodexModels?: () => string[] },
 ): ProviderAdapter {
   const creds = account.config.credentials ?? [];
+  if (model && isOpenCodeZenModel(model)) {
+    return getProviderAdapter(OPENCODE_ZEN_PROVIDER_ID);
+  }
   let isCodex = Boolean(model && isCodexRequestModel(model));
   try {
     if (
@@ -121,8 +126,10 @@ export function providerAdapterForModel(
     return getProviderAdapter("openai-codex");
   }
   if (creds.length > 0) {
+    const onlyZen = creds.every((c) => c.provider === OPENCODE_ZEN_PROVIDER_ID);
     const onlyOllama = creds.every((c) => c.provider === "ollama");
     const onlyGoogle = creds.every((c) => c.provider === DEFAULT_PROVIDER);
+    if (onlyZen) return getProviderAdapter(OPENCODE_ZEN_PROVIDER_ID);
     if (onlyOllama) return getProviderAdapter("ollama");
     if (onlyGoogle) return getProviderAdapter(DEFAULT_PROVIDER);
   }

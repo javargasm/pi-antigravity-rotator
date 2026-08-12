@@ -1,0 +1,171 @@
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { getProviderAdapter, isKnownProvider } from "../src/providers/registry.js";
+import { opencodeZenAdapter, OPENCODE_ZEN_PROVIDER_ID } from "../src/providers/opencode-zen/index.js";
+import {
+  OPENCODE_ZEN_FREE_MODELS,
+  OPENCODE_ZEN_MODELS_URL,
+  isOpenCodeZenModel,
+} from "../src/providers/opencode-zen/catalog.js";
+import {
+  getOpenCodeZenApiKey,
+  validateCredentials,
+  defaultAccountEmail,
+} from "../src/providers/opencode-zen/credentials.js";
+import {
+  buildOpenCodeZenPayload,
+  OpenCodeZenSseAccumulator,
+  getBenchmarkSpec,
+} from "../src/providers/opencode-zen/forward.js";
+import { fetchOpenCodeZenQuota } from "../src/providers/opencode-zen/quota.js";
+import type { AccountRuntime } from "../src/types.js";
+import type { QuotaFetchContext } from "../src/providers/adapter.js";
+
+describe("OpenCode Zen Provider Adapter", () => {
+  it("registers in the provider registry", () => {
+    assert.equal(isKnownProvider("opencode-zen"), true);
+    assert.equal(getProviderAdapter("opencode-zen"), opencodeZenAdapter);
+    assert.equal(opencodeZenAdapter.id, "opencode-zen");
+    assert.equal(opencodeZenAdapter.displayName, "OpenCode Zen");
+    assert.equal(opencodeZenAdapter.credentialKind, "api-key");
+  });
+
+  it("identifies OpenCode Zen free models correctly", () => {
+    assert.equal(OPENCODE_ZEN_FREE_MODELS.length, 7);
+    assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("deepseek-v4-flash-free"));
+    assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("nemotron-3.5-lightning-free"));
+    assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("nemotron-3-ultra-free"));
+    assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("mimo-v2.5-free"));
+    assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("hy3-free"));
+    assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("ling-3.0-tiny-free"));
+    assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("laguna-s-2.1-free"));
+
+    for (const model of OPENCODE_ZEN_FREE_MODELS) {
+      assert.equal(isOpenCodeZenModel(model), true);
+    }
+
+    assert.equal(isOpenCodeZenModel("custom-model-free"), true);
+    assert.equal(isOpenCodeZenModel("gpt-4o"), false);
+    assert.equal(isOpenCodeZenModel("gemini-3.5-flash"), false);
+  });
+
+  it("validates credentials correctly", async () => {
+    const validConfig = {
+      email: "zen-test@opencode.ai",
+      credentials: [{ provider: OPENCODE_ZEN_PROVIDER_ID, apiKey: "zen-secret-key" }],
+    };
+    const invalidConfig = {
+      email: "bad@opencode.ai",
+      credentials: [{ provider: OPENCODE_ZEN_PROVIDER_ID, apiKey: "" }],
+    };
+
+    assert.equal(getOpenCodeZenApiKey(validConfig), "zen-secret-key");
+    assert.equal((await validateCredentials(validConfig)).ok, true);
+    assert.equal((await validateCredentials(invalidConfig)).ok, false);
+  });
+
+  it("derives default account email", () => {
+    assert.equal(defaultAccountEmail("1234567890abcdef"), "zen-90abcdef@opencode.ai");
+  });
+
+  it("builds chat completion request payloads", () => {
+    const body = {
+      project: "",
+      model: "deepseek-v4-flash-free",
+      request: {
+        messages: [{ role: "user", content: "Hello" }],
+        stream: true,
+      },
+    };
+    const payload = buildOpenCodeZenPayload(body);
+    assert.equal(payload.model, "deepseek-v4-flash-free");
+    assert.deepEqual(payload.messages, [{ role: "user", content: "Hello" }]);
+    assert.equal(payload.stream, true);
+  });
+
+  it("accumulates SSE streaming text and token usage", () => {
+    const accumulator = new OpenCodeZenSseAccumulator();
+
+    const chunk1 = 'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n';
+    const chunk2 = 'data: {"choices":[{"delta":{"content":" World"}}],"usage":{"prompt_tokens":10,"completion_tokens":2}}\n\n';
+
+    const usage1 = accumulator.append(chunk1);
+    assert.equal(usage1, null);
+    assert.equal(accumulator.getText(), "Hello");
+
+    const usage2 = accumulator.append(chunk2);
+    assert.notEqual(usage2, null);
+    assert.equal(usage2?.inputTokens, 10);
+    assert.equal(usage2?.outputTokens, 2);
+    assert.equal(accumulator.getText(), "Hello World");
+
+    const finalUsage = accumulator.final();
+    assert.equal(finalUsage?.inputTokens, 10);
+    assert.equal(finalUsage?.outputTokens, 2);
+  });
+
+  it("provides a benchmark spec", () => {
+    const spec = getBenchmarkSpec();
+    assert.equal(spec.body.model, "deepseek-v4-flash-free");
+    const raw = JSON.stringify({
+      choices: [{ message: { content: "OK" } }],
+      usage: { prompt_tokens: 5, completion_tokens: 1 },
+    });
+    assert.equal(spec.parseText(raw), "OK");
+    assert.equal(spec.parseUsage(raw)?.outputTokens, 1);
+  });
+
+  it("fetches quota pool status", async () => {
+    const account: AccountRuntime = {
+      config: {
+        email: "test@opencode.ai",
+        credentials: [{ provider: OPENCODE_ZEN_PROVIDER_ID, apiKey: "valid-key" }],
+      },
+      accessToken: null,
+      tokenExpires: 0,
+      requestsSinceRotation: 0,
+      totalRequests: 0,
+      cooldownsByModel: {},
+      quotaExhaustedAt: 0,
+      quota: [],
+      lastQuotaPoll: 0,
+      lastUsed: 0,
+      lastError: null,
+      consecutiveErrors: 0,
+      disabled: false,
+      flagged: false,
+      inFlightRequests: 0,
+      inFlightByModel: {},
+      allowFreshWindowStartsOverride: false,
+      dailyRequestCount: 0,
+      dailyRequestDay: "2026-08-12",
+      healthScore: 100,
+      tokenBucket: { tokens: 10, lastRefillAt: Date.now() },
+    };
+
+    const ctx: QuotaFetchContext = {
+      log: () => {},
+      markFlagged: () => {},
+      reportQuotaPollFlag: () => {},
+    };
+
+    // Global fetch mock for testing
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      if (urlStr === OPENCODE_ZEN_MODELS_URL) {
+        return new Response(JSON.stringify({ object: "list", data: [] }), { status: 200 });
+      }
+      return new Response("Not found", { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      await fetchOpenCodeZenQuota(account, ctx);
+      assert.equal(account.quota.length, 1);
+      assert.equal(account.quota[0].providerId, OPENCODE_ZEN_PROVIDER_ID);
+      assert.equal(account.quota[0].percentRemaining, 100);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

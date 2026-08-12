@@ -67,6 +67,8 @@ import {
   anthropicToOllamaBody,
   parseOllamaNdjson,
 } from "./providers/ollama/translators.js";
+import { OPENCODE_ZEN_CATALOG } from "./providers/opencode-zen/catalog.js";
+import { OPENCODE_ZEN_PROVIDER_ID } from "./providers/opencode-zen/index.js";
 import type {
   ChatMessage,
   OpenAITool,
@@ -1741,6 +1743,25 @@ export function serveOpenAIModels(
         tool_calling: true,
       },
     });
+  }
+  if (hasActiveProvider(OPENCODE_ZEN_PROVIDER_ID)) {
+    for (const spec of OPENCODE_ZEN_CATALOG) {
+      catalog.push({
+        id: spec.id,
+        object: "model",
+        created: 0,
+        owned_by: OPENCODE_ZEN_PROVIDER_ID,
+        context_window: spec.contextWindow,
+        max_model_len: spec.contextWindow,
+        meta: {
+          context_length: spec.contextWindow,
+          family: "opencode-zen",
+          provider: OPENCODE_ZEN_PROVIDER_ID,
+          multimodal: false,
+          tool_calling: true,
+        },
+      });
+    }
   }
   writeJson(res, 200, { object: "list", data: catalog });
 }

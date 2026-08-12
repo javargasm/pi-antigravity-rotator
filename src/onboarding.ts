@@ -16,6 +16,13 @@ import {
   validateApiKey,
 } from "./providers/ollama/api-key-validation.js";
 import {
+  validateApiKey as validateZenApiKey,
+} from "./providers/opencode-zen/login.js";
+import {
+  defaultAccountEmail as zenDefaultAccountEmail,
+  OPENCODE_ZEN_PROVIDER_ID,
+} from "./providers/opencode-zen/credentials.js";
+import {
   codexOAuthErrorMessage,
   createCodexAuthorizationFlow,
   exchangeCodexAuthorizationCode,
@@ -597,6 +604,11 @@ export async function handleCliLoginApi(
     return;
   }
 
+  if (provider === "opencode-zen") {
+    await handleZenCliLogin(body, res, rotator);
+    return;
+  }
+
   if (provider !== "google-antigravity") {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: false, error: `Unknown provider "${provider}"` }));
@@ -871,6 +883,61 @@ async function handleOllamaCliLogin(
 
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok: true, email: entry.email, isNew }));
+}
+
+async function handleZenCliLogin(
+  body: { email?: string; apiKey?: string },
+  res: ServerResponse,
+  rotator: AccountSink,
+): Promise<void> {
+  const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+  const email = typeof body.email === "string" ? body.email.trim() : "";
+
+  if (!apiKey) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "Missing apiKey" }));
+    return;
+  }
+  if (apiKey.length > 4096) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "API key too long" }));
+    return;
+  }
+  if (email.length > MAX_ACCOUNT_EMAIL_LENGTH) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "Account identifier too long" }));
+    return;
+  }
+
+  const validation = await validateZenApiKey(apiKey);
+  if (!validation.ok) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ok: false,
+        error: `Key rejected (${validation.status}): ${validation.error}`,
+      }),
+    );
+    return;
+  }
+
+  const derivedEmail = email || zenDefaultAccountEmail(apiKey);
+  const entry: AccountConfig = {
+    email: derivedEmail,
+    credentials: [
+      {
+        provider: OPENCODE_ZEN_PROVIDER_ID,
+        apiKey,
+      },
+    ],
+    label: email || derivedEmail.split("@")[0],
+  };
+
+  const { isNew } = await addAccountToConfig(entry);
+  await rotator.addOrUpdateAccount(entry);
+
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, email: entry.email, isNew, provider: OPENCODE_ZEN_PROVIDER_ID }));
 }
 
 export async function handleHostedCallback(

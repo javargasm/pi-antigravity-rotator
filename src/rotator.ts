@@ -628,7 +628,7 @@ export class AccountRotator {
   private logConsolidatedPoll(account: AccountRuntime): void {
     const stash = account.lastPollByProvider;
     if (!stash) return;
-    const ordered = ["google-antigravity", "ollama", "openai-codex"]
+    const ordered = ["google-antigravity", "ollama", "openai-codex", "opencode-zen"]
       .filter((pid) => stash[pid])
       .map((pid) => `${pid}: ${stash[pid]}`);
     if (ordered.length > 0) {

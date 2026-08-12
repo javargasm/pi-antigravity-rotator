@@ -285,6 +285,18 @@ export const QUOTA_MODEL_KEYS: Record<
 // Map request model names to quota model keys (family buckets).
 export function resolveQuotaModelKey(requestModel: string): string | null {
   const lower = requestModel.toLowerCase();
+  if (
+    lower === "deepseek-v4-flash-free" ||
+    lower === "nemotron-3.5-lightning-free" ||
+    lower === "nemotron-3-ultra-free" ||
+    lower === "mimo-v2.5-free" ||
+    lower === "hy3-free" ||
+    lower === "ling-3.0-tiny-free" ||
+    lower === "laguna-s-2.1-free" ||
+    lower.endsWith("-free")
+  ) {
+    return "opencode-zen";
+  }
   // Claude family: every Claude variant and gpt-oss share one bucket.
   if (
     lower.includes("claude") ||
@@ -784,6 +796,15 @@ export const MODEL_PRICING: Record<
   "nemotron-3-nano:30b":         { inputPer1M: 0.50,   outputPer1M: 1.50 },
   "nemotron-3-super":            { inputPer1M: 0.60,   outputPer1M: 1.80 },
   "nemotron-3-ultra":            { inputPer1M: 0.60,   outputPer1M: 1.80 },
+
+  // OpenCode Zen free models (cost: 0 USD per 1M tokens)
+  "deepseek-v4-flash-free":      { inputPer1M: 0.0,    outputPer1M: 0.0 },
+  "nemotron-3.5-lightning-free": { inputPer1M: 0.0,    outputPer1M: 0.0 },
+  "nemotron-3-ultra-free":       { inputPer1M: 0.0,    outputPer1M: 0.0 },
+  "mimo-v2.5-free":              { inputPer1M: 0.0,    outputPer1M: 0.0 },
+  "hy3-free":                    { inputPer1M: 0.0,    outputPer1M: 0.0 },
+  "ling-3.0-tiny-free":          { inputPer1M: 0.0,    outputPer1M: 0.0 },
+  "laguna-s-2.1-free":           { inputPer1M: 0.0,    outputPer1M: 0.0 },
 };
 
 // Which Ollama Cloud models respond on which subscription tiers, verified
