@@ -482,7 +482,7 @@ describe("compat adapters", () => {
 		assert.equal(result.ok, true);
 	});
 
-	it("converts model role to model in Antigravity request body", () => {
+	it("converts model role and resumes with a user turn in Antigravity request body", () => {
 		const body = openAIToAntigravityBody({
 			model: "gemini-3-flash",
 			messages: [
@@ -490,8 +490,11 @@ describe("compat adapters", () => {
 				{ role: "model", content: "hi there" },
 			],
 		});
+		const contents = (body.request as { contents: Array<{ role: string }> }).contents;
+		assert.deepEqual(contents.map((content) => content.role), ["user", "model", "user"]);
 		const reqStr = JSON.stringify(body.request);
-		assert.match(reqStr, /"contents":\[{"role":"user","parts":\[{"text":"hello"}\]},{"role":"model","parts":\[{"text":"hi there"}\]}\]/);
+		assert.match(reqStr, /"text":"hi there"/);
+		assert.match(reqStr, /Continue from the previous assistant message/);
 	});
 
 	it("converts Responses function_call input items into assistant tool call history", () => {

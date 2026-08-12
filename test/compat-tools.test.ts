@@ -330,6 +330,40 @@ data: [DONE]
 		assert.match(JSON.stringify(request.contents), /Context: The assistant used tools/);
 	});
 
+	it("does not leave a Gemini thinking fallback ending with a model turn", () => {
+		const callId = "call_missing_sig_model_turn_regression";
+		thoughtSignatureCache.delete(callId);
+		try {
+			const result = openAIToAntigravityBody({
+				model: "gemini-3.6-flash-high",
+				messages: [
+					{ role: "user", content: "Find the weather" },
+					{
+						role: "assistant",
+						content: null,
+						tool_calls: [{
+							id: callId,
+							type: "function",
+							function: { name: "get_weather", arguments: '{"location":"Quito"}' },
+						}],
+					},
+					{
+						role: "tool",
+						name: "get_weather",
+						tool_call_id: callId,
+						content: '{"temp":18}',
+					},
+				],
+			});
+			const contents = (result.request as { contents: Array<{ role: string; parts: unknown[] }> }).contents;
+			assert.equal(contents.at(-1)?.role, "user");
+			assert.match(JSON.stringify(contents), /Context: The assistant used tools/);
+			assert.match(JSON.stringify(contents.at(-1)?.parts), /Continue from the previous assistant message/);
+		} finally {
+			thoughtSignatureCache.delete(callId);
+		}
+	});
+
 	it("resolves tool function name from history when cached signature re-enables functionCall path", () => {
 		const callId = "call_cached_sig";
 		cacheThoughtSignature(callId, "SG_TEST_SIGNATURE");

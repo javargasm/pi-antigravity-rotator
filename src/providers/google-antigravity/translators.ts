@@ -1097,26 +1097,27 @@ export function openAIToAntigravityBody(
     }
   }
 
-  if (isClaude) {
-    while (contents.at(-1)?.role === "model") {
-      const lastContent = contents.at(-1);
-      const hasFunctionCall =
-        lastContent?.parts.some((p: any) => isRecord(p) && p.functionCall) ??
-        false;
-      if (hasFunctionCall) {
-        contents.pop();
-        continue;
-      }
-      contents.push({
-        role: "user",
-        parts: [
-          {
-            text: "Continue from the previous assistant message. Do not repeat completed tool calls unless new user input asks for them.",
-          },
-        ],
-      });
-      break;
+  // Google rejects compatibility requests whose final contents turn is a
+  // model turn. Claude additionally needs dangling tool-call turns removed;
+  // other models keep the call history but still need a user turn to resume.
+  while (contents.at(-1)?.role === "model") {
+    const lastContent = contents.at(-1);
+    const hasFunctionCall =
+      lastContent?.parts.some((p: any) => isRecord(p) && p.functionCall) ??
+      false;
+    if (isClaude && hasFunctionCall) {
+      contents.pop();
+      continue;
     }
+    contents.push({
+      role: "user",
+      parts: [
+        {
+          text: "Continue from the previous assistant message. Do not repeat completed tool calls unless new user input asks for them.",
+        },
+      ],
+    });
+    break;
   }
 
   if (contents.length === 0)
