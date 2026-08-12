@@ -1205,6 +1205,23 @@ function calcSavingsFromBuckets(buckets) {
   return { totalUsd: totalUsd, byModel: byModel };
 }
 
+function formatSavingsUsd(usd) {
+  if (!(usd > 0)) return "";
+  if (usd >= 0.01) return usd.toFixed(2);
+  if (usd >= 0.0001) return usd.toFixed(4);
+  if (usd >= 0.000001) return usd.toFixed(6);
+  return usd.toFixed(8);
+}
+
+function formatModelSavingsLabel(modelSavings) {
+  if (!modelSavings || !(modelSavings.totalUsd > 0)) return "";
+  return (
+    ' <span style="color:var(--green)">$' +
+    formatSavingsUsd(modelSavings.totalUsd) +
+    "</span>"
+  );
+}
+
 window.__tokenView = "1h";
 
 function exportData(format) {
@@ -1666,12 +1683,7 @@ function renderTokenChart(tokenUsage) {
   legend.innerHTML = models
     .map(function (m) {
       var modelSavings = (savings.byModel || {})[m];
-      var savingsLabel =
-        modelSavings && modelSavings.totalUsd > 0.01
-          ? ' <span style="color:var(--green)">$' +
-            modelSavings.totalUsd.toFixed(2) +
-            "</span>"
-          : "";
+      var savingsLabel = formatModelSavingsLabel(modelSavings);
       return (
         '<div style="display:flex;align-items:center;gap:4px">' +
         '<div style="width:10px;height:10px;border-radius:2px;background:' +

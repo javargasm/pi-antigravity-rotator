@@ -129,6 +129,53 @@ describe("dashboard", () => {
     assert.equal(gptOss20b, "#dcfce7");
   });
 
+  it("shows sub-cent savings for low-volume priced models", () => {
+    const js = readDashboardJs();
+    const sandbox: Record<string, unknown> = {
+      window: { location: { search: "" } } as Record<string, unknown>,
+      URLSearchParams: globalThis.URLSearchParams,
+      EventSource: function () {},
+      setInterval: () => {},
+      clearInterval: () => {},
+      setTimeout: () => {},
+      clearTimeout: () => {},
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: {
+        getElementById: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener: () => {},
+      },
+    };
+    const script = new Script(
+      js +
+        "\nthis.calcSavingsFromBuckets = calcSavingsFromBuckets;" +
+        "\nthis.formatModelSavingsLabel = formatModelSavingsLabel;",
+    );
+    script.runInNewContext(sandbox);
+
+    const calcSavingsFromBuckets = sandbox.calcSavingsFromBuckets as (
+      buckets: Array<Record<string, unknown>>,
+    ) => { byModel: Record<string, { totalUsd: number }> };
+    const formatModelSavingsLabel = sandbox.formatModelSavingsLabel as (
+      savings: { totalUsd: number },
+    ) => string;
+    const savings = calcSavingsFromBuckets([
+      {
+        byModel: {
+          "gpt-oss-120b-medium": { inputTokens: 686, outputTokens: 413 },
+        },
+      },
+    ]);
+
+    assert.equal(savings.byModel["gpt-oss-120b-medium"].totalUsd, 0.005502);
+    assert.match(
+      formatModelSavingsLabel(savings.byModel["gpt-oss-120b-medium"]),
+      /\$0\.0055/,
+    );
+    assert.equal(formatModelSavingsLabel({ totalUsd: 0 }), "");
+  });
+
   it("does not offer kickstart controls for Codex quota pools", () => {
     const js = readDashboardJs();
     const sandbox: Record<string, unknown> = {
