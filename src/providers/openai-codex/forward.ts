@@ -12,6 +12,7 @@ const HOP_BY_HOP = new Set([
   "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-forwarded-port",
   "x-real-ip", "forwarded", "via",
 ]);
+const DEFAULT_CODEX_INSTRUCTIONS = "You are a helpful assistant.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -32,7 +33,9 @@ export function sanitizeCodexResponsesRequest(
   model: string,
 ): Record<string, unknown> {
   const sanitized: Record<string, unknown> = { ...request, model };
-  if (sanitized.store === undefined) sanitized.store = false;
+  sanitized.instructions = codexInstructions(sanitized.instructions);
+  sanitized.store = false;
+  sanitized.stream = true;
   delete sanitized.previous_response_id;
   delete sanitized.conversation;
   delete sanitized.input_items;
@@ -41,6 +44,23 @@ export function sanitizeCodexResponsesRequest(
   // The proxy owns streaming; this field is not accepted by the internal endpoint.
   delete sanitized.stream_options;
   return sanitized;
+}
+
+function codexInstructions(value: unknown): string {
+  if (typeof value === "string" && value.trim()) return value;
+  if (Array.isArray(value)) {
+    const text = value
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (isRecord(part) && typeof part.text === "string") return part.text;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+    if (text) return text;
+  }
+  return DEFAULT_CODEX_INSTRUCTIONS;
 }
 
 /** Build a native Codex Responses payload from the common proxy request envelope. */
@@ -70,7 +90,11 @@ function forwardHeaders(
       lower === "x-goog-user-project" ||
       lower === "x-goog-user-agent" ||
       lower.startsWith("x-ollama-") ||
-      lower === "chatgpt-account-id"
+      lower === "chatgpt-account-id" ||
+      lower === "accept" ||
+      lower === "content-type" ||
+      lower === "user-agent" ||
+      lower === "openai-beta"
     ) delete headers[key];
   }
   headers.Authorization = `Bearer ${authToken(account)}`;
@@ -78,6 +102,7 @@ function forwardHeaders(
   if (accountId) headers["chatgpt-account-id"] = accountId;
   headers["Content-Type"] = "application/json";
   headers.Accept = payload.stream === false ? "application/json" : "text/event-stream";
+  headers["OpenAI-Beta"] = "responses=v1";
   headers["User-Agent"] = "tuxevil-rotator/openai-codex";
   return headers;
 }

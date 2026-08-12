@@ -5,7 +5,11 @@ import { flattenHeaders, withRotation } from "../../proxy.js";
 import type { AccountRotator } from "../../rotator.js";
 import type { OpenAIChatCompletionRequest, OpenAIResponsesRequest, CompatCompletion, OpenAIToolCall } from "../google-antigravity/translators.js";
 import { buildRotatorResponseHeaders } from "../../response-headers.js";
-import { buildCodexPayload, extractCodexUsage } from "./forward.js";
+import {
+  buildCodexPayload,
+  createCodexStreamAccumulator,
+  extractCodexUsage,
+} from "./forward.js";
 import { sanitizeCodexResponsesRequest } from "./forward.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -28,12 +32,31 @@ function messageContent(value: unknown): unknown {
   });
 }
 
+function instructionText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (!Array.isArray(value)) return "";
+  return value
+    .map((part) => {
+      if (typeof part === "string") return part;
+      return isRecord(part) && typeof part.text === "string" ? part.text : "";
+    })
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
 /** Convert OpenAI Chat Completions messages into native Responses input items. */
 export function chatToCodexResponsesRequest(request: OpenAIChatCompletionRequest): Record<string, unknown> {
   const input: unknown[] = [];
+  const instructions: string[] = [];
   for (const message of request.messages) {
     const item = message as unknown as Record<string, unknown>;
     const role = typeof item.role === "string" ? item.role : "user";
+    if (role === "system" || role === "developer") {
+      const text = instructionText(item.content);
+      if (text) instructions.push(text);
+      continue;
+    }
     if (role === "tool") {
       input.push({ type: "function_call_output", call_id: item.tool_call_id, output: String(item.content ?? "") });
       continue;
@@ -54,15 +77,17 @@ export function chatToCodexResponsesRequest(request: OpenAIChatCompletionRequest
   }
   const result: Record<string, unknown> = {
     model: request.model,
+    instructions: instructions.join("\n\n"),
     input,
-    stream: request.stream === true,
+    stream: true,
     store: false,
   };
   if (Array.isArray(request.tools) && request.tools.length > 0) result.tools = request.tools;
   if (request.tool_choice !== undefined) result.tool_choice = request.tool_choice;
+  // The ChatGPT Codex OAuth endpoint rejects Responses' max_output_tokens
+  // field, so keep the request compatible with its native contract. The
+  // public Chat Completions limit cannot be represented on this endpoint.
   const raw = request as unknown as Record<string, unknown>;
-  const maxTokens = raw.max_completion_tokens ?? raw.max_tokens;
-  if (typeof maxTokens === "number") result.max_output_tokens = maxTokens;
   if (isRecord(raw.reasoning)) result.reasoning = raw.reasoning;
   else if (typeof raw.reasoning_effort === "string") result.reasoning = { effort: raw.reasoning_effort };
   return sanitizeCodexResponsesRequest(result, request.model);
@@ -104,6 +129,57 @@ export function parseCodexResponse(raw: string): CompatCompletion {
     outputTokens: usage?.outputTokens ?? 0,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     rawResponse: parsed,
+  };
+}
+
+function parseCodexResponseBody(raw: string): CompatCompletion {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("event:") && !trimmed.startsWith("data:")) {
+    return parseCodexResponse(raw);
+  }
+  const accumulator = createCodexStreamAccumulator();
+  accumulator.append(raw);
+  const usage = extractCodexUsage(raw);
+  return {
+    text: accumulator.getText(),
+    inputTokens: usage?.inputTokens ?? 0,
+    outputTokens: usage?.outputTokens ?? 0,
+    rawResponse: {},
+  };
+}
+
+function codexResponseJson(
+  completion: CompatCompletion,
+  model: string,
+): Record<string, unknown> {
+  const id = `resp-${Date.now().toString(36)}`;
+  return {
+    id,
+    object: "response",
+    created_at: Math.floor(Date.now() / 1000),
+    status: "completed",
+    model,
+    output: [
+      {
+        id: `${id}-msg`,
+        type: "message",
+        status: "completed",
+        role: "assistant",
+        content: [
+          {
+            type: "output_text",
+            text: completion.text,
+            annotations: [],
+          },
+        ],
+      },
+    ],
+    output_text: completion.text,
+    usage: {
+      input_tokens: completion.inputTokens,
+      output_tokens: completion.outputTokens,
+      total_tokens: completion.inputTokens + completion.outputTokens,
+    },
   };
 }
 
@@ -217,8 +293,12 @@ export async function serveCodexResponses(
       }
       const raw = await response.text();
       const headers = upstreamHeaders(response, context, request.model);
-      writeJson(res, response.status, JSON.parse(raw) as unknown, headers);
-      return parseCodexResponse(raw);
+      const completion = parseCodexResponseBody(raw);
+      const responseBody = raw.trim().startsWith("{")
+        ? JSON.parse(raw) as unknown
+        : codexResponseJson(completion, request.model);
+      writeJson(res, response.status, responseBody, headers);
+      return completion;
     }, controller.signal);
     if (!outcome.ok && !res.headersSent) writeJson(res, outcome.status, { error: { message: outcome.errorText, type: "upstream_error" } });
   } finally {
@@ -246,7 +326,7 @@ export async function serveCodexChat(
         return { text: "", inputTokens: 0, outputTokens: 0 } as CompatCompletion;
       }
       const raw = await response.text();
-      const completion = parseCodexResponse(raw);
+      const completion = parseCodexResponseBody(raw);
       const hasTools = Boolean(completion.toolCalls?.length);
       writeJson(res, response.status, {
         id: `chatcmpl-${Date.now().toString(36)}`,

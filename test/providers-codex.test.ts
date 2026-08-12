@@ -45,7 +45,7 @@ describe("openai-codex OAuth", () => {
   it("uses the current GPT-5.6 Codex catalog", () => {
     assert.deepEqual(
       CODEX_BASE_MODELS.map((model) => model.id),
-      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+      ["gpt-5.6-terra", "gpt-5.6-luna"],
     );
     assert.equal(isCodexModel("gpt-5.6-luna"), true);
     assert.equal(isCodexModel("gpt-5-codex"), false);
@@ -77,11 +77,20 @@ describe("openai-codex OAuth", () => {
         tools: true,
         source: "discovered",
       },
+      {
+        id: "gpt-5.6-sol",
+        contextWindow: 272_000,
+        reasoning: true,
+        multimodal: true,
+        tools: true,
+        source: "discovered",
+      },
     ]);
 
     assert.equal(isCodexModel("claude-sonnet-4-6"), false);
     assert.equal(isCodexModel("gpt-oss-120b-medium"), false);
     assert.equal(isCodexModel("gpt-5.6-nova"), true);
+    assert.equal(isCodexModel("gpt-5.6-sol"), false);
   });
 
   it("does not route non-Codex models from a contaminated rotator catalog", () => {
@@ -174,7 +183,9 @@ describe("openai-codex import and payload", () => {
     assert.equal(body.store, false);
     assert.equal(body.previous_response_id, undefined);
     const request = sanitizeCodexResponsesRequest({ store: true, input_items: ["old"], background: true }, "gpt-5.6-luna");
-    assert.equal(request.store, true);
+    assert.equal(request.store, false);
+    assert.equal(request.stream, true);
+    assert.equal(request.instructions, "You are a helpful assistant.");
     assert.equal(request.input_items, undefined);
     assert.equal(request.background, undefined);
   });
@@ -210,7 +221,14 @@ describe("openai-codex import and payload", () => {
       await forwardCodexRequest(
         account,
         { project: "", model: "gpt-5.6-luna", request: { input: "hello", stream: false } },
-        { authorization: "Bearer inherited-google", "x-goog-api-key": "google-secret", "x-ollama-key": "ollama-secret" },
+        {
+          authorization: "Bearer inherited-google",
+          accept: "*/*",
+          "content-type": "application/json",
+          "user-agent": "OpenAI/1.0.0",
+          "x-goog-api-key": "google-secret",
+          "x-ollama-key": "ollama-secret",
+        },
       );
     } finally {
       globalThis.fetch = original;
@@ -219,6 +237,10 @@ describe("openai-codex import and payload", () => {
     assert.match(received.url, /chatgpt\.com\/backend-api\/codex\/responses$/);
     assert.equal(received.headers.get("authorization"), "Bearer codex-access");
     assert.equal(received.headers.get("chatgpt-account-id"), "acct-codex");
+    assert.equal(received.headers.get("accept"), "text/event-stream");
+    assert.equal(received.headers.get("content-type"), "application/json");
+    assert.equal(received.headers.get("openai-beta"), "responses=v1");
+    assert.equal(received.headers.get("user-agent"), "tuxevil-rotator/openai-codex");
     assert.equal(received.headers.get("x-goog-api-key"), null);
     assert.equal(received.headers.get("x-ollama-key"), null);
     assert.equal(received.body.store, false);
@@ -235,6 +257,9 @@ describe("openai-codex import and payload", () => {
       tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }],
       stream: false,
     } as never);
+  assert.equal(converted.instructions, "You are a helpful assistant.");
+  assert.equal(converted.stream, true);
+  assert.equal("max_output_tokens" in converted, false);
     assert.equal(converted.store, false);
     assert.deepEqual(converted.input, [
       { role: "user", content: [{ type: "input_text", text: "Call the tool" }] },
