@@ -353,20 +353,6 @@ function renderAccounts(data) {
           Math.min(100, (cooldownRemaining / Math.max(totalCooldown, 1)) * 100),
         );
       }
-      var modelBadges = (a.activeForModels || [])
-        .map(function (m) {
-          if (m.startsWith("claude")) {
-            return '<span class="badge badge-model">CLAUDE</span>';
-          }
-          if (m === "gemini-3.1-pro") {
-            return '<span class="badge badge-model">PRO</span>';
-          }
-          if (m === "gemini-3.5-flash") {
-            return '<span class="badge badge-model">FLASH</span>';
-          }
-          return "";
-        })
-        .join("");
       var tierLabel = a.tier ? String(a.tier).toUpperCase() : "UNKNOWN";
 
       return (
@@ -414,8 +400,6 @@ function renderAccounts(data) {
         "', 'ultra')\">" +
         "ULTRA</div>" +
         "</div>" +
-        "</div>" +
-        modelBadges +
         "</div>" +
         "</div>" +
         '<div class="card-email">' +

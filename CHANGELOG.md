@@ -14,6 +14,9 @@
 - **Codex usage & spend tracking**: Fixed recording of usage and spend for Codex compat requests.
 - **Gemini turn bug fix**: Prevented model-ending compat requests for Gemini models.
 
+### Changed
+- **Dashboard account cards**: Removed the legacy `FLASH` / `PRO` / `CLAUDE` model badges that previously indicated which model each account was last active for. The tier selector (`UNKNOWN` / `FREE` / `PLUS` / `PRO` / `ULTRA`) is unchanged.
+
 ## [3.0.0] - 2026-08-11
 
 ### Changed
