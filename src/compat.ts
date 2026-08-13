@@ -182,6 +182,20 @@ export function anthropicToOpenAIChatRequest(
   };
 }
 
+export function extractRetryAfterSeconds(errorText?: string): number | null {
+  if (!errorText) return null;
+  const match = errorText.match(/retryAfterMs=(\d+)/i);
+  if (match) {
+    const ms = parseInt(match[1], 10);
+    return Math.max(1, Math.ceil(ms / 1000));
+  }
+  const secMatch = errorText.match(/(?:wait|retry in|after)\s+(\d+)\s*s/i);
+  if (secMatch) {
+    return Math.max(1, parseInt(secMatch[1], 10));
+  }
+  return null;
+}
+
 export function parseOpenAiJson(raw: string): CompatCompletion {
   let text = "";
   let thinkingText = "";
@@ -2235,12 +2249,18 @@ export async function handleGeminiGenerateContent(
     rawRequest: parsed,
   });
   if (result.status !== 200) {
+    const retrySec = extractRetryAfterSeconds(result.errorText);
+    const headers: Record<string, string> = retrySec ? { "Retry-After": String(retrySec) } : {};
+    const message = retrySec
+      ? `Rate limit exceeded. All accounts cooling down. Please wait ${retrySec} seconds before retrying.`
+      : (result.errorText || "Upstream error");
     return writeJson(res, result.status, {
       error: {
-        message: result.errorText || "Upstream error",
-        status: "UPSTREAM_ERROR",
+        message,
+        status: result.status === 429 ? "RESOURCE_EXHAUSTED" : "UPSTREAM_ERROR",
+        ...(retrySec ? { retry_after_seconds: retrySec } : {}),
       },
-    });
+    }, headers);
   }
   if (result.streamed) return;
   const totalMs = Date.now() - started;
@@ -2359,12 +2379,20 @@ export async function handleOpenAIChatCompletions(
       `OpenAI compat upstream failed status=${result.status} model=${validation.value.model}`,
     );
     if (!res.headersSent) {
+      const retrySec = extractRetryAfterSeconds(result.errorText);
+      const headers: Record<string, string> = retrySec ? { "Retry-After": String(retrySec) } : {};
+      const message = retrySec
+        ? `Rate limit exceeded. All accounts cooling down. Please wait ${retrySec} seconds before retrying.`
+        : (result.errorText || "Upstream error");
       return writeJson(res, result.status, {
         error: {
-          message: result.errorText || "Upstream error",
-          type: "upstream_error",
+          message,
+          type: result.status === 429 ? "rate_limit_error" : "upstream_error",
+          param: null,
+          code: result.status === 429 ? "rate_limit_exceeded" : "upstream_error",
+          ...(retrySec ? { retry_after_seconds: retrySec } : {}),
         },
-      });
+      }, headers);
     }
     return;
   }
@@ -2764,13 +2792,18 @@ export async function handleAnthropicMessages(
       `Anthropic compat upstream failed status=${result.status} model=${validation.value.model}`,
     );
     if (!res.headersSent) {
+      const retrySec = extractRetryAfterSeconds(result.errorText);
+      const headers: Record<string, string> = retrySec ? { "Retry-After": String(retrySec) } : {};
+      const message = retrySec
+        ? `Rate limit exceeded. All accounts cooling down. Please wait ${retrySec} seconds before retrying.`
+        : (result.errorText || "Upstream error");
       return writeJson(res, result.status, {
         type: "error",
         error: {
-          type: "upstream_error",
-          message: result.errorText || "Upstream error",
+          type: result.status === 429 ? "rate_limit_error" : "upstream_error",
+          message,
         },
-      });
+      }, headers);
     }
     return;
   }

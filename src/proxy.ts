@@ -1449,16 +1449,18 @@ async function handleProxyRequest(
     proxyLog(`[${body.model}] No healthy account available: ${reason}`, "warn");
     const retryAfterMs = rotator.getRetryAfterMs(body.model);
     if (retryAfterMs > 0) {
+      const retrySec = Math.ceil(retryAfterMs / 1000);
       res.writeHead(429, {
         "Content-Type": "application/json",
-        "Retry-After": String(Math.ceil(retryAfterMs / 1000)),
+        "Retry-After": String(retrySec),
       });
       res.end(
         JSON.stringify({
-          error: "All accounts cooling down or model circuit breaker active",
+          error: `Rate limit exceeded. All accounts cooling down. Please wait ${retrySec} seconds before retrying.`,
           reason,
           model: body.model,
           retryAfterMs,
+          retryAfterSeconds: retrySec,
         }),
       );
       return;
