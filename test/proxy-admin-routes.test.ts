@@ -115,4 +115,100 @@ describe("proxy admin routes", () => {
     assert.deepEqual(body, { ok: false, error: "Invalid config request" });
     assert.doesNotMatch(JSON.stringify(body), /Unexpected token|SyntaxError/);
   });
+
+  it("serves the admin /api/models catalog used by the Generate Virtual Key modal", async () => {
+    // Build a rotator that advertises the static catalog plus one Ollama
+    // model and one Codex model so the test exercises the active-provider
+    // branch of buildOpenAIModelCatalog.
+    const rotator = {
+      saveState() {},
+      getStatus() {
+        return { accounts: [] };
+      },
+      hasActiveProvider(providerId: string) {
+        return providerId === "ollama" || providerId === "openai-codex";
+      },
+      getOllamaModels() {
+        return ["gemma4:31b"];
+      },
+      recordProxyEvent() {},
+    };
+    server = await startTestProxy(rotator);
+    const port = (server.address() as AddressInfo).port;
+
+    const noToken = await fetch(`http://127.0.0.1:${port}/api/models`);
+    assert.equal(noToken.status, 401, "unauthenticated /api/models must be rejected");
+
+    const response = await fetch(
+      `http://127.0.0.1:${port}/api/models?token=secret`,
+    );
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      ok: boolean;
+      count: number;
+      data: Array<{ id: string; owned_by: string }>;
+    };
+    assert.equal(body.ok, true);
+    assert.equal(body.count, body.data.length);
+
+    // The static Google Antigravity catalog must be present.
+    assert.ok(
+      body.data.some((m) => m.owned_by === "tuxevil-rotator" && m.id === "gemini-3.1-pro-high"),
+      "missing static Gemini 3.1 Pro model",
+    );
+    assert.ok(
+      body.data.some((m) => m.owned_by === "tuxevil-rotator" && m.id === "claude-sonnet-4-6"),
+      "missing static Claude model",
+    );
+
+    // The Ollama model must come from the rotator's getOllamaModels() result.
+    assert.ok(
+      body.data.some((m) => m.owned_by === "ollama" && m.id === "gemma4:31b"),
+      "missing Ollama model from active provider",
+    );
+
+    // Codex allowlist models must appear because hasActiveProvider returned true.
+    assert.ok(
+      body.data.some((m) => m.owned_by === "openai-codex" && m.id === "gpt-5.6-sol"),
+      "missing Codex model from active provider",
+    );
+  });
+
+  it("/api/models omits catalogs from providers with no active credentials", async () => {
+    const rotator = {
+      saveState() {},
+      getStatus() {
+        return { accounts: [] };
+      },
+      hasActiveProvider() {
+        return false;
+      },
+      getOllamaModels() {
+        return ["gemma4:31b"];
+      },
+      recordProxyEvent() {},
+    };
+    server = await startTestProxy(rotator);
+    const port = (server.address() as AddressInfo).port;
+
+    const response = await fetch(
+      `http://127.0.0.1:${port}/api/models?token=secret`,
+    );
+    const body = (await response.json()) as {
+      data: Array<{ id: string; owned_by: string }>;
+    };
+
+    assert.ok(
+      !body.data.some((m) => m.owned_by === "openai-codex"),
+      "Codex models must be hidden when the provider is inactive",
+    );
+    assert.ok(
+      !body.data.some((m) => m.owned_by === "ollama"),
+      "Ollama models must be hidden when the provider is inactive",
+    );
+    assert.ok(
+      !body.data.some((m) => m.owned_by === "opencode-zen"),
+      "OpenCode Zen models must be hidden when the provider is inactive",
+    );
+  });
 });

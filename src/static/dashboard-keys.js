@@ -149,6 +149,150 @@ function setCheckedModels(models) {
   updateModelsCountBadge();
 }
 
+// ── Dynamic model grid (fetched from /api/models) ──────────────────
+//
+// The Generate/Edit Virtual Key modal used to ship with a hardcoded list
+// of legacy Gemini/Claude/GPT-OSS models, so adding new providers
+// (Ollama, OpenAI Codex, OpenCode Zen, ...) silently hid those models
+// from the Allowed Models picker. The grid is now rendered from
+// /api/models, which returns every model the rotator can route today
+// grouped by `owned_by` provider. A static fallback is used only when
+// the API is unreachable (e.g. dashboard served from a stale build).
+
+// Provider id → human-readable group title for the modal UI.
+var PROVIDER_LABELS = {
+  "tuxevil-rotator": "Google Antigravity",
+  "openai-codex": "OpenAI Codex",
+  "ollama": "Ollama Cloud",
+  "opencode-zen": "OpenCode Zen",
+};
+
+function providerLabel(ownedBy) {
+  if (PROVIDER_LABELS[ownedBy]) return PROVIDER_LABELS[ownedBy];
+  if (typeof ownedBy === "string" && ownedBy.length > 0) {
+    return ownedBy.charAt(0).toUpperCase() + ownedBy.slice(1);
+  }
+  return "Other";
+}
+
+function renderModelGridFromCatalog(catalog) {
+  var grid = document.getElementById("modelGrid");
+  var empty = document.getElementById("modelGridEmpty");
+  if (!grid) return false;
+
+  // Group models by `owned_by` provider while preserving the order in
+  // which the API returned them (static catalog first, then dynamic
+  // provider catalogs in the order they were enabled).
+  var groups = [];
+  var byKey = {};
+  (catalog || []).forEach(function(m) {
+    if (!m || !m.id) return;
+    var key = m.owned_by || "other";
+    if (!byKey[key]) {
+      byKey[key] = { key: key, label: providerLabel(key), models: [] };
+      groups.push(byKey[key]);
+    }
+    byKey[key].models.push(m);
+  });
+
+  if (groups.length === 0) {
+    grid.innerHTML = "";
+    if (empty) empty.style.display = "";
+    updateModelsCountBadge();
+    return false;
+  }
+
+  if (empty) empty.style.display = "none";
+
+  grid.innerHTML = groups.map(function(group) {
+    var cards = group.models.map(function(m) {
+      var id = "model-" + m.id.replace(/[^a-zA-Z0-9_-]/g, "_");
+      return '<label class="model-card">' +
+        '<input type="checkbox" id="' + escapeHtml(id) + '" value="' + escapeHtml(m.id) + '" class="modelCb" onchange="updateModelsCountBadge()">' +
+        '<span class="model-name" title="' + escapeHtml(m.id) + '">' + escapeHtml(m.id) + '</span>' +
+        '</label>';
+    }).join("");
+    return '<div class="model-category">' +
+      '<div class="cat-title">' + escapeHtml(group.label) + '</div>' +
+      '<div class="cat-grid">' + cards + '</div>' +
+      '</div>';
+  }).join("");
+
+  updateModelsCountBadge();
+  return true;
+}
+
+// Last successful catalog (cached so the Edit modal opens instantly
+// without re-fetching when the user clicks Edit right after Generate).
+var lastModelCatalog = null;
+var modelCatalogInflight = null;
+
+function fetchModelCatalog() {
+  if (modelCatalogInflight) return modelCatalogInflight;
+  modelCatalogInflight = fetch("/api/models", { headers: authHeaders() })
+    .then(function(r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function(d) {
+      var catalog = Array.isArray(d && d.data) ? d.data : [];
+      lastModelCatalog = catalog;
+      return catalog;
+    })
+    .finally(function() {
+      modelCatalogInflight = null;
+    });
+  return modelCatalogInflight;
+}
+
+// Static fallback used only when /api/models is unreachable. Mirrors
+// the pre-refactor hardcoded list so the modal still works against an
+// older server build that hasn't been restarted with this change.
+var FALLBACK_MODEL_CATALOG = [
+  { id: "gemini-3.1-pro-low", owned_by: "tuxevil-rotator" },
+  { id: "gemini-3.1-pro-high", owned_by: "tuxevil-rotator" },
+  { id: "gemini-3.5-flash-medium", owned_by: "tuxevil-rotator" },
+  { id: "gemini-3.5-flash-high", owned_by: "tuxevil-rotator" },
+  { id: "gemini-3-flash", owned_by: "tuxevil-rotator" },
+  { id: "gemini-3.6-flash-low", owned_by: "tuxevil-rotator" },
+  { id: "gemini-3.6-flash-medium", owned_by: "tuxevil-rotator" },
+  { id: "gemini-3.6-flash-high", owned_by: "tuxevil-rotator" },
+  { id: "gemini-3.6-flash-tiered", owned_by: "tuxevil-rotator" },
+  { id: "claude-sonnet-4-6", owned_by: "tuxevil-rotator" },
+  { id: "claude-opus-4-6-thinking", owned_by: "tuxevil-rotator" },
+  { id: "gpt-oss-120b-medium", owned_by: "tuxevil-rotator" },
+];
+
+function ensureModelGridRendered(preselectedModels, callback) {
+  function applySelection() {
+    if (typeof preselectedModels !== "undefined") {
+      setCheckedModels(preselectedModels || []);
+    } else {
+      updateModelsCountBadge();
+    }
+    if (typeof callback === "function") callback();
+  }
+
+  if (lastModelCatalog && lastModelCatalog.length > 0) {
+    renderModelGridFromCatalog(lastModelCatalog);
+    applySelection();
+    return;
+  }
+
+  fetchModelCatalog()
+    .then(function(catalog) {
+      renderModelGridFromCatalog(catalog);
+      applySelection();
+    })
+    .catch(function() {
+      // Stale build or network glitch: fall back to the static list so
+      // the modal is never empty. The fallback lacks Ollama/Codex/Zen
+      // models, but at least existing keys can still be edited.
+      renderModelGridFromCatalog(FALLBACK_MODEL_CATALOG);
+      applySelection();
+    });
+}
+
 function loadKeys() {
   fetch("/api/keys", { headers: authHeaders() })
     .then(function(r) { return r.json(); })
@@ -248,7 +392,6 @@ function showGenerateModal() {
   document.getElementById("keyFormAlias").disabled = false;
   document.getElementById("keyFormUserId").value = "";
   document.getElementById("keyFormUserId").disabled = false;
-  selectNoModels();
   document.getElementById("keyFormError").textContent = "";
   document.getElementById("generatedKeyResult").style.display = "none";
   document.getElementById("submitKeyBtn").textContent = "Generate Key";
@@ -257,6 +400,10 @@ function showGenerateModal() {
   var sub = document.getElementById("modalSubtitle");
   if (sub) sub.textContent = "Configure key access and model restrictions";
   document.getElementById("keyModal").classList.add("open");
+  // Render the live provider catalog and default to "all models allowed"
+  // (empty selection). ensureModelGridRendered reuses the cached catalog
+  // when possible, so this opens instantly on the second open.
+  ensureModelGridRendered([]);
 }
 
 function showEditModal(hash) {
@@ -271,7 +418,6 @@ function showEditModal(hash) {
   document.getElementById("keyFormAlias").disabled = true;
   document.getElementById("keyFormUserId").value = k.userId || "";
   document.getElementById("keyFormUserId").disabled = true;
-  setCheckedModels(k.models || []);
   document.getElementById("keyFormError").textContent = "";
   document.getElementById("generatedKeyResult").style.display = "none";
   document.getElementById("submitKeyBtn").textContent = "Save Changes";
@@ -280,6 +426,9 @@ function showEditModal(hash) {
   var sub = document.getElementById("modalSubtitle");
   if (sub) sub.textContent = "Updating model restrictions for alias: " + k.keyAlias;
   document.getElementById("keyModal").classList.add("open");
+  // Render the live catalog and preselect the key's existing allowlist
+  // (or all models when the key is unrestricted).
+  ensureModelGridRendered(k.models || []);
 }
 
 function hideModal() {

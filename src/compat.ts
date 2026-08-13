@@ -2037,11 +2037,33 @@ const MODEL_CATALOG = [
   },
 ] as const;
 
-export function serveOpenAIModels(
-  res: ServerResponse,
+export interface OpenAIModelCatalogEntry {
+  id: string;
+  object: "model";
+  created: number;
+  owned_by: string;
+  context_window: number;
+  max_model_len: number;
+  meta: Record<string, unknown>;
+}
+
+/**
+ * Build the full OpenAI-compatible model catalog (static Antigravity catalog
+ * + active-provider models for Ollama, OpenAI Codex and OpenCode Zen).
+ *
+ * This is the single source of truth for "what models can the rotator route
+ * today" and is consumed by:
+ *   - the public /v1/models endpoint (OpenAI compat)
+ *   - the admin /api/models endpoint (dashboard virtual key editor)
+ *
+ * Pass the live AccountRotator so dynamic provider catalogs (Ollama tags
+ * fetched at startup, Codex base + discovered models) are included. Without
+ * a rotator, only the static MODEL_CATALOG is returned.
+ */
+export function buildOpenAIModelCatalog(
   rotator?: AccountRotator,
-): void {
-  const catalog: Array<Record<string, unknown>> = MODEL_CATALOG.map(
+): OpenAIModelCatalogEntry[] {
+  const catalog: OpenAIModelCatalogEntry[] = MODEL_CATALOG.map(
     ({ id, ctx, family, quotaPool, multimodal, tools }) => ({
       id,
       object: "model",
@@ -2119,7 +2141,14 @@ export function serveOpenAIModels(
       });
     }
   }
-  writeJson(res, 200, { object: "list", data: catalog });
+  return catalog;
+}
+
+export function serveOpenAIModels(
+  res: ServerResponse,
+  rotator?: AccountRotator,
+): void {
+  writeJson(res, 200, { object: "list", data: buildOpenAIModelCatalog(rotator) });
 }
 
 export function serveGeminiModels(res: ServerResponse): void {

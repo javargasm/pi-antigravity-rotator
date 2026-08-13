@@ -510,4 +510,56 @@ describe("dashboard", () => {
     assert.match(keysJs, /MASK_MODE/);
     assert.match(logsJs, /MASK_MODE/);
   });
+
+  it("renders the Generate Virtual Key model grid dynamically from /api/models", () => {
+    // The model grid used to be hardcoded in the HTML template, so models
+    // added by new providers (Ollama, OpenAI Codex, OpenCode Zen) were
+    // missing from the Allowed Models picker. The dashboard now fetches
+    // /api/models and groups results by owned_by, so we verify the JS
+    // exposes the helpers used to drive that flow and the HTML shell no
+    // longer ships the stale hardcoded list.
+    const keysJs = readFileSync(join(__dirname, "..", "src", "static", "dashboard-keys.js"), "utf-8");
+    const keysHtml = renderDashboardKeys();
+    assert.match(
+      keysJs,
+      /function renderModelGridFromCatalog\(/,
+      "renderModelGridFromCatalog helper must exist",
+    );
+    assert.match(
+      keysJs,
+      /function ensureModelGridRendered\(/,
+      "ensureModelGridRendered helper must exist",
+    );
+    assert.match(
+      keysJs,
+      /function providerLabel\(/,
+      "providerLabel helper must exist",
+    );
+    assert.match(
+      keysJs,
+      /fetch\("\/api\/models"/,
+      "ensureModelGridRendered must fetch /api/models",
+    );
+    assert.match(
+      keysJs,
+      /owned_by/,
+      "catalog must be grouped by owned_by",
+    );
+    // The static hardcoded list of Gemini/Claude/GPT-OSS checkboxes is
+    // removed from the modal HTML so the JS is the single source of
+    // truth for which models are presented.
+    assert.doesNotMatch(
+      keysHtml,
+      /value="gemini-3\.1-pro-high" class="modelCb"/,
+      "stale hardcoded Gemini 3.1 Pro model card must be gone",
+    );
+    assert.doesNotMatch(
+      keysHtml,
+      /value="claude-opus-4-6-thinking" class="modelCb"/,
+      "stale hardcoded Claude Opus model card must be gone",
+    );
+    // The empty grid container the JS populates must be present.
+    assert.match(keysHtml, /id="modelGrid"/);
+    assert.match(keysHtml, /id="modelGridEmpty"/);
+  });
 });

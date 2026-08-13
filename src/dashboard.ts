@@ -15,6 +15,7 @@ import {
   deleteVirtualKey,
 } from "./virtual-keys.js";
 import { getSpendLogs, getDailySpendSummary, getSpendByKey } from "./spend-logger.js";
+import { buildOpenAIModelCatalog } from "./compat.js";
 import { logger } from "./logger.js";
 
 const dashboardLogger = logger.child("dashboard");
@@ -106,6 +107,33 @@ export function serveConfigApi(
     "Cache-Control": "no-store",
   });
   res.end(JSON.stringify(rotator.getConfig()));
+}
+
+/**
+ * Admin /api/models — returns the full provider model catalog grouped by
+ * provider. Powers the "Allowed Models" checkboxes in the Generate/Edit
+ * Virtual Key modal so the dashboard can show models from every active
+ * provider (Google Antigravity, Ollama, OpenAI Codex, OpenCode Zen) instead
+ * of the legacy hardcoded list.
+ *
+ * The shape mirrors /v1/models so the client can reuse metadata for tooltips.
+ */
+export function serveModelsApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+): void {
+  const catalog = buildOpenAIModelCatalog(rotator);
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+  });
+  res.end(
+    JSON.stringify({
+      ok: true,
+      count: catalog.length,
+      data: catalog,
+    }),
+  );
 }
 
 export function serveConfigExportApi(
@@ -897,44 +925,17 @@ const DASHBOARD_KEYS_HTML = renderAppShell({
           </div>
         </div>
 
-        <div class="model-grid">
-          <div class="model-category">
-            <div class="cat-title">Gemini 3.1 Pro</div>
-            <div class="cat-grid">
-              <label class="model-card"><input type="checkbox" value="gemini-3.1-pro-low" class="modelCb" onchange="updateModelsCountBadge()"><span class="model-name">gemini-3.1-pro-low</span></label>
-              <label class="model-card"><input type="checkbox" value="gemini-3.1-pro-high" class="modelCb" onchange="updateModelsCountBadge()"><span class="model-name">gemini-3.1-pro-high</span></label>
-            </div>
-          </div>
-          <div class="model-category">
-            <div class="cat-title">Gemini 3.5 Flash</div>
-            <div class="cat-grid">
-              <label class="model-card"><input type="checkbox" value="gemini-3.5-flash-medium" class="modelCb" onchange="updateModelsCountBadge()"><span class="model-name">gemini-3.5-flash-medium</span></label>
-              <label class="model-card"><input type="checkbox" value="gemini-3.5-flash-high" class="modelCb" onchange="updateModelsCountBadge()"><span class="model-name">gemini-3.5-flash-high</span></label>
-              <label class="model-card"><input type="checkbox" value="gemini-3-flash" class="modelCb" onchange="updateModelsCountBadge()"><span class="model-name">gemini-3-flash</span></label>
-            </div>
-          </div>
-          <div class="model-category">
-            <div class="cat-title">Gemini 3.6 Flash</div>
-            <div class="cat-grid">
-              <label class="model-card"><input type="checkbox" value="gemini-3.6-flash-low" class="modelCb" onchange="updateModelsCountBadge()"><span class="model-name">gemini-3.6-flash-low</span></label>
-              <label class="model-card"><input type="checkbox" value="gemini-3.6-flash-medium" class="modelCb" onchange="updateModelsCountBadge()"><span class="model-name">gemini-3.6-flash-medium</span></label>
-              <label class="model-card"><input type="checkbox" value="gemini-3.6-flash-high" class="modelCb" onchange="updateModelsCountBadge()"><span class="model-name">gemini-3.6-flash-high</span></label>
-              <label class="model-card"><input type="checkbox" value="gemini-3.6-flash-tiered" class="modelCb" onchange="updateModelsCountBadge()"><span class="model-name">gemini-3.6-flash-tiered</span></label>
-            </div>
-          </div>
-          <div class="model-category">
-            <div class="cat-title">Claude</div>
-            <div class="cat-grid">
-              <label class="model-card"><input type="checkbox" value="claude-sonnet-4-6" class="modelCb" onchange="updateModelsCountBadge()"><span class="model-name">claude-sonnet-4-6</span></label>
-              <label class="model-card"><input type="checkbox" value="claude-opus-4-6-thinking" class="modelCb" onchange="updateModelsCountBadge()"><span class="model-name">claude-opus-4-6-thinking</span></label>
-            </div>
-          </div>
-          <div class="model-category">
-            <div class="cat-title">GPT-OSS</div>
-            <div class="cat-grid">
-              <label class="model-card"><input type="checkbox" value="gpt-oss-120b-medium" class="modelCb" onchange="updateModelsCountBadge()"><span class="model-name">gpt-oss-120b-medium</span></label>
-            </div>
-          </div>
+        <!--
+          The model grid is populated dynamically by dashboard-keys.js from
+          GET /api/models, which returns the live provider catalog (Google
+          Antigravity + every active Ollama / OpenAI Codex / OpenCode Zen
+          account). Each entry is grouped by its owned_by provider so the
+          checkbox UI surfaces every model the rotator can actually route
+          today, including those added by future providers.
+        -->
+        <div class="model-grid" id="modelGrid"></div>
+        <div class="model-grid-empty" id="modelGridEmpty" style="display:none;color:var(--text-dim);font-size:0.85rem;padding:8px 0">
+          No models available. Configure a provider or refresh.
         </div>
       </div>
 

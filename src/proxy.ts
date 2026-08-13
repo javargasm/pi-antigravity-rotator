@@ -58,6 +58,7 @@ import {
   serveGetSpendLogsApi,
   serveGetSpendSummaryApi,
   serveGetSpendByKeyApi,
+  serveModelsApi,
   serveDashboardKeys,
   serveDashboardLogs,
   serveStaticKeysJs,
@@ -2283,6 +2284,15 @@ export function startProxy(
     if (method === "GET" && pathname === "/api/keys") {
       if (!requireAdmin(req, res)) return;
       void serveListVirtualKeysApi(res);
+      return;
+    }
+
+    // Admin-only model catalog used by the dashboard's Generate/Edit
+    // Virtual Key modal so every active provider's models (Ollama, OpenCode
+    // Zen, OpenAI Codex, Google Antigravity) can be selected.
+    if (method === "GET" && pathname === "/api/models") {
+      if (!requireAdmin(req, res)) return;
+      serveModelsApi(res, rotator);
       return;
     }
 
