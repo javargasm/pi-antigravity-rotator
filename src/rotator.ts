@@ -2436,8 +2436,13 @@ export class AccountRotator {
       this.setProviderCooldown(account, "openai-codex", cooldownMs);
       return;
     }
-    if (providerResourceExhausted) {
-      // Account-level daily/weekly quota exhaustion is not a model outage:
+    const poolKey = model ? this.resolvePoolKeyForModel(model) : null;
+    const isAccountScopedProvider =
+      providerResourceExhausted ||
+      (poolKey && (poolKey.startsWith("opencode-zen") || poolKey.startsWith("session")));
+
+    if (isAccountScopedProvider) {
+      // Account-level daily/weekly quota exhaustion or per-key rate limit is not a model outage:
       // the account already gets an individual cooldown from markExhausted,
       // so it must not arm the project or model circuit breaker and block
       // healthy accounts that still have quota.

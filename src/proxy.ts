@@ -504,7 +504,9 @@ async function handleUpstreamAccountAction(
     );
 
     const shouldRetryProviderRateLimit =
-      provider.id === "openai-codex" || action.providerResourceExhausted;
+      provider.id === "openai-codex" ||
+      provider.id === "opencode-zen" ||
+      action.providerResourceExhausted;
     if (
       shouldRetryProviderRateLimit &&
       options.canRetry &&
