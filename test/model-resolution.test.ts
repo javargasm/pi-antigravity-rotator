@@ -77,8 +77,7 @@ describe("model resolution", () => {
 		assert.ok(MODEL_PRICING["nemotron-3-ultra-free"]);
 		assert.ok(MODEL_PRICING["mimo-v2.5-free"]);
 		assert.ok(MODEL_PRICING["hy3-free"]);
-		assert.ok(MODEL_PRICING["ling-3.0-tiny-free"]);
-		assert.ok(MODEL_PRICING["laguna-s-2.1-free"]);
+
 	});
 
 	it("uses official Codex GPT-5.6 text-token pricing", () => {

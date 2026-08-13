@@ -32,14 +32,13 @@ describe("OpenCode Zen Provider Adapter", () => {
   });
 
   it("identifies OpenCode Zen free models correctly", () => {
-    assert.equal(OPENCODE_ZEN_FREE_MODELS.length, 7);
+    assert.equal(OPENCODE_ZEN_FREE_MODELS.length, 5);
     assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("deepseek-v4-flash-free"));
     assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("nemotron-3.5-lightning-free"));
     assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("nemotron-3-ultra-free"));
     assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("mimo-v2.5-free"));
     assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("hy3-free"));
-    assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("ling-3.0-tiny-free"));
-    assert.ok(OPENCODE_ZEN_FREE_MODELS.includes("laguna-s-2.1-free"));
+
 
     for (const model of OPENCODE_ZEN_FREE_MODELS) {
       assert.equal(isOpenCodeZenModel(model), true);

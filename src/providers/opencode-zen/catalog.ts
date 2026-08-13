@@ -10,8 +10,6 @@ export const OPENCODE_ZEN_FREE_MODELS = [
   "nemotron-3-ultra-free",
   "mimo-v2.5-free",
   "hy3-free",
-  "ling-3.0-tiny-free",
-  "laguna-s-2.1-free",
 ] as const;
 
 export type OpenCodeZenModel = (typeof OPENCODE_ZEN_FREE_MODELS)[number];
