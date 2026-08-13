@@ -402,6 +402,7 @@ function renderAccounts(data) {
         "</div>" +
         "</div>" +
         "</div>" +
+        "</div>" +
         '<div class="card-email">' +
         escapeHtml(maskEmail(a.email)) +
         "</div>" +

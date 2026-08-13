@@ -31,8 +31,19 @@ const HOP_BY_HOP = new Set([
 
 export function buildOpenCodeZenPayload(body: RequestBody): Record<string, unknown> {
   const request = isRecord(body.request) ? body.request : {};
+  // OpenCode Zen does not support the `developer` role (an OpenAI o1/o3 extension).
+  // Normalise it to `system` so the upstream deserialises the request correctly.
+  const messages = Array.isArray(request.messages)
+    ? (request.messages as unknown[]).map((msg) => {
+        if (isRecord(msg) && msg.role === "developer") {
+          return { ...msg, role: "system" };
+        }
+        return msg;
+      })
+    : request.messages;
   return {
     ...request,
+    ...(messages !== request.messages ? { messages } : {}),
     model: body.model,
     stream: Boolean(request.stream),
   };

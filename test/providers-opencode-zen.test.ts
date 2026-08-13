@@ -84,6 +84,25 @@ describe("OpenCode Zen Provider Adapter", () => {
     assert.equal(payload.stream, true);
   });
 
+  it("normalises developer role to system in OpenCodeZen payloads", () => {
+    const body = {
+      project: "",
+      model: "deepseek-v4-flash-free",
+      request: {
+        messages: [
+          { role: "developer", content: "You are a helpful assistant." },
+          { role: "user", content: "Hello" },
+        ],
+        stream: false,
+      },
+    };
+    const payload = buildOpenCodeZenPayload(body);
+    const messages = payload.messages as Array<{ role: string; content: string }>;
+    assert.equal(messages[0].role, "system", "developer role should be normalised to system");
+    assert.equal(messages[0].content, "You are a helpful assistant.");
+    assert.equal(messages[1].role, "user");
+  });
+
   it("accumulates SSE streaming text and token usage", () => {
     const accumulator = new OpenCodeZenSseAccumulator();
 

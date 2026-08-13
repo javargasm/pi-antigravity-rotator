@@ -48,7 +48,7 @@ export function serveDashboard(res: ServerResponse): void {
 export function serveStaticCss(res: ServerResponse): void {
   res.writeHead(200, {
     "Content-Type": "text/css; charset=utf-8",
-    "Cache-Control": "public, max-age=3600",
+    "Cache-Control": "no-cache, must-revalidate",
   });
   res.end(DASHBOARD_CSS);
 }
@@ -56,7 +56,7 @@ export function serveStaticCss(res: ServerResponse): void {
 export function serveStaticJs(res: ServerResponse): void {
   res.writeHead(200, {
     "Content-Type": "application/javascript; charset=utf-8",
-    "Cache-Control": "public, max-age=3600",
+    "Cache-Control": "no-cache, must-revalidate",
   });
   res.end(DASHBOARD_JS);
 }
@@ -64,7 +64,7 @@ export function serveStaticJs(res: ServerResponse): void {
 export function serveStaticKeysJs(res: ServerResponse): void {
   res.writeHead(200, {
     "Content-Type": "application/javascript; charset=utf-8",
-    "Cache-Control": "public, max-age=3600",
+    "Cache-Control": "no-cache, must-revalidate",
   });
   res.end(DASHBOARD_KEYS_JS);
 }
@@ -72,7 +72,7 @@ export function serveStaticKeysJs(res: ServerResponse): void {
 export function serveStaticLogsJs(res: ServerResponse): void {
   res.writeHead(200, {
     "Content-Type": "application/javascript; charset=utf-8",
-    "Cache-Control": "public, max-age=3600",
+    "Cache-Control": "no-cache, must-revalidate",
   });
   res.end(DASHBOARD_LOGS_JS);
 }
