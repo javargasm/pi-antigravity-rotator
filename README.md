@@ -51,6 +51,14 @@ Originally built as a multi-account rotator for Google Antigravity. It now gener
 
 ---
 
+## v3.2 Highlights
+
+- **Gemini 3.7 Flash Support**: Full support for Google's Gemini 3.7 Flash models (`gemini-3.7-flash`, `gemini-3.7-flash-tiered`, `gemini-3.7-flash-high`, `gemini-3.7-flash-medium`, `gemini-3.7-flash-low`) with reasoning effort / thinking level translation, pricing, dashboard visualization, and telemetry.
+- **OpenCode Zen Provider**: Added `opencode-zen` provider support (`deepseek-v4-flash-free`, `nemotron-3.5-lightning-free`, `nemotron-3-ultra-free`, `mimo-v2.5-free`, `hy3-free`) with static API key validation, onboarding UI tabs in `/login` and `/login-cli`, real-time quota tracking, and market-based cost savings estimates.
+- **Streaming Tool Call Reliability**: Stateful preservation of tool call names and IDs across fragmented SSE chunks in multi-turn tool calling sessions.
+- **Standardized Rate-Limit Retries**: Error responses for 429 now provide `retryAfterMs` and `retry_after_seconds` headers and payload data for fine-grained cooldown handling.
+- **Provider Precedence Order**: Standardized provider order across quota pools, credentials, and UI displays (`google-antigravity` -> `ollama` -> `opencode-zen` -> `openai-codex`).
+
 ## v3.0 Highlights
 
 - **Parent-Account Credential Model**: Each account (email) is now the parent entity and may hold per-provider credentials — a single human with both a Google Antigravity OAuth token and an Ollama Cloud API key lives in one account row. Login (`login --provider <id>`) and the legacy importer merge credentials onto existing accounts instead of duplicating by email.
@@ -145,6 +153,7 @@ npm install -g tuxevil-rotator
 tuxevil-rotator login                  # Google Antigravity (default)
 tuxevil-rotator login --provider ollama  # Ollama Cloud (static API key)
 tuxevil-rotator login --provider openai-codex  # ChatGPT OAuth (isolated Codex pool)
+tuxevil-rotator login --provider opencode-zen # OpenCode Zen (static API key)
 tuxevil-rotator start
 ```
 
@@ -176,6 +185,7 @@ npm install
 npm run login                       # Google Antigravity
 npm run login -- --provider ollama  # Ollama Cloud
 npm run login -- --provider openai-codex  # OpenAI Codex OAuth
+npm run login -- --provider opencode-zen # OpenCode Zen
 npm start
 ```
 
@@ -330,8 +340,8 @@ To donate an authorized account for testing across supported providers, see [CON
 Thanks to these amazing people who have contributed to the project:
 
 - **[@Codder-hermes](https://github.com/Codder-hermes)** — Fixed Claude Code tool-schema requests by stripping the unsupported JSON Schema `propertyNames` keyword for Gemini and Claude-via-Gemini routes, with regression coverage for both compatibility paths. ([PR #19](https://github.com/tuxevil/tuxevil-rotator/pull/19))
-- **[@CyR1en](https://github.com/CyR1en)** (Ethan Bacurio) — Added the Gemini 3.6 Flash model family, shared quota-pool routing, pricing, dashboard support, and regression coverage. ([PR #18](https://github.com/tuxevil/tuxevil-rotator/pull/18))
-- **[@josenicomaia](https://github.com/josenicomaia)** (José Nicodemos Maia Neto) — Modularized the compatibility layer architecture, added multimodal tool response support, and fixed streaming pass-through for tool executions. ([PR #8](https://github.com/tuxevil/tuxevil-rotator/pull/8), [PR #9](https://github.com/tuxevil/tuxevil-rotator/pull/9), [PR #11](https://github.com/tuxevil/tuxevil-rotator/pull/11))
+- **[@CyR1en](https://github.com/CyR1en)** (Ethan Bacurio) — Added Gemini 3.6 Flash and Gemini 3.7 Flash model families, shared quota-pool routing, pricing, dashboard support, and regression coverage. ([PR #18](https://github.com/tuxevil/tuxevil-rotator/pull/18), [PR #21](https://github.com/tuxevil/tuxevil-rotator/pull/21))
+- **[@josenicomaia](https://github.com/josenicomaia)** (José Nicodemos Maia Neto) — Modularized the compatibility layer architecture, added multimodal tool response support, fixed streaming pass-through for tool executions, and added PostgreSQL storage and weighted pool quota forecasting. ([PR #8](https://github.com/tuxevil/tuxevil-rotator/pull/8), [PR #9](https://github.com/tuxevil/tuxevil-rotator/pull/9), [PR #11](https://github.com/tuxevil/tuxevil-rotator/pull/11), [PR #13](https://github.com/tuxevil/tuxevil-rotator/pull/13), [PR #14](https://github.com/tuxevil/tuxevil-rotator/pull/14))
 - **[@yashyadav711](https://github.com/yashyadav711)** (Yash) — Fixed Draft-2020-12 inline JSON-Schema union type mapping for Gemini tools support. ([PR #10](https://github.com/tuxevil/tuxevil-rotator/pull/10))
 - **[@javargasm](https://github.com/javargasm)** (Jeisson Alexander Vargas Marroquin) — Anthropic tool-use compatibility layer (`tool_use`/`tool_result` content block conversion), JSON schema round-trip fixes, and compat test suite expansion. ([PR #3](https://github.com/tuxevil/tuxevil-rotator/pull/3), [PR #7](https://github.com/tuxevil/tuxevil-rotator/pull/7))
 

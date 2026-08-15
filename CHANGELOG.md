@@ -1,5 +1,25 @@
 # Changelog
 
+## [3.2.0] - 2026-08-14
+
+### Added
+- **Gemini 3.7 Flash Model Support**: Full support for Google's Gemini 3.7 Flash models (`gemini-3.7-flash`, `gemini-3.7-flash-tiered`, `gemini-3.7-flash-high`, `gemini-3.7-flash-medium`, `gemini-3.7-flash-low`). Includes thinking level and reasoning effort mapping, token cost tracking, dashboard visualization, and telemetry support ([#21](https://github.com/tuxevil/tuxevil-rotator/pull/21) by [@CyR1en](https://github.com/CyR1en)).
+- **OpenCode Zen Provider Support**: Integrated `opencode-zen` as a supported free-tier provider for `deepseek-v4-flash-free`, `nemotron-3.5-lightning-free`, `nemotron-3-ultra-free`, `mimo-v2.5-free`, and `hy3-free`. Includes API key validation via `opencode.ai/zen/v1`, quota polling, streaming and non-streaming chat completions, market pricing to calculate USD savings, and an OpenCode Zen tab in `/login` and `/login-cli`.
+- **429 Rate-Limit Retry Headers**: Convey `retryAfterMs` and `retry_after_seconds` in rate-limited error responses to allow clients to respect upstream cooldowns accurately.
+
+### Fixed
+- **Streaming Tool Call Assembly**: Statefully preserve tool call names and IDs across SSE deltas, preventing split chunks from dropping function metadata in multi-turn tool calling.
+- **OpenCode Zen Account Rotation & Rate Limits**: Scope OpenCode Zen rate limits per-model to prevent single-model 429 errors from locking out the entire provider pool, and ensure proper account rotation on upstream 429s.
+- **OpenCode Zen Content-Type & Streaming**: Strip duplicate content-type headers, fix Accept header negotiation, and fix token refresh and format handling for `deepseek-v4-flash-free`.
+- **Dashboard Generate Key Modal**: Dynamically populate the Virtual Key generation model grid from `/api/models` to include only active providers and registered models.
+- **Dashboard UI & Cache Control**: Restored missing card header closing `<div>` tag and added static asset cache control headers.
+- **Test Isolation**: Isolated `TUXEVIL_ROTATOR_DIR` in `db-store` tests to prevent test suites from modifying local user configurations.
+
+### Changed
+- **Provider Ordering**: Standardized provider order precedence across quota pools, credentials, and UI displays (`google-antigravity` -> `ollama` -> `opencode-zen` -> `openai-codex`).
+- **Catalog Cleanup**: Removed deprecated `ling-3.0-tiny-free` and `laguna-s-2.1-free` models from the OpenCode Zen catalog to avoid false-positive account flag warnings.
+- **Provider Architecture**: Decoupled provider eligibility checks and routing logic from rotator core into modular provider adapters.
+
 ## [3.1.0] - 2026-08-12
 
 ### Added
