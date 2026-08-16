@@ -371,6 +371,11 @@ const MODEL_PRICING = {
 	"hy3-free":                    { inputPer1M: 0.25,  outputPer1M: 1.00 },
 	"ling-3.0-tiny-free":          { inputPer1M: 0.05,  outputPer1M: 0.20 },
 	"laguna-s-2.1-free":           { inputPer1M: 0.20,  outputPer1M: 0.80 },
+
+	// OpenAI Codex models — mirrors MODEL_PRICING in src/types.ts
+	"gpt-5.6-sol":   { inputPer1M: 5.00,  outputPer1M: 30.00 },
+	"gpt-5.6-terra": { inputPer1M: 2.00,  outputPer1M: 12.00 },
+	"gpt-5.6-luna":  { inputPer1M: 0.20,  outputPer1M:  1.20 },
 };
 
 function getModelPricing(model) {

@@ -265,4 +265,45 @@ describe("telemetry receiver", () => {
 		assert.ok(stats.savings.byModel["kimi-k3"]);
 		assert.equal(stats.savings.byModel["kimi-k3"].totalUsd, 4.95);
 	});
+	it("calculates estimated savings for OpenAI Codex models in /v1/stats", async () => {
+		const payload = {
+			event: "heartbeat",
+			installId: "codex-savings-test-install",
+			version: "2.8.12",
+			nodeVersion: process.version,
+			os: process.platform,
+			arch: process.arch,
+			ts: new Date().toISOString(),
+			accountCount: 1,
+			modelsUsed: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+			totalRequests: 15,
+			uptimeSeconds: 150,
+			routingHealthState: "healthy",
+			tokensByModel: {
+				"gpt-5.6-sol":   { input: 1_000_000, output: 1_000_000, requests: 5 },
+				"gpt-5.6-terra": { input: 1_000_000, output: 1_000_000, requests: 5 },
+				"gpt-5.6-luna":  { input: 1_000_000, output: 1_000_000, requests: 5 },
+			},
+		};
+
+		const postRes = await fetch(`http://127.0.0.1:${port}/v1/events`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(payload),
+		});
+		assert.equal(postRes.status, 202);
+
+		const statsRes = await fetch(`http://127.0.0.1:${port}/v1/stats`, {
+			headers: { Authorization: "Bearer secret-token" },
+		});
+		assert.equal(statsRes.status, 200);
+		const stats = (await statsRes.json()) as any;
+		assert.ok(stats.savings);
+		assert.ok(stats.savings.byModel["gpt-5.6-sol"]);
+		assert.equal(stats.savings.byModel["gpt-5.6-sol"].totalUsd, 35.00);
+		assert.ok(stats.savings.byModel["gpt-5.6-terra"]);
+		assert.equal(stats.savings.byModel["gpt-5.6-terra"].totalUsd, 14.00);
+		assert.ok(stats.savings.byModel["gpt-5.6-luna"]);
+		assert.equal(stats.savings.byModel["gpt-5.6-luna"].totalUsd, 1.40);
+	});
 });
