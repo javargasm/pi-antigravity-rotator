@@ -799,7 +799,16 @@ export class AccountRotator {
         : modelKey.startsWith(`${OPENCODE_ZEN_PROVIDER_ID}:`)
           ? account.quota.find((candidate) => candidate.providerId === OPENCODE_ZEN_PROVIDER_ID)
           : undefined);
-    return q ? q.percentRemaining : -1;
+    if (!q) return -1;
+    // Ollama: the session pool is gated by the weekly pool. If the weekly
+    // quota is fully exhausted (0%), the account cannot accept any requests
+    // regardless of how much session quota remains. Treat it as 0 so the
+    // account is skipped at all call sites that check `quota === 0`.
+    if (modelKey === "session") {
+      const weekly = account.quota.find((w) => w.modelKey === "weekly");
+      if (weekly && weekly.percentRemaining === 0) return 0;
+    }
+    return q.percentRemaining;
   }
 
   // Get timer type for a specific model on an account

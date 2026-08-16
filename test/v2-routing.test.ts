@@ -648,6 +648,85 @@ describe("v2 routing and status", () => {
     assert.equal(allowed("session"), "dual@example.com");
   });
 
+  it("skips ollama accounts when weekly quota is 0% even if session quota is >0%", () => {
+    const config = makeConfig();
+    config.accounts = [
+      {
+        email: "exhausted-weekly@example.com",
+        provider: "ollama",
+        apiKey: "o1",
+        tier: "free",
+      },
+      {
+        email: "fresh-ollama@example.com",
+        provider: "ollama",
+        apiKey: "o2",
+        tier: "free",
+      },
+    ];
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+
+    // Account 1: weekly=0% (exhausted), session=50% (still shows remaining)
+    rotator.accounts[0].quota = [
+      {
+        modelKey: "session",
+        displayName: "Session",
+        percentRemaining: 50,
+        resetTime: new Date(Date.now() + 3_600_000).toISOString(),
+        timerType: "5h",
+        providerId: "ollama",
+      },
+      {
+        modelKey: "weekly",
+        displayName: "Weekly",
+        percentRemaining: 0,
+        resetTime: new Date(Date.now() + 86_400_000).toISOString(),
+        timerType: "7d",
+        providerId: "ollama",
+      },
+    ];
+    rotator.accounts[0].healthScore = 1;
+
+    // Account 2: both pools healthy
+    rotator.accounts[1].quota = [
+      {
+        modelKey: "session",
+        displayName: "Session",
+        percentRemaining: 80,
+        resetTime: new Date(Date.now() + 3_600_000).toISOString(),
+        timerType: "5h",
+        providerId: "ollama",
+      },
+      {
+        modelKey: "weekly",
+        displayName: "Weekly",
+        percentRemaining: 60,
+        resetTime: new Date(Date.now() + 86_400_000).toISOString(),
+        timerType: "7d",
+        providerId: "ollama",
+      },
+    ];
+    rotator.accounts[1].healthScore = 1;
+
+    const now = Date.now();
+    const best = rotator.pickBestModelAccount("session", now, -1);
+    assert.equal(
+      best?.config.email,
+      "fresh-ollama@example.com",
+      "should skip account with weekly=0% even when session>0%",
+    );
+
+    // Also: if BOTH accounts have weekly=0%, neither should be selected
+    rotator.accounts[1].quota[1].percentRemaining = 0;
+    const bestNone = rotator.pickBestModelAccount("session", now, -1);
+    assert.equal(
+      bestNone,
+      null,
+      "should return null when all ollama accounts have weekly=0%",
+    );
+  });
+
   it("arms the model breaker on plain 429s but not on quota exhaustion", () => {
     const config = makeConfig();
     config.accounts.push({
