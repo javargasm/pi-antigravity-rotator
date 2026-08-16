@@ -924,12 +924,12 @@ async function handleOllamaCliLogin(
     return;
   }
 
-  const entry = {
+  const entry: AccountConfig = {
     email: email || defaultAccountEmail(apiKey),
-    apiKey,
+    credentials: [{ provider: "ollama", apiKey }],
     label: email || defaultAccountEmail(apiKey).split("@")[0],
   };
-  if (entry.label.length > MAX_ACCOUNT_LABEL_LENGTH) {
+  if (typeof entry.label !== "string" || entry.label.length > MAX_ACCOUNT_LABEL_LENGTH) {
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: false, error: "Account label too long" }));
     return;

@@ -1,5 +1,25 @@
 # Changelog
 
+## [3.2.1] - 2026-08-16
+
+### Fixed
+
+- **Credential persistence across restarts with PostgreSQL**: When PostgreSQL is configured as the account store, credentials added via the login panel (`ollama`, `opencode-zen`, `openai-codex`) were stored using the legacy flat `apiKey` field instead of the structured `credentials[{provider, apiKey}]` shape. On the next quota poll, the rotator read back the correct structured credential from the database but the Ollama provider adapter found nothing, flagging the account with 401. The `handleOllamaCliLogin` onboarding handler now always persists as `credentials: [{ provider: "ollama", apiKey }]`.
+
+- **OpenCode Zen and sibling credentials lost on `replaceConfig`**: When the dashboard config editor saved a new config (e.g. after changing routing settings), `replaceConfig()` merged credentials correctly in memory but then persisted the original unmerged `config.accounts` payload to PostgreSQL. After the next restart the database-sourced config lacked the `opencode-zen` (or `ollama`) credential entirely. The fix builds the merged account list first and persists that merged list, so no credential is ever dropped by a config save.
+
+- **Legacy Ollama JSON re-imported on every boot with PostgreSQL**: `importLegacyOllamaRotatorAccounts()` ran unconditionally at startup, allowing a stale `~/.ollama-rotator/accounts.json` to re-introduce revoked API keys each time the service restarted. The import is now skipped when `TUXEVIL_ROTATOR_DATABASE_URL` is configured, making PostgreSQL the sole authoritative source.
+
+- **`accounts.json` disk file migrated into PostgreSQL on startup**: `PostgresSettingsRepository.init()` migrated any on-disk `accounts.json` into the database on first boot. If the file contained an outdated credential it would silently overwrite the database value. The `accounts_json` key is now excluded from the disk-to-database migration path; only non-credential settings (state, token usage, admin token) are migrated from disk.
+
+- **PostgreSQL writes were fire-and-forget**: Account config writes to PostgreSQL were non-blocking background promises. A service restart occurring within the write window could lose the latest credential update. All settings writes are now awaited before returning a success response.
+
+- **`mergeCredentials` called on pre-normalization data in `addAccountToConfig`**: The merge was applied against the raw (possibly legacy-shaped) existing account instead of its normalized form, causing duplicate or missing credentials in edge cases. The existing account is now normalized before merging.
+
+### Changed
+
+- **`replaceConfig` syncs in-memory and persisted accounts atomically**: The merged account list is computed once and used for both `this.accounts`/`this.config` and the PostgreSQL write, preventing divergence.
+
 ## [3.2.0] - 2026-08-14
 
 ### Added

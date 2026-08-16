@@ -41,6 +41,7 @@ import {
   applyConfigDefaults,
   saveAccountsConfig,
   removeAccountFromConfig,
+  mergeCredentials,
 } from "./account-store.js";
 import { isHostedOAuthConfigured } from "./providers/google-antigravity/oauth.js";
 import type { RequestBody } from "./proxy.js";
@@ -3166,13 +3167,17 @@ export class AccountRotator {
     const previous = new Map(
       this.accounts.map((account) => [account.config.email, account]),
     );
-    this.config = normalized;
-    this.accounts = normalized.accounts.map((config) => {
+    const mergedAccounts = normalized.accounts.map((config) => {
       const existing = previous.get(config.email);
       if (existing) {
+        const mergedConfig = {
+          ...existing.config,
+          ...config,
+          credentials: mergeCredentials(existing.config.credentials, config.credentials),
+        };
         return {
           ...existing,
-          config: { ...existing.config, ...config },
+          config: mergedConfig,
         };
       }
       return {
@@ -3208,6 +3213,8 @@ export class AccountRotator {
         },
       };
     });
+    this.config = { ...normalized, accounts: mergedAccounts.map((account) => account.config) };
+    this.accounts = mergedAccounts;
     await saveAccountsConfig(this.config);
     await this.saveState();
     this.refreshHealthScores();
@@ -3269,6 +3276,7 @@ export class AccountRotator {
       existing.config = {
         ...existing.config,
         ...accountConfig,
+        credentials: mergeCredentials(existing.config.credentials, accountConfig.credentials),
         tier: accountConfig.tier || existing.config.tier || "unknown",
       };
       existing.disabled = false;

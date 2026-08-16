@@ -118,8 +118,11 @@ export class PostgresSettingsRepository implements ISettingsRepository {
       this.cache.set(row.key, row.value);
     }
 
-    // Migrate from disk for any keys not already in DB
+    // Migrate non-account settings from disk for any keys not already in DB.
+    // accounts.json is deliberately excluded: when PostgreSQL is configured,
+    // it must be the sole source of account credentials.
     for (const [key, spec] of Object.entries(DISK_FILES)) {
+      if (key === "accounts_json") continue;
       if (this.cache.has(key)) continue;
       try {
         const path = join(getConfigDir(), spec.filename);
@@ -166,21 +169,21 @@ export class PostgresSettingsRepository implements ISettingsRepository {
   async set(key: string, value: string): Promise<void> {
     this.cache.set(key, value);
     if (this.pool) {
-      // Non-blocking background save
-      this.pool
-        .query(
+      try {
+        // Account changes must be durable before the API reports success.
+        // A background-only write could be lost when the service restarts.
+        await this.pool.query(
           `INSERT INTO rotator_settings (key, value, updated_at)
-           VALUES ($1, $2, CURRENT_TIMESTAMP)
-           ON CONFLICT (key) DO UPDATE
-           SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT (key) DO UPDATE
+            SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
           [key, value],
-        )
-        .catch((err) => {
-          console.error(
-            `Failed to save ${key} to database in background: ${err}`,
-          );
-          this.enqueueRetry(key, value);
-        });
+        );
+      } catch (err) {
+        console.error(`Failed to save ${key} to database: ${err}`);
+        this.enqueueRetry(key, value);
+        throw err;
+      }
     }
   }
 

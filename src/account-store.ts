@@ -92,7 +92,7 @@ function validateCredentialLengths(
 
 export { validateAccountConfigLengths };
 
-function mergeCredentials(
+export function mergeCredentials(
   existing: AccountConfig["credentials"] | undefined,
   incoming: AccountConfig["credentials"] | undefined,
 ): AccountConfig["credentials"] {
@@ -141,10 +141,11 @@ export async function addAccountToConfig(
   if (existing) {
     assertCodexIdentityCompatible(existing, entryNorm);
     validateCredentialLengths(entryNorm.credentials);
+    const existingNorm = normalizeAccountConfig(existing);
     config.accounts[config.accounts.indexOf(existing)] = {
-      ...normalizeAccountConfig(existing),
+      ...existingNorm,
       ...entryNorm,
-      credentials: mergeCredentials(existing.credentials, entryNorm.credentials),
+      credentials: mergeCredentials(existingNorm.credentials, entryNorm.credentials),
     };
     await saveAccountsConfig(config);
     return { isNew: false };

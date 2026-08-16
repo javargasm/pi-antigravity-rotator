@@ -194,7 +194,12 @@ describe("CLI login Ollama provider", () => {
 		assert.equal(parsed.ok, true);
 		assert.equal(parsed.email, "key-abcdef@ollama.local");
 		assert.equal(parsed.isNew, true);
-		assert.equal((recordingRotator.lastEntry as any).apiKey, "ollama-abcdef");
+		assert.equal(
+			(recordingRotator.lastEntry as AccountConfig).credentials?.find(
+				(credential) => credential.provider === "ollama",
+			)?.apiKey,
+			"ollama-abcdef",
+		);
 		assert.equal((recordingRotator.lastEntry as any).email, "key-abcdef@ollama.local");
 	});
 
@@ -209,5 +214,11 @@ describe("CLI login Ollama provider", () => {
 		assert.equal(parsed.ok, true);
 		assert.equal(parsed.email, "me@example.com");
 		assert.equal((recordingRotator.lastEntry as any).label, "me@example.com");
+		assert.equal(
+			(recordingRotator.lastEntry as AccountConfig).credentials?.some(
+				(credential) => credential.provider === "ollama",
+			),
+			true,
+		);
 	});
 });

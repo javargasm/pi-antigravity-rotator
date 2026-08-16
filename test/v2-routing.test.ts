@@ -767,4 +767,37 @@ describe("v2 routing and status", () => {
       "3 unique accounts with plain 429 must arm the model breaker",
     );
   });
+
+  it("preserves omitted provider credentials when replacing config", async () => {
+    const config = makeConfig();
+    config.accounts[0].credentials = [
+      {
+        provider: "google-antigravity",
+        refreshToken: "google-refresh",
+        projectId: "project-a",
+      },
+      { provider: "opencode-zen", apiKey: "zen-secret" },
+    ];
+    const rotator = new AccountRotator(config);
+    rotator.stopQuotaPolling();
+
+    await rotator.replaceConfig({
+      ...config,
+      accounts: [
+        {
+          email: "a@example.com",
+          refreshToken: "google-refresh",
+          projectId: "project-a",
+        },
+      ],
+    });
+
+    const account = rotator.getConfig().accounts.find(
+      (entry) => entry.email === "a@example.com",
+    );
+    assert.equal(
+      account?.credentials?.find((credential) => credential.provider === "opencode-zen")?.apiKey,
+      "zen-secret",
+    );
+  });
 });

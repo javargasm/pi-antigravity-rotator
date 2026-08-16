@@ -21,7 +21,7 @@ import {
 } from "./compat.js";
 import { setModelAliasesOverride } from "./types.js";
 import { readTextFile, writeTextFileAtomic } from "./storage.js";
-import { initDb } from "./db-store.js";
+import { initDb, isDbConfigured } from "./db-store.js";
 import { runKeyMigrations } from "./key-migrations.js";
 import { flushSpendLogs, stopRetentionCleanup, startRetentionCleanup } from "./spend-logger.js";
 import { stopPendingSessionReaper } from "./onboarding.js";
@@ -170,7 +170,11 @@ export async function main(): Promise<void> {
 
   await initDb();
   await runKeyMigrations();
-  await importLegacyOllamaRotatorAccounts();
+  // PostgreSQL is the authoritative account store. Importing the legacy
+  // Ollama JSON here would allow a stale disk credential to re-enter on boot.
+  if (!isDbConfigured()) {
+    await importLegacyOllamaRotatorAccounts();
+  }
   startRetentionCleanup();
 
   const config = loadConfig();
