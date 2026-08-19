@@ -113,6 +113,7 @@ describe("model discovery", () => {
 			maxOutputTokens: 65536,
 			thinkingBudget: -1,
 			isThinking: true,
+			contextWindow: 1_000_000,
 		});
 	});
 });

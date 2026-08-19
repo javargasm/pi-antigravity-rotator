@@ -18,7 +18,13 @@ export interface CodexModel {
 // The Codex /models endpoint can expose models from other ChatGPT-backed
 // providers (for example Claude), so model IDs alone must be filtered before
 // they influence routing.
-const CODEX_CONTEXT_WINDOW = 272_000;
+// Official context window for the GPT-5.6 family per
+// https://platform.openai.com/docs/models (gpt-5.6-sol / gpt-5.6-terra / gpt-5.6-luna
+// each report 1.05M context / 128K max output).
+const CODEX_CONTEXT_WINDOW = 1_050_000;
+// Hard cap to defend against `/models` upstream reporting absurd values for
+// discovered ids. 2M is comfortably above the published 1.05M baseline.
+const CODEX_DISCOVERED_MAX_CONTEXT_WINDOW = 2_000_000;
 const CODEX_DISCOVERED_ID_PATTERN = /^gpt-5(?:\.\d+)?(?:-[a-z0-9]+)+$/i;
 export const CODEX_BASE_MODELS: readonly CodexModel[] = [
   { id: "gpt-5.6-sol", contextWindow: CODEX_CONTEXT_WINDOW, reasoning: true, multimodal: true, tools: true, source: "allowlist" },
@@ -77,7 +83,7 @@ function parseModel(value: unknown): CodexModel | null {
     .find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0);
   return {
     id,
-    contextWindow: typeof contextWindow === "number" ? Math.min(contextWindow, 2_000_000) : CODEX_CONTEXT_WINDOW,
+    contextWindow: typeof contextWindow === "number" ? Math.min(contextWindow, CODEX_DISCOVERED_MAX_CONTEXT_WINDOW) : CODEX_CONTEXT_WINDOW,
     reasoning: record.reasoning !== false,
     multimodal: record.multimodal !== false && record.vision !== false,
     tools: record.tools !== false && record.tool_calling !== false,

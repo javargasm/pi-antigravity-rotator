@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Official per-model context windows surfaced across providers**: New `src/providers/google-antigravity/catalog.ts` publishes the upstream context windows for Claude (Opus 4.6 / Sonnet 4.6 → 1M, Opus 4.5 / Sonnet 4.5 → 200K), Google Gemini (3.1 Pro, 3 Pro, 3 Flash variants, 2.5 Pro/Flash → 1M each), and `gpt-oss-120b` (131,072). The new `getAntigravityContextWindow(model)` helper is the single source of truth.
+- **`/api/show` lookup for Ollama model context windows**: `src/providers/ollama/context-window.ts` calls `POST https://ollama.com/api/show` to read `model_info.<arch>.context_length`, cached for `TAGS_CACHE_TTL_MS` and falling back to the operator-provided `OLLAMA_NUM_CTX` env (default 8192).
+- **`ModelSpec.contextWindow`**: Optional `contextWindow` field in `src/compat/model-specs.ts` reflects upstream values; resolved automatically via `getModelSpec()` and propagated through `/v1/models`-adjacent surfaces.
+
+### Changed
+- **OpenAI Codex catalog updated to GPT-5.6 family official 1.05M window**: `CODEX_CONTEXT_WINDOW` raised from 272_000 to 1_050_000 per `https://platform.openai.com/docs/models`. The 2M safety cap on `/models`-discovered ids is preserved.
+- **OpenCode Zen catalog now exposes a per-id helper** (`getOpenCodeZenContextWindow`) that documents the placeholder 128K window until OpenCode publishes per-model specs.
+- **`MODEL_CATALOG` in `src/compat.ts`**: Claude Opus 4.6 / Sonnet 4.6 context window raised from 500_000 to 1_000_000 to match Anthropic's published spec.
+
+### Fixed
+- `/v1/models` no longer reports the outdated 500K Claude context window.
+
 ## [3.2.1] - 2026-08-16
 
 ### Fixed

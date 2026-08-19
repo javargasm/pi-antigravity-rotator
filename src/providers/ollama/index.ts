@@ -91,3 +91,4 @@ export const ollamaAdapter: ProviderAdapter = {
 };
 
 export type { ExhaustionPrediction, UsagePredictor };
+export { getOllamaContextWindow, clearOllamaContextCache } from "./context-window.js";

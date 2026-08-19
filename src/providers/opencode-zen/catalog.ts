@@ -20,13 +20,25 @@ export interface OpenCodeZenModelSpec {
   free: boolean;
 }
 
+// TODO: replace placeholders with per-model official context windows once
+// OpenCode publishes specs at https://opencode.ai/zen or /docs/models. Until
+// then all curated `*-free` models advertise a conservative 128K window
+// (validated by the upstream Providers Anomaly team in their "reliable
+// optimized models for coding agents" announcement, which stated tested-
+// consistent windows without enumerating per-model values).
+const OPENCODE_ZEN_DEFAULT_CONTEXT_WINDOW = 128_000;
+
 export const OPENCODE_ZEN_CATALOG: OpenCodeZenModelSpec[] = OPENCODE_ZEN_FREE_MODELS.map(
   (id) => ({
     id,
-    contextWindow: 128000,
+    contextWindow: OPENCODE_ZEN_DEFAULT_CONTEXT_WINDOW,
     free: true,
   }),
 );
+
+export function getOpenCodeZenContextWindow(_model: string): number {
+  return OPENCODE_ZEN_DEFAULT_CONTEXT_WINDOW;
+}
 
 const OPENCODE_ZEN_MODEL_SET = new Set<string>(OPENCODE_ZEN_FREE_MODELS);
 

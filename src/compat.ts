@@ -2036,7 +2036,7 @@ const MODEL_CATALOG = [
   {
     id: "claude-sonnet-4-6",
     family: "claude",
-    ctx: 500000,
+    ctx: 1000000,
     quotaPool: "claude",
     multimodal: true,
     tools: true,
@@ -2044,7 +2044,7 @@ const MODEL_CATALOG = [
   {
     id: "claude-opus-4-6-thinking",
     family: "claude",
-    ctx: 500000,
+    ctx: 1000000,
     quotaPool: "claude",
     multimodal: true,
     tools: true,
