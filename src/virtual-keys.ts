@@ -15,8 +15,32 @@ interface CachedKey {
   fetchedAt: number;
 }
 
+const KEY_CACHE_MAX = 500;
 const keyCache = new Map<string, CachedKey>(); // tokenHash -> CachedKey
 let hasKeysCache: { value: boolean; fetchedAt: number } | null = null;
+
+export function getKeyCacheSizeForTests(): number {
+  return keyCache.size;
+}
+
+function setCachedKey(tokenHash: string, entry: CachedKey): void {
+  const now = Date.now();
+  if (keyCache.size >= KEY_CACHE_MAX) {
+    // Prune expired entries first
+    for (const [k, v] of keyCache.entries()) {
+      if (now - v.fetchedAt >= CACHE_TTL_MS) {
+        keyCache.delete(k);
+      }
+    }
+    // If still at capacity, drop oldest entries (FIFO)
+    while (keyCache.size >= KEY_CACHE_MAX) {
+      const oldest = keyCache.keys().next();
+      if (oldest.done) break;
+      keyCache.delete(oldest.value);
+    }
+  }
+  keyCache.set(tokenHash, entry);
+}
 
 // Debounced last_active updates to prevent DB write spam
 const pendingLastActive = new Set<string>();
@@ -130,7 +154,7 @@ export async function generateVirtualKey(params: {
   );
 
   const key = mapRowToVirtualKey(res.rows[0]);
-  keyCache.set(tokenHash, { key, fetchedAt: Date.now() });
+  setCachedKey(tokenHash, { key, fetchedAt: Date.now() });
   hasKeysCache = { value: true, fetchedAt: Date.now() };
 
   return { rawKey, key };
@@ -161,12 +185,12 @@ export async function lookupVirtualKey(
     );
 
     if (res.rows.length === 0) {
-      keyCache.set(tokenHash, { key: null, fetchedAt: now });
+      setCachedKey(tokenHash, { key: null, fetchedAt: now });
       return null;
     }
 
     const key = mapRowToVirtualKey(res.rows[0]);
-    keyCache.set(tokenHash, { key, fetchedAt: now });
+    setCachedKey(tokenHash, { key, fetchedAt: now });
     return key;
   } catch (err) {
     console.error("Failed to lookup virtual key:", err);
@@ -250,7 +274,7 @@ export async function updateVirtualKey(
     if (res.rows.length === 0) return null;
 
     const updated = mapRowToVirtualKey(res.rows[0]);
-    keyCache.set(tokenHash, { key: updated, fetchedAt: Date.now() });
+    setCachedKey(tokenHash, { key: updated, fetchedAt: Date.now() });
     return updated;
   } catch (err) {
     console.error("Failed to update virtual key:", err);

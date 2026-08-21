@@ -6,6 +6,8 @@ import {
   lookupVirtualKey,
   listVirtualKeys,
   hasAnyVirtualKeys,
+  clearVirtualKeyCache,
+  getKeyCacheSizeForTests,
 } from "../src/virtual-keys.js";
 
 test("hashKey uses PBKDF2 (64-char hex, deterministic)", () => {
@@ -37,4 +39,9 @@ test("listVirtualKeys returns empty array when DB is not configured", async () =
 test("hasAnyVirtualKeys returns false when DB is not configured", async () => {
   const hasKeys = await hasAnyVirtualKeys();
   assert.equal(hasKeys, false);
+});
+
+test("clearVirtualKeyCache resets key cache", () => {
+  clearVirtualKeyCache();
+  assert.equal(getKeyCacheSizeForTests(), 0);
 });

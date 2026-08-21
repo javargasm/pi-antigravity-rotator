@@ -5,6 +5,7 @@ import { rotatorEnv } from "./env.js";
 
 const FLUSH_INTERVAL_MS = 5_000;
 const MAX_QUEUE_SIZE = 50;
+const MAX_QUEUE_CAP = 100;
 const DEFAULT_KEY_HASH_LABEL = "unauthenticated";
 
 const storeMessagesConfig =
@@ -19,6 +20,19 @@ let queue: SpendLog[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let isFlushing = false;
 
+export function getSpendQueueSizeForTests(): number {
+  return queue.length;
+}
+
+export function resetSpendLoggerForTests(): void {
+  queue = [];
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  isFlushing = false;
+}
+
 export function generateRequestId(): string {
   return `req_${Date.now().toString(36)}_${randomBytes.randomBytes(8).toString("hex")}`;
 }
@@ -32,6 +46,11 @@ export function logSpend(
     totalTokens?: number;
   },
 ): void {
+  if (!isDbConfigured()) {
+    if (queue.length > 0) queue = [];
+    return;
+  }
+
   const pricing = MODEL_PRICING[log.model] || { inputPer1M: 0, outputPer1M: 0 };
   const promptTokens = Math.max(0, log.promptTokens || 0);
   const completionTokens = Math.max(0, log.completionTokens || 0);
@@ -71,6 +90,9 @@ export function logSpend(
     createdAt: new Date().toISOString(),
   };
 
+  if (queue.length >= MAX_QUEUE_CAP) {
+    queue.splice(0, queue.length - MAX_QUEUE_CAP + 1);
+  }
   queue.push(fullLog);
 
   if (queue.length >= MAX_QUEUE_SIZE) {
@@ -137,7 +159,11 @@ function cleanValue(val: unknown, depth = 0): unknown {
  * Flush accumulated spend logs to database.
  */
 export async function flushSpendLogs(): Promise<void> {
-  if (isFlushing || queue.length === 0 || !isDbConfigured()) return;
+  if (!isDbConfigured()) {
+    queue = [];
+    return;
+  }
+  if (isFlushing || queue.length === 0) return;
   isFlushing = true;
 
   const logsToFlush = queue;
@@ -208,8 +234,8 @@ export async function flushSpendLogs(): Promise<void> {
     }
   } catch (err) {
     console.error("Failed to flush spend logs to database:", err);
-    // Put unfetched items back in queue if flush failed
-    queue = [...logsToFlush, ...queue];
+    // Put unfetched items back in queue if flush failed, but cap to MAX_QUEUE_CAP
+    queue = [...logsToFlush, ...queue].slice(0, MAX_QUEUE_CAP);
   } finally {
     isFlushing = false;
   }

@@ -4,8 +4,11 @@ import {
 	calculateCost,
 	generateRequestId,
   logSpend,
+  flushSpendLogs,
   getSpendLogs,
   getDailySpendSummary,
+  getSpendQueueSizeForTests,
+  resetSpendLoggerForTests,
 } from "../src/spend-logger.js";
 
 test("calculateCost uses the official Codex GPT-5.6 rates", () => {
@@ -43,7 +46,8 @@ test("generateRequestId produces unique prefixed strings", () => {
   assert.notEqual(id1, id2);
 });
 
-test("logSpend enqueues log without throwing", () => {
+test("logSpend enqueues log without throwing and keeps queue empty when DB is not configured", () => {
+  resetSpendLoggerForTests();
   assert.doesNotThrow(() => {
     logSpend({
       model: "gemini-3.5-flash-high",
@@ -56,6 +60,13 @@ test("logSpend enqueues log without throwing", () => {
       durationMs: 450,
     });
   });
+  // Since DB is not configured in this test suite, queue must be 0 to prevent memory leaks
+  assert.equal(getSpendQueueSizeForTests(), 0);
+});
+
+test("flushSpendLogs cleans queue when DB is not configured", async () => {
+  await flushSpendLogs();
+  assert.equal(getSpendQueueSizeForTests(), 0);
 });
 
 test("getSpendLogs returns empty logs when DB is not configured", async () => {

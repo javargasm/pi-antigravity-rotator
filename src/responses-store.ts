@@ -30,7 +30,7 @@ export interface PersistedResponsesStore {
 }
 
 const FLUSH_DEBOUNCE_MS = 1_500;
-const MAX_ENTRIES = 500;
+const MAX_ENTRIES = 100;
 const ENTRY_TTL_MS = 6 * 60 * 60 * 1000;
 
 function now(): number {
@@ -43,7 +43,7 @@ function now(): number {
  * Maps `response_id` to the conversation state needed to continue a previous
  * turn via `previous_response_id`. Persisted via the settings repository.
  * Writes are debounced to 1.5s and coalesced if a flush is already in flight.
- * Stale entries (older than the 6h TTL) and entries over the 500-entry cap
+ * Stale entries (older than the 6h TTL) and entries over the 100-entry cap
  * are pruned automatically.
  */
 export class ResponsesStore {
