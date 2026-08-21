@@ -36,3 +36,4 @@ DEVELOPMENT_NOTES.md
 *.orig
 .DS_Store
 ollama-debug-last.json
+.codegraph/
