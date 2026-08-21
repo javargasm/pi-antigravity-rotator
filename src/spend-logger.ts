@@ -5,6 +5,7 @@ import { rotatorEnv } from "./env.js";
 
 const FLUSH_INTERVAL_MS = 5_000;
 const MAX_QUEUE_SIZE = 50;
+const MAX_QUEUE_CAP = 100;
 const DEFAULT_KEY_HASH_LABEL = "unauthenticated";
 
 const storeMessagesConfig =
@@ -19,6 +20,27 @@ let queue: SpendLog[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let isFlushing = false;
 
+export function getSpendQueueSizeForTests(): number {
+  return queue.length;
+}
+
+export function getSpendQueueItemsForTests(): SpendLog[] {
+  return [...queue];
+}
+
+export function setSpendQueueForTests(items: SpendLog[]): void {
+  queue = [...items];
+}
+
+export function resetSpendLoggerForTests(): void {
+  queue = [];
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  isFlushing = false;
+}
+
 export function generateRequestId(): string {
   return `req_${Date.now().toString(36)}_${randomBytes.randomBytes(8).toString("hex")}`;
 }
@@ -32,6 +54,11 @@ export function logSpend(
     totalTokens?: number;
   },
 ): void {
+  if (!isDbConfigured()) {
+    if (queue.length > 0) queue = [];
+    return;
+  }
+
   const pricing = MODEL_PRICING[log.model] || { inputPer1M: 0, outputPer1M: 0 };
   const promptTokens = Math.max(0, log.promptTokens || 0);
   const completionTokens = Math.max(0, log.completionTokens || 0);
@@ -71,6 +98,9 @@ export function logSpend(
     createdAt: new Date().toISOString(),
   };
 
+  if (queue.length >= MAX_QUEUE_CAP) {
+    queue.splice(0, queue.length - MAX_QUEUE_CAP + 1);
+  }
   queue.push(fullLog);
 
   if (queue.length >= MAX_QUEUE_SIZE) {
@@ -137,23 +167,52 @@ function cleanValue(val: unknown, depth = 0): unknown {
  * Flush accumulated spend logs to database.
  */
 export async function flushSpendLogs(): Promise<void> {
-  if (isFlushing || queue.length === 0 || !isDbConfigured()) return;
+  if (!isDbConfigured()) {
+    queue = [];
+    return;
+  }
+  if (isFlushing || queue.length === 0) return;
   isFlushing = true;
 
   const logsToFlush = queue;
   queue = [];
 
+  let lastProcessedIndex = -1;
   try {
-    for (const log of logsToFlush) {
-      // 1. Insert detailed spend log
+    for (let i = 0; i < logsToFlush.length; i++) {
+      const log = logsToFlush[i];
+      const dateStr = log.startTime.slice(0, 10); // YYYY-MM-DD
+      const keyHashForDaily = log.apiKeyHash || DEFAULT_KEY_HASH_LABEL;
+      const isSuccess = log.status === "success" ? 1 : 0;
+      const isFail = log.status === "failure" ? 1 : 0;
+
+      // Atomic insert: detailed log + daily aggregation in a single query CTE.
+      // If the request_id was already inserted, ins_log yields 0 rows, making
+      // the daily aggregation update completely idempotent against retries.
       await queryDb(
-        `INSERT INTO rotator_spend_logs (
-          request_id, api_key_hash, model, account_email, call_type, status,
-          prompt_tokens, completion_tokens, total_tokens, start_time, end_time,
-          ttfb_ms, duration_ms, request_messages, response_content, metadata,
-          requester_ip, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-        ON CONFLICT (request_id) DO NOTHING`,
+        `WITH ins_log AS (
+          INSERT INTO rotator_spend_logs (
+            request_id, api_key_hash, model, account_email, call_type, status,
+            prompt_tokens, completion_tokens, total_tokens, start_time, end_time,
+            ttfb_ms, duration_ms, request_messages, response_content, metadata,
+            requester_ip, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+          ON CONFLICT (request_id) DO NOTHING
+          RETURNING request_id
+        )
+        INSERT INTO rotator_daily_spend (
+          api_key_hash, model, date, prompt_tokens, completion_tokens,
+          total_requests, successful_requests, failed_requests, total_duration_ms
+        )
+        SELECT $19, $3, $20::date, $7, $8, 1, $21, $22, $13
+        FROM ins_log
+        ON CONFLICT (api_key_hash, model, date) DO UPDATE SET
+          prompt_tokens = rotator_daily_spend.prompt_tokens + EXCLUDED.prompt_tokens,
+          completion_tokens = rotator_daily_spend.completion_tokens + EXCLUDED.completion_tokens,
+          total_requests = rotator_daily_spend.total_requests + 1,
+          successful_requests = rotator_daily_spend.successful_requests + EXCLUDED.successful_requests,
+          failed_requests = rotator_daily_spend.failed_requests + EXCLUDED.failed_requests,
+          total_duration_ms = rotator_daily_spend.total_duration_ms + EXCLUDED.total_duration_ms`,
         [
           log.requestId,
           log.apiKeyHash,
@@ -173,43 +232,21 @@ export async function flushSpendLogs(): Promise<void> {
           JSON.stringify(log.metadata || {}),
           log.requesterIp,
           log.createdAt || new Date().toISOString(),
-        ],
-      );
-
-      // 2. Upsert daily aggregation
-      const dateStr = log.startTime.slice(0, 10); // YYYY-MM-DD
-      const keyHashForDaily = log.apiKeyHash || DEFAULT_KEY_HASH_LABEL;
-      const isSuccess = log.status === "success" ? 1 : 0;
-      const isFail = log.status === "failure" ? 1 : 0;
-
-      await queryDb(
-        `INSERT INTO rotator_daily_spend (
-          api_key_hash, model, date, prompt_tokens, completion_tokens,
-          total_requests, successful_requests, failed_requests, total_duration_ms
-        ) VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8)
-        ON CONFLICT (api_key_hash, model, date) DO UPDATE SET
-          prompt_tokens = rotator_daily_spend.prompt_tokens + EXCLUDED.prompt_tokens,
-          completion_tokens = rotator_daily_spend.completion_tokens + EXCLUDED.completion_tokens,
-          total_requests = rotator_daily_spend.total_requests + 1,
-          successful_requests = rotator_daily_spend.successful_requests + EXCLUDED.successful_requests,
-          failed_requests = rotator_daily_spend.failed_requests + EXCLUDED.failed_requests,
-          total_duration_ms = rotator_daily_spend.total_duration_ms + EXCLUDED.total_duration_ms`,
-        [
           keyHashForDaily,
-          log.model,
           dateStr,
-          log.promptTokens,
-          log.completionTokens,
           isSuccess,
           isFail,
-          log.durationMs,
         ],
       );
+
+      lastProcessedIndex = i;
     }
   } catch (err) {
     console.error("Failed to flush spend logs to database:", err);
-    // Put unfetched items back in queue if flush failed
-    queue = [...logsToFlush, ...queue];
+    // Put only uncommitted items back in queue and consistently enforce FIFO (keep newest, drop oldest)
+    const uncommitted = logsToFlush.slice(lastProcessedIndex + 1);
+    const combined = [...uncommitted, ...queue];
+    queue = combined.length > MAX_QUEUE_CAP ? combined.slice(-MAX_QUEUE_CAP) : combined;
   } finally {
     isFlushing = false;
   }
