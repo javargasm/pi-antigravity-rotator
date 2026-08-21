@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.2.3] - 2026-08-21
+
+### Fixed
+- **Account-scoped 429 `RESOURCE_EXHAUSTED` resilience & account lifecycle**: When an individual account exhausts its quota (returning 429 `RESOURCE_EXHAUSTED` on Claude or Gemini), the proxy now safely releases the failed account before rotating, allowing immediate retry with the next eligible account in the pool instead of failing prematurely ([#23](https://github.com/tuxevil/tuxevil-rotator/pull/23) by [@javargasm](https://github.com/javargasm)).
+- **Synchronous account leasing & atomic concurrency accounting**: `inFlightRequests` reservation and model assignment tracking now occur synchronously and indivisibly at lease time before asynchronous save or refresh operations. If activation fails, in-flight counters are rolled back and token buckets are refunded immediately ([#23](https://github.com/tuxevil/tuxevil-rotator/pull/23) by [@javargasm](https://github.com/javargasm)).
+- **Snapshot-based token refresh & generation tracking**: Provider token refreshes execute against isolated account snapshot clones. Refreshed tokens are published only if the credential generation has not changed during flight, cleanly discarding stale tokens if credentials were reconfigured ([#23](https://github.com/tuxevil/tuxevil-rotator/pull/23) by [@javargasm](https://github.com/javargasm)).
+- **Provider-scoped token publication**: Token refreshes for multi-provider accounts (e.g. Google Antigravity + OpenAI Codex) now update strictly provider-owned fields, preventing cross-provider token and credential overwrites ([#23](https://github.com/tuxevil/tuxevil-rotator/pull/23) by [@javargasm](https://github.com/javargasm)).
+- **Identity resolution with non-secret credential fingerprinting**: Duplicate-email accounts without stable provider IDs are resolved using a 12-character SHA-256 non-secret credential fingerprint, isolating runtime state during `replaceConfig` ([#23](https://github.com/tuxevil/tuxevil-rotator/pull/23) by [@javargasm](https://github.com/javargasm)).
+- **Exact incarnation exclusion on retry**: `rotateToNext(model, failedAccount)` binds exclusion strictly to the exact runtime object instance, preventing false 503 errors when an account is replaced by a healthy incarnation ([#23](https://github.com/tuxevil/tuxevil-rotator/pull/23) by [@javargasm](https://github.com/javargasm)).
+
 ## [3.2.2] - 2026-08-21
 
 ### Fixed
