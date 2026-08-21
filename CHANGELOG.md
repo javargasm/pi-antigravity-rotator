@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [3.2.2] - 2026-08-21
+
+### Fixed
+- **Spend-logger memory leak in file-based storage mode**: When running in default file-based storage mode (without PostgreSQL), `flushSpendLogs()` returned early without draining or clearing the log `queue`. Since requests with sanitized payloads (up to 512 KB each) were being enqueued, heap memory grew indefinitely. `logSpend()` now short-circuits and clears `queue` when PostgreSQL is not configured ([#22](https://github.com/tuxevil/tuxevil-rotator/pull/22) by [@javargasm](https://github.com/javargasm)).
+- **Atomic PostgreSQL spend log insert & daily aggregation via CTE**: Combined `rotator_spend_logs` insert and `rotator_daily_spend` upsert into a single atomic Common Table Expression query. Re-attempted inserts with existing `request_id` values return 0 rows from `ins_log`, ensuring daily metrics are not double-counted on retries. On database errors, only uncommitted logs are re-enqueued and bounded by a strict FIFO cap (`MAX_QUEUE_CAP = 100`) ([#22](https://github.com/tuxevil/tuxevil-rotator/pull/22) by [@javargasm](https://github.com/javargasm)).
+- **Unbounded Virtual Key cache bounded**: Added `KEY_CACHE_MAX = 500` with 1-minute TTL and FIFO eviction to `keyCache` in `src/virtual-keys.ts`, preventing memory exhaustion from negative lookup caching and key scanning ([#22](https://github.com/tuxevil/tuxevil-rotator/pull/22) by [@javargasm](https://github.com/javargasm)).
+- `/v1/models` no longer reports the outdated 500K Claude context window.
 
 ### Added
 - **Official per-model context windows surfaced across providers**: New `src/providers/google-antigravity/catalog.ts` publishes the upstream context windows for Claude (Opus 4.6 / Sonnet 4.6 → 1M, Opus 4.5 / Sonnet 4.5 → 200K), Google Gemini (3.1 Pro, 3 Pro, 3 Flash variants, 2.5 Pro/Flash → 1M each), and `gpt-oss-120b` (131,072). The new `getAntigravityContextWindow(model)` helper is the single source of truth.
@@ -11,9 +17,6 @@
 - **OpenAI Codex catalog updated to GPT-5.6 family official 1.05M window**: `CODEX_CONTEXT_WINDOW` raised from 272_000 to 1_050_000 per `https://platform.openai.com/docs/models`. The 2M safety cap on `/models`-discovered ids is preserved.
 - **OpenCode Zen catalog now exposes a per-id helper** (`getOpenCodeZenContextWindow`) that documents the placeholder 128K window until OpenCode publishes per-model specs.
 - **`MODEL_CATALOG` in `src/compat.ts`**: Claude Opus 4.6 / Sonnet 4.6 context window raised from 500_000 to 1_000_000 to match Anthropic's published spec.
-
-### Fixed
-- `/v1/models` no longer reports the outdated 500K Claude context window.
 
 ## [3.2.1] - 2026-08-16
 
