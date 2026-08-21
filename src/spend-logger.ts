@@ -169,8 +169,10 @@ export async function flushSpendLogs(): Promise<void> {
   const logsToFlush = queue;
   queue = [];
 
+  let lastProcessedIndex = -1;
   try {
-    for (const log of logsToFlush) {
+    for (let i = 0; i < logsToFlush.length; i++) {
+      const log = logsToFlush[i];
       // 1. Insert detailed spend log
       await queryDb(
         `INSERT INTO rotator_spend_logs (
@@ -231,11 +233,15 @@ export async function flushSpendLogs(): Promise<void> {
           log.durationMs,
         ],
       );
+
+      lastProcessedIndex = i;
     }
   } catch (err) {
     console.error("Failed to flush spend logs to database:", err);
-    // Put unfetched items back in queue if flush failed, but cap to MAX_QUEUE_CAP
-    queue = [...logsToFlush, ...queue].slice(0, MAX_QUEUE_CAP);
+    // Put only uncommitted items back in queue and consistently enforce FIFO (keep newest, drop oldest)
+    const uncommitted = logsToFlush.slice(lastProcessedIndex + 1);
+    const combined = [...uncommitted, ...queue];
+    queue = combined.length > MAX_QUEUE_CAP ? combined.slice(-MAX_QUEUE_CAP) : combined;
   } finally {
     isFlushing = false;
   }

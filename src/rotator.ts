@@ -2077,7 +2077,6 @@ export class AccountRotator {
     const KEEP_MINUTES_MS = 12 * 3600 * 1000; // keep 12h of minutes
     const KEEP_HOURS_MS = 60 * 86400 * 1000; // keep 60d of hours
     const KEEP_DAYS_MS = 60 * 86400 * 1000; // keep 60d of days
-    const KEEP_MONTHS_MS = 730 * 86400 * 1000; // keep 24 months of month rollups
 
     // Helper: parse period string to epoch ms (approximate, enough for cutoff)
     const periodToMs = (p: string): number =>
@@ -2189,12 +2188,6 @@ export class AccountRotator {
         (b) => periodToMs(b.period) >= dayCutoff,
       );
     }
-
-    // Months older than 24 months → drop
-    const monthCutoff = nowMs - KEEP_MONTHS_MS;
-    this.tokenBuckets.months = this.tokenBuckets.months.filter(
-      (b) => periodToMs(b.period) >= monthCutoff,
-    );
   }
 
   private mergeBucket(target: TokenBucket, source: TokenBucket): void {

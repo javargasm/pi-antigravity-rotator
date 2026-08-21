@@ -48,7 +48,7 @@ test("generateRequestId produces unique prefixed strings", () => {
 
 test("logSpend enqueues log without throwing and keeps queue empty when DB is not configured", () => {
   resetSpendLoggerForTests();
-  assert.doesNotThrow(() => {
+  for (let i = 0; i < 120; i++) {
     logSpend({
       model: "gemini-3.5-flash-high",
       callType: "chat_completion",
@@ -59,8 +59,8 @@ test("logSpend enqueues log without throwing and keeps queue empty when DB is no
       endTime: new Date().toISOString(),
       durationMs: 450,
     });
-  });
-  // Since DB is not configured in this test suite, queue must be 0 to prevent memory leaks
+  }
+  // Since DB is not configured in this test suite, queue must remain 0 to prevent memory leaks
   assert.equal(getSpendQueueSizeForTests(), 0);
 });
 
