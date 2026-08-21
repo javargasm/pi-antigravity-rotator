@@ -51,6 +51,11 @@ async function ensureGoogleToken(account: AccountRuntime): Promise<void> {
       `Account ${account.config.email} has no refreshToken; re-run login`,
     );
   }
+  if (account.config.refreshToken.startsWith("enc:")) {
+    throw new Error(
+      `Account ${account.config.email} has an encrypted refreshToken (enc:*) but it could not be decrypted. Set TUXEVIL_ROTATOR_ENCRYPTION_KEY or re-run login.`,
+    );
+  }
   const oauth = getOAuthClientConfig();
   const response = await fetchWithRetry(TOKEN_URL, {
     method: "POST",

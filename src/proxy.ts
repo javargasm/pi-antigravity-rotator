@@ -1139,17 +1139,6 @@ export async function withRotation<T>(
     };
   };
 
-  const rotateAndRelease = async (): Promise<AccountRuntime | null> => {
-    const nextAccount = await rotator.rotateToNext(model);
-    if (nextAccount) {
-      rotator.finishRequest(
-        nextAccount,
-        routingModelKey(rotator, model),
-      );
-    }
-    return nextAccount;
-  };
-
   const maxRetries = getStreamRecoveryMaxRetries(rotator);
   const maxAttempts = maxRetries + 1;
 
@@ -1164,6 +1153,17 @@ export async function withRotation<T>(
     const displayModelKey = resolveDisplayModelKey(body.displayModel || model);
     const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
     const requestStartMs = Date.now();
+    let accountReleased = false;
+    const releaseCurrentAccount = (): void => {
+      if (accountReleased) return;
+      accountReleased = true;
+      rotator.finishRequest(account, modelKey);
+    };
+    const rotateAndRelease = async (): Promise<AccountRuntime | null> => {
+      releaseCurrentAccount();
+      const nextAccount = await rotator.rotateToNext(model, account);
+      return nextAccount;
+    };
     const logRequestEnd = (status: string | number, extra = ""): void => {
       log(
         `[${requestId}] END account=${label} model=${model} status=${status}${extra ? ` ${extra}` : ""} totalMs=${Date.now() - requestStartMs}`,
@@ -1258,7 +1258,7 @@ export async function withRotation<T>(
       const shouldRotate = rotator.recordRequest(account, model);
       logRequestEnd(response.status, `endpoint=${endpoint}`);
       if (shouldRotate) {
-        await rotateAndRelease();
+        await rotator.rotateToNext(model, account);
       }
       return { ok: true, result, endpoint, context };
     } catch (err) {
@@ -1317,7 +1317,7 @@ export async function withRotation<T>(
       }
       continue;
     } finally {
-      rotator.finishRequest(account, routingModelKey(rotator, model));
+      releaseCurrentAccount();
     }
   }
 
@@ -1477,16 +1477,6 @@ async function handleProxyRequest(
       }),
     );
   };
-  const rotateAndRelease = async (): Promise<AccountRuntime | null> => {
-    const nextAccount = await rotator.rotateToNext(body.model);
-    if (nextAccount) {
-      rotator.finishRequest(
-        nextAccount,
-        routingModelKey(rotator, body.model),
-      );
-    }
-    return nextAccount;
-  };
   const sendFailureDecision = (decision: UpstreamFailureDecision): void => {
     if (decision.noReplacementReason) {
       sendNoAccountsAvailable(decision.noReplacementReason);
@@ -1564,6 +1554,20 @@ async function handleProxyRequest(
     const modelKey = rotator.resolveQuotaModelKeyForDisplay(body.model) ?? body.model; // quota routing
     const displayModelKey = resolveDisplayModelKey(body.model); // metrics/logs
     const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
+    let accountReleased = false;
+    const releaseCurrentAccount = (): void => {
+      if (accountReleased) return;
+      accountReleased = true;
+      rotator.finishRequest(
+        account,
+        routingModelKey(rotator, body.model),
+      );
+    };
+    const rotateAndRelease = async (): Promise<AccountRuntime | null> => {
+      releaseCurrentAccount();
+      const nextAccount = await rotator.rotateToNext(body.model, account);
+      return nextAccount;
+    };
     proxyLog(
       `[${requestId}] START account=${label} model=${body.model} attempt=${attempt + 1}`,
     );
@@ -1746,7 +1750,7 @@ async function handleProxyRequest(
       res.end();
 
       if (shouldRotate) {
-        await rotateAndRelease();
+        await rotator.rotateToNext(body.model, account);
       }
       return;
     } catch (err) {
@@ -1781,10 +1785,7 @@ async function handleProxyRequest(
       }
       continue;
     } finally {
-      rotator.finishRequest(
-        account,
-        routingModelKey(rotator, body.model),
-      );
+      releaseCurrentAccount();
       if (onComplete) onComplete();
     }
   }
@@ -1850,6 +1851,16 @@ async function handleCodeAssistPassthrough(
       return;
     }
 
+    let accountReleased = false;
+    const releaseCurrentAccount = (): void => {
+      if (accountReleased) return;
+      accountReleased = true;
+      rotator.finishRequest(
+        account,
+        resolveQuotaModelKey(CODE_ASSIST_ROUTING_MODEL) ?? undefined,
+      );
+    };
+
     try {
       // getActiveAccount performs the normal account lifecycle check, but the
       // explicit provider call is required for dual Google+Ollama accounts.
@@ -1873,22 +1884,16 @@ async function handleCodeAssistPassthrough(
         res.end(JSON.stringify({ error: "Code Assist upstream request failed" }));
         return;
       }
-      const nextAccount = await rotator.rotateToNext(CODE_ASSIST_ROUTING_MODEL);
+      releaseCurrentAccount();
+      const nextAccount = await rotator.rotateToNext(CODE_ASSIST_ROUTING_MODEL, account);
       if (nextAccount) {
-        rotator.finishRequest(
-          nextAccount,
-          resolveQuotaModelKey(CODE_ASSIST_ROUTING_MODEL) ?? undefined,
-        );
         continue;
       }
       res.writeHead(503, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "No replacement Google account available" }));
       return;
     } finally {
-      rotator.finishRequest(
-        account,
-        resolveQuotaModelKey(CODE_ASSIST_ROUTING_MODEL) ?? undefined,
-      );
+      releaseCurrentAccount();
     }
   }
 }

@@ -1,5 +1,4 @@
-// Account rotation and token management with per-model routing
-
+import { createHash } from "node:crypto";
 import {
   type AccountConfig,
   type AccountRuntime,
@@ -10,6 +9,7 @@ import {
   type ModelQuota,
   type ModelRotationState,
   type PersistedState,
+  type ProviderCredential,
   type RoutingAccountDiagnostic,
   type RoutingModelDiagnostics,
   type RoutingRejectionReason,
@@ -42,6 +42,7 @@ import {
   saveAccountsConfig,
   removeAccountFromConfig,
   mergeCredentials,
+  normalizeAccountConfig,
 } from "./account-store.js";
 import { isHostedOAuthConfigured } from "./providers/google-antigravity/oauth.js";
 import type { RequestBody } from "./proxy.js";
@@ -82,6 +83,125 @@ import {
   setCachedTokenUsage,
 } from "./db-store.js";
 
+function credentialFingerprint(secret?: string): string {
+  if (!secret) return "";
+  return createHash("sha256").update(secret).digest("hex").slice(0, 12);
+}
+
+export function getProviderCredentialDetails(
+  norm: AccountConfig,
+  cred?: ProviderCredential,
+): {
+  provider: string;
+  projectId: string;
+  providerAccountId: string;
+  secret: string;
+  fingerprint: string;
+} {
+  const provider = cred?.provider ?? DEFAULT_PROVIDER;
+  let projectId = cred?.projectId || "";
+  let providerAccountId = cred?.providerAccountId || "";
+  let secret = cred?.refreshToken || cred?.apiKey || "";
+
+  if (provider === "google-antigravity") {
+    projectId ||= norm.projectId || "";
+    secret ||= norm.refreshToken || norm.apiKey || "";
+  } else if (provider === "openai-codex") {
+    providerAccountId ||= norm.codexAccountId || "";
+    secret ||= norm.codexRefreshToken || "";
+  }
+
+  const fingerprint = !projectId && !providerAccountId && secret ? credentialFingerprint(secret) : "";
+  return { provider, projectId, providerAccountId, secret, fingerprint };
+}
+
+export function getAccountIdentity(account: AccountConfig | AccountRuntime): string {
+  const config = "config" in account ? account.config : account;
+  const norm = normalizeAccountConfig(config);
+  const email = norm.email.toLowerCase().trim();
+  const creds = (norm.credentials ?? [])
+    .slice()
+    .sort((a, b) => a.provider.localeCompare(b.provider))
+    .map((c) => {
+      const details = getProviderCredentialDetails(norm, c);
+      return `${details.provider}:${details.projectId}:${details.providerAccountId}:${details.fingerprint}`;
+    })
+    .join("|");
+  if (!creds) {
+    const details = getProviderCredentialDetails(norm, { provider: DEFAULT_PROVIDER });
+    return `${email}#${details.provider}:${details.projectId}:${details.providerAccountId}:${details.fingerprint}`;
+  }
+  return `${email}#${creds}`;
+}
+
+export function areAccountIdentitiesCompatible(
+  incomingConfig: AccountConfig,
+  existingConfig: AccountConfig,
+): boolean {
+  const normInc = normalizeAccountConfig(incomingConfig);
+  const normExt = normalizeAccountConfig(existingConfig);
+  if (normInc.email.toLowerCase().trim() !== normExt.email.toLowerCase().trim()) {
+    return false;
+  }
+
+  const incCreds = normInc.credentials ?? [];
+  const extCreds = normExt.credentials ?? [];
+
+  let hadOverlap = false;
+  for (const inc of incCreds) {
+    const ext = extCreds.find((c) => c.provider === inc.provider);
+    if (ext) {
+      hadOverlap = true;
+      const incDetails = getProviderCredentialDetails(normInc, inc);
+      const extDetails = getProviderCredentialDetails(normExt, ext);
+
+      if (incDetails.projectId && extDetails.projectId && incDetails.projectId !== extDetails.projectId) {
+        return false;
+      }
+      if (incDetails.providerAccountId && extDetails.providerAccountId && incDetails.providerAccountId !== extDetails.providerAccountId) {
+        return false;
+      }
+      if (!incDetails.projectId && !extDetails.projectId && !incDetails.providerAccountId && !extDetails.providerAccountId) {
+        if (incDetails.secret && extDetails.secret && incDetails.secret !== extDetails.secret) {
+          return false;
+        }
+      }
+    }
+  }
+
+  if (hadOverlap) {
+    return true;
+  }
+
+  const incDef = getProviderCredentialDetails(normInc, { provider: DEFAULT_PROVIDER });
+  const extDef = getProviderCredentialDetails(normExt, { provider: DEFAULT_PROVIDER });
+  if (incDef.projectId && extDef.projectId && incDef.projectId !== extDef.projectId) {
+    return false;
+  }
+  if (incDef.providerAccountId && extDef.providerAccountId && incDef.providerAccountId !== extDef.providerAccountId) {
+    return false;
+  }
+  if (!incDef.projectId && !extDef.projectId && !incDef.providerAccountId && !extDef.providerAccountId) {
+    if (incDef.secret && extDef.secret && incDef.secret !== extDef.secret) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+export function getCredentialGeneration(
+  account: AccountRuntime | AccountConfig,
+  providerId: string,
+): string {
+  const config = "config" in account ? account.config : account;
+  const norm = normalizeAccountConfig(config);
+  const cred = norm.credentials?.find((c) => c.provider === providerId);
+  const details = getProviderCredentialDetails(norm, cred ?? { provider: providerId });
+  if (!cred && !details.secret) return "none";
+  return `${providerId}:${details.projectId}:${details.providerAccountId}:${details.secret}`;
+}
+
 const rotatorLogger = logger.child("rotator");
 
 function currentUtcDay(now = Date.now()): string {
@@ -115,6 +235,8 @@ export class AccountRotator {
   private defaultIndex = 0;
   private startTime = Date.now();
   private quotaPollTimer: ReturnType<typeof setInterval> | null = null;
+  private quotaInitialPollTimer: ReturnType<typeof setTimeout> | null = null;
+  private inFlightRefreshes = new WeakMap<AccountRuntime, Map<string, Promise<void>>>();
   private protectivePauseUntil = 0;
   private protectivePauseReason: string | null = null;
   private allowFreshWindowStarts = true;
@@ -613,12 +735,16 @@ export class AccountRotator {
     this.log(`Quota polling every ${Math.round(intervalMs / 1000)}s`);
 
     // Initial poll (delayed 2s to allow token refresh first)
-    setTimeout(() => this.pollAllQuotas(), 2000);
+    this.quotaInitialPollTimer = setTimeout(() => this.pollAllQuotas(), 2000);
 
     this.quotaPollTimer = setInterval(() => this.pollAllQuotas(), intervalMs);
   }
 
   stopQuotaPolling(): void {
+    if (this.quotaInitialPollTimer) {
+      clearTimeout(this.quotaInitialPollTimer);
+      this.quotaInitialPollTimer = null;
+    }
     if (this.quotaPollTimer) {
       clearInterval(this.quotaPollTimer);
       this.quotaPollTimer = null;
@@ -1000,7 +1126,7 @@ export class AccountRotator {
     return best;
   }
 
-  private countModelAssignment(modelKey: string): void {
+  countModelAssignment(modelKey: string): void {
     const state = this.modelState.get(modelKey);
     if (state) {
       state.requestsOnActiveAccount++;
@@ -1025,11 +1151,7 @@ export class AccountRotator {
     now: number = Date.now(),
     excludeIdx?: number,
   ): Promise<AccountRuntime | null> {
-    const account = await this.rotateModel(modelKey, now, excludeIdx);
-    if (account) {
-      this.countModelAssignment(modelKey);
-    }
-    return account;
+    return this.rotateModel(modelKey, now, excludeIdx, true);
   }
 
   private rollDailySafetyIfNeeded(now: number): void {
@@ -1655,11 +1777,18 @@ export class AccountRotator {
         }
       }
       this.startRequest(current, modelKey ?? undefined);
+      if (modelKey && state) {
+        state.requestsOnActiveAccount++;
+        this.scheduleStateSave();
+      }
       try {
         await this.ensureValidTokenForModel(current, modelKey);
-        if (modelKey) this.countModelAssignment(modelKey);
         return current;
       } catch (err) {
+        if (modelKey && state) {
+          state.requestsOnActiveAccount = Math.max(0, state.requestsOnActiveAccount - 1);
+          this.scheduleStateSave();
+        }
         this.refundTokenBucket(current, Date.now());
         this.finishRequest(current, modelKey ?? undefined);
         if (modelKey && this.isCodexPoolKey(modelKey)) {
@@ -1673,7 +1802,8 @@ export class AccountRotator {
     if (modelKey) {
       return this.rotateModelForRequest(modelKey, now, state ? idx : -1);
     }
-    return this.rotateDefault();
+    const defaultAcc = await this.rotateDefault(now, true);
+    return defaultAcc;
   }
 
   private async restorePreferredModelAccount(
@@ -1710,8 +1840,8 @@ export class AccountRotator {
       modelKey,
       preferred,
       preferredIndex,
+      true,
     );
-    this.countModelAssignment(modelKey);
     return restored;
   }
 
@@ -1721,6 +1851,7 @@ export class AccountRotator {
     now: number = Date.now(),
     excludeIdx: number = this.modelState.get(modelKey)?.activeAccountIndex ??
       -1,
+    forRequest = false,
   ): Promise<AccountRuntime | null> {
     const best = this.pickBestModelAccount(modelKey, now, excludeIdx);
 
@@ -1751,13 +1882,23 @@ export class AccountRotator {
         `[${modelKey}] Rotated to ${best.config.label || best.config.email} [${timerType}] (quota: ${quota >= 0 ? quota + "%" : "unknown"})`,
       );
       try {
-        return await this.activateModelAccount(modelKey, best, stickyAccountIndex);
+        return await this.activateModelAccount(
+          modelKey,
+          best,
+          stickyAccountIndex,
+          forRequest,
+        );
       } catch (error) {
         if (!this.isCodexPoolKey(modelKey)) throw error;
         // A bad Codex refresh token is provider-scoped. The failed account is
         // marked invalid by ensureValidTokenForProvider, so retry selection
         // with the next Codex account without touching Google/Ollama pools.
-        return this.rotateModel(modelKey, now, this.accounts.indexOf(best));
+        return this.rotateModel(
+          modelKey,
+          now,
+          this.accounts.indexOf(best),
+          forRequest,
+        );
       }
     }
 
@@ -1809,25 +1950,34 @@ export class AccountRotator {
     modelKey: string,
     account: AccountRuntime,
     stickyAccountIndex?: number,
+    forRequest = false,
   ): Promise<AccountRuntime> {
+    if (forRequest) {
+      this.startRequest(account, modelKey);
+    }
     const newIdx = this.accounts.indexOf(account);
     const quota = this.getModelQuota(account, modelKey);
-    this.modelState.set(modelKey, {
+    const state: ModelRotationState = {
       activeAccountIndex: newIdx,
       stickyAccountIndex: this.isQuotaAwarePolicy()
         ? stickyAccountIndex ?? newIdx
         : undefined,
       quotaAtRotationStart: quota,
-      requestsOnActiveAccount: 0,
-    });
-    await this.saveState();
-    this.startRequest(account, modelKey);
+      requestsOnActiveAccount: forRequest ? 1 : 0,
+    };
+    this.modelState.set(modelKey, state);
     try {
+      await this.saveState();
       await this.ensureValidTokenForModel(account, modelKey);
       return account;
     } catch (err) {
-      this.refundTokenBucket(account, Date.now());
-      this.finishRequest(account, modelKey);
+      if (forRequest) {
+        if (this.modelState.get(modelKey) === state) {
+          state.requestsOnActiveAccount = Math.max(0, state.requestsOnActiveAccount - 1);
+        }
+        this.refundTokenBucket(account, Date.now());
+        this.finishRequest(account, modelKey);
+      }
       throw err;
     }
   }
@@ -1835,11 +1985,13 @@ export class AccountRotator {
   // Fallback rotation when model can't be resolved
   private async rotateDefault(
     now: number = Date.now(),
+    forRequest = false,
+    excludeIdx = this.defaultIndex,
   ): Promise<AccountRuntime | null> {
     let best: AccountRuntime | null = null;
 
     for (let i = 0; i < this.accounts.length; i++) {
-      if (i === this.defaultIndex) continue;
+      if (i === excludeIdx) continue;
       const account = this.accounts[i];
       if (this.isAvailable(account, now)) {
         best = account;
@@ -1848,18 +2000,22 @@ export class AccountRotator {
     }
 
     if (best) {
+      if (forRequest) {
+        this.startRequest(best);
+      }
       this.defaultIndex = this.accounts.indexOf(best);
       this.log(
         `[default] Rotated to ${best.config.label || best.config.email}`,
       );
-      await this.saveState();
-      this.startRequest(best);
       try {
+        await this.saveState();
         await this.ensureValidToken(best);
         return best;
       } catch (err) {
-        this.refundTokenBucket(best, Date.now());
-        this.finishRequest(best);
+        if (forRequest) {
+          this.refundTokenBucket(best, Date.now());
+          this.finishRequest(best);
+        }
         throw err;
       }
     }
@@ -1888,10 +2044,31 @@ export class AccountRotator {
   }
 
   // Force rotation for a model (called from proxy on 429 etc.)
-  async rotateToNext(model?: string): Promise<AccountRuntime | null> {
+  async rotateToNext(
+    model?: string,
+    failedAccount?: AccountRuntime | number | string,
+  ): Promise<AccountRuntime | null> {
     if (this.isProtectivePauseActive(Date.now())) return null;
     const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
-    return modelKey ? this.rotateModel(modelKey) : this.rotateDefault();
+    let excludeIdx: number;
+    if (typeof failedAccount === "number") {
+      excludeIdx = failedAccount;
+    } else if (typeof failedAccount === "string") {
+      excludeIdx = this.accounts.findIndex(
+        (a) =>
+          getAccountIdentity(a.config) === failedAccount ||
+          a.config.email.toLowerCase() === failedAccount.toLowerCase(),
+      );
+    } else if (failedAccount && typeof failedAccount === "object") {
+      excludeIdx = this.accounts.indexOf(failedAccount);
+    } else {
+      excludeIdx = modelKey
+        ? this.modelState.get(modelKey)?.activeAccountIndex ?? -1
+        : this.defaultIndex;
+    }
+    return modelKey
+      ? this.rotateModel(modelKey, Date.now(), excludeIdx)
+      : this.rotateDefault(Date.now(), false, excludeIdx);
   }
 
   // Record a successful request. Returns true if rotation is needed.
@@ -2732,10 +2909,10 @@ export class AccountRotator {
     }
     const adapter = getProviderForAccount(account.config);
     try {
-      await adapter.ensureValidToken(account);
+      await this.ensureValidTokenForProvider(account, adapter.id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.startsWith("Token refresh failed")) {
+      if (msg.startsWith("Token refresh failed") || msg.startsWith("Token refresh error:")) {
         this.markError(account, msg);
         throw err;
       }
@@ -2749,22 +2926,111 @@ export class AccountRotator {
     account: AccountRuntime,
     providerId: string,
   ): Promise<void> {
-    const adapter = getProviderAdapter(providerId);
-    try {
-      await adapter.ensureValidToken(account);
-    } catch (error) {
-      if (
-        providerId === "openai-codex" &&
-        (error instanceof CodexOAuthError ||
-          (typeof error === "object" && error !== null &&
-            (error as { reloginRequired?: unknown }).reloginRequired === true))
-      ) {
-        const reason = error instanceof Error
-          ? error.message
-          : "Codex credential requires re-authentication";
-        this.markProviderInvalid(account, providerId, reason);
+    const startGen = getCredentialGeneration(account, providerId);
+    const flightKey = `${providerId}:${startGen}`;
+
+    let providerMap = this.inFlightRefreshes.get(account);
+    if (!providerMap) {
+      providerMap = new Map();
+      this.inFlightRefreshes.set(account, providerMap);
+    }
+    const existing = providerMap.get(flightKey);
+    if (existing) {
+      await existing;
+      const currentGen = getCredentialGeneration(account, providerId);
+      if (currentGen === startGen) {
+        return;
       }
-      throw error;
+      return this.ensureValidTokenForProvider(account, providerId);
+    }
+
+    const refreshPromise = (async () => {
+      const adapter = getProviderAdapter(providerId);
+      const snapshotAccount: AccountRuntime = {
+        ...account,
+        config: {
+          ...account.config,
+          credentials: (account.config.credentials ?? []).map((c) => ({ ...c })),
+        },
+        providerTokens: account.providerTokens
+          ? { ...account.providerTokens }
+          : {},
+      };
+
+      try {
+        await adapter.ensureValidToken(snapshotAccount);
+      } catch (error) {
+        const currentGen = getCredentialGeneration(account, providerId);
+        if (currentGen !== startGen) {
+          return;
+        }
+        if (
+          providerId === "openai-codex" &&
+          (error instanceof CodexOAuthError ||
+            (typeof error === "object" &&
+              error !== null &&
+              (error as { reloginRequired?: unknown }).reloginRequired === true))
+        ) {
+          const reason =
+            error instanceof Error
+              ? error.message
+              : "Codex credential requires re-authentication";
+          this.markProviderInvalid(account, providerId, reason);
+        }
+        throw error;
+      }
+
+      const currentGen = getCredentialGeneration(account, providerId);
+      if (currentGen !== startGen) {
+        return;
+      }
+
+      // Publish ONLY the state owned by providerId
+      if (providerId === "google-antigravity" || providerId === DEFAULT_PROVIDER) {
+        account.accessToken = snapshotAccount.accessToken;
+        account.tokenExpires = snapshotAccount.tokenExpires;
+        if (snapshotAccount.config.refreshToken !== undefined) {
+          account.config.refreshToken = snapshotAccount.config.refreshToken;
+        }
+      } else {
+        if (snapshotAccount.providerTokens?.[providerId]) {
+          account.providerTokens ??= {};
+          account.providerTokens[providerId] = snapshotAccount.providerTokens[providerId];
+        }
+        if (providerId === "openai-codex" && snapshotAccount.config.codexRefreshToken !== undefined) {
+          account.config.codexRefreshToken = snapshotAccount.config.codexRefreshToken;
+        }
+      }
+
+      // Update ONLY providerId's credential in account.config.credentials
+      const snapshotCred = snapshotAccount.config.credentials?.find((c) => c.provider === providerId);
+      if (snapshotCred) {
+        if (!account.config.credentials) {
+          account.config.credentials = [{ ...snapshotCred }];
+        } else {
+          const idx = account.config.credentials.findIndex((c) => c.provider === providerId);
+          if (idx >= 0) {
+            account.config.credentials[idx] = { ...account.config.credentials[idx], ...snapshotCred };
+          } else {
+            account.config.credentials.push({ ...snapshotCred });
+          }
+        }
+      }
+      account.consecutiveErrors = 0;
+    })();
+
+    providerMap.set(flightKey, refreshPromise);
+    try {
+      await refreshPromise;
+      const currentGen = getCredentialGeneration(account, providerId);
+      if (currentGen !== startGen) {
+        return this.ensureValidTokenForProvider(account, providerId);
+      }
+    } finally {
+      providerMap.delete(flightKey);
+      if (providerMap.size === 0) {
+        this.inFlightRefreshes.delete(account);
+      }
     }
   }
 
@@ -3164,22 +3430,39 @@ export class AccountRotator {
 
   async replaceConfig(nextConfig: Config): Promise<void> {
     const normalized = applyConfigDefaults(nextConfig);
-    const previous = new Map(
-      this.accounts.map((account) => [account.config.email, account]),
-    );
-    const mergedAccounts = normalized.accounts.map((config) => {
-      const existing = previous.get(config.email);
-      if (existing) {
-        const mergedConfig = {
+    const unmatchedExisting = [...this.accounts];
+    const matchAndReuseAccount = (config: AccountConfig): AccountRuntime => {
+      const targetId = getAccountIdentity(config);
+      const exactIdx = unmatchedExisting.findIndex(
+        (a) => getAccountIdentity(a.config) === targetId,
+      );
+      if (exactIdx !== -1) {
+        const [existing] = unmatchedExisting.splice(exactIdx, 1);
+        existing.config = {
           ...existing.config,
           ...config,
           credentials: mergeCredentials(existing.config.credentials, config.credentials),
         };
-        return {
-          ...existing,
-          config: mergedConfig,
-        };
+        return existing;
       }
+
+      const matchingIndices: number[] = [];
+      for (let i = 0; i < unmatchedExisting.length; i++) {
+        if (areAccountIdentitiesCompatible(config, unmatchedExisting[i].config)) {
+          matchingIndices.push(i);
+        }
+      }
+
+      if (matchingIndices.length === 1) {
+        const [existing] = unmatchedExisting.splice(matchingIndices[0], 1);
+        existing.config = {
+          ...existing.config,
+          ...config,
+          credentials: mergeCredentials(existing.config.credentials, config.credentials),
+        };
+        return existing;
+      }
+
       return {
         config,
         accessToken: null,
@@ -3212,7 +3495,9 @@ export class AccountRotator {
           lastRefillAt: Date.now(),
         },
       };
-    });
+    };
+
+    const mergedAccounts = normalized.accounts.map(matchAndReuseAccount);
     this.config = { ...normalized, accounts: mergedAccounts.map((account) => account.config) };
     this.accounts = mergedAccounts;
     await saveAccountsConfig(this.config);

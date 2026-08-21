@@ -97,7 +97,7 @@ function makeRotator(
 	return {
 		getActiveAccount: async () => accounts[activeIndex],
 		getRetryAfterMs: () => 0,
-		rotateToNext: async () => {
+		rotateToNext: async (_model?: string, _failedAccount?: AccountRuntime | number | string) => {
 			if (activeIndex >= accounts.length - 1) return null;
 			activeIndex += 1;
 			tracking.rotations!++;
@@ -475,9 +475,9 @@ describe("proxy e2e: 429 rate-limited", () => {
 			assert.equal(tracking.markExhausted, 1);
 			assert.equal(tracking.recordProvider429, 1);
 			assert.equal(tracking.rotations, 1);
-			// rotateToNext briefly starts/releases the reserved account; the next
-			// loop starts/releases it again for the actual retry.
-			assert.equal(tracking.finishRequest, 3, "failed account and reservation lifecycle must be balanced");
+			// Failed account is released on error before rotation, and retry
+			// account is released after successful completion.
+			assert.equal(tracking.finishRequest, 2, "failed account and retry request lifecycle must be balanced");
 		} finally {
 			await upstream.close();
 		}
