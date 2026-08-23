@@ -127,8 +127,8 @@ The main configuration file. Created automatically by the `login` command, and e
   "requestsPerRotation": 5,
   "rotateOnQuotaDrop": 20,
   "quotaPollIntervalMs": 300000,
-  "maxConcurrentRequestsPerAccount": 1,
-  "maxConcurrentRequestsPerProjectModel": 1,
+  "maxConcurrentRequestsPerAccount": 5,
+  "maxConcurrentRequestsPerProjectModel": 5,
   "projectCircuitBreaker429Threshold": 3,
   "projectCircuitBreakerWindowMs": 600000,
   "projectCircuitBreakerCooldownMs": 3600000,
@@ -167,8 +167,8 @@ The main configuration file. Created automatically by the `login` command, and e
 | `requestsPerRotation` | `5` | Max per-model requests before attempting request-count rotation |
 | `rotateOnQuotaDrop` | `20` | Rotate when a model's quota drops this many %. Set to `0` to disable |
 | `quotaPollIntervalMs` | `300000` | Quota poll interval in ms (5 minutes) |
-| `maxConcurrentRequestsPerAccount` | `1` | Max simultaneous requests allowed per account |
-| `maxConcurrentRequestsPerProjectModel` | `1` | Max simultaneous requests allowed across accounts sharing the same `projectId` for the same quota model |
+| `maxConcurrentRequestsPerAccount` | `5` | Max simultaneous requests allowed per account across model pools. Overflow waits in a FIFO queue for up to 300 seconds |
+| `maxConcurrentRequestsPerProjectModel` | `5` | Max simultaneous requests allowed across accounts sharing the same `projectId` for the same quota model |
 | `projectCircuitBreaker429Threshold` | `3` | Unique accounts from the same `projectId` that must hit provider `429` before pausing that project/model |
 | `projectCircuitBreakerWindowMs` | `600000` | Rolling window for the project/model `429` circuit breaker |
 | `projectCircuitBreakerCooldownMs` | `3600000` | Minimum project/model pause after the circuit breaker trips |
@@ -190,6 +190,16 @@ The main configuration file. Created automatically by the `login` command, and e
 | `idempotencyWindowMs` | `2000` | Retention window for completed idempotent request results |
 | `streamRecoveryMaxRetries` | `2` | Maximum account rotations for upstream failures before the response is flushed |
 | `compressionMode` | `off` | Prompt compression mode: `off`, `lite`, `rtk`, or `rtk+lite`. Can be overridden by the `X-Rotator-Compression` request header |
+
+Existing configuration files keep explicit concurrency values. To enable the
+five-requests-per-account pool on an installation that already sets either
+concurrency field to `1`, change both fields to `5`; the new defaults only apply
+when those fields are absent.
+
+With five eligible accounts on distinct projects and both fields set to `5`,
+requests are assigned one per account in repeated layers up to 25 active
+Antigravity streams combined across Gemini and Claude. Request 26 and later wait
+in arrival order until capacity is released or 300 seconds elapse.
 
 ## Account Fields
 

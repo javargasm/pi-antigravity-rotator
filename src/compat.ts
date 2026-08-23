@@ -452,6 +452,7 @@ function writeJson(
   payload: unknown,
   headers: Record<string, string> = {},
 ): void {
+  if (res.destroyed || res.writableEnded) return;
   res.writeHead(status, { "Content-Type": "application/json", ...headers });
   res.end(JSON.stringify(payload));
 }
@@ -1728,6 +1729,10 @@ async function completeResponsesViaRotator(
   compressionStats?: CompressionStats | null;
 }> {
   const createdAt = Math.floor(Date.now() / 1000);
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  req.once("aborted", abort);
+  if (typeof res.once === "function") res.once("close", abort);
   const outcome = await withRotation(
     rotator,
     body.model,
@@ -1767,6 +1772,7 @@ async function completeResponsesViaRotator(
       );
       return completion;
     },
+    controller.signal,
   );
   if (!outcome.ok) {
     recordCompatFailure(rotator, body, outcome, options);
@@ -1824,6 +1830,11 @@ async function completeViaRotator(
   const enabled = cfg?.idempotencyEnabled === true;
   const windowMs = cfg?.idempotencyWindowMs ?? 2000;
   const shouldDedup = enabled && streamMode === "none" && !idempotencyManager.isOptedOut(req);
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  req.once("aborted", abort);
+  if (typeof res.once === "function") res.once("close", abort);
+  if (req.aborted || res.destroyed) abort();
 
   const runWithRotation = () =>
     withRotation(
@@ -1891,6 +1902,7 @@ async function completeViaRotator(
           return completion;
         }
       },
+      controller.signal,
     );
 
   let outcome: RotationOutcome<CompatCompletion>;
