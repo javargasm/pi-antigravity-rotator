@@ -64,6 +64,18 @@ export function getCredential(
   return undefined;
 }
 
+/** Resolve a provider project without letting whitespace mask legacy fallback. */
+export function getProviderProjectId(
+  account: AccountLike,
+  providerId: string,
+): string {
+  const nested = account.credentials
+    ?.find((credential) => credential.provider === providerId)
+    ?.projectId?.trim();
+  if (nested) return nested;
+  return providerId === DEFAULT_PROVIDER ? account.projectId?.trim() || "" : "";
+}
+
 /**
  * Resolve the egress proxy configured for one provider credential. Incoming
  * request headers are deliberately not consulted here; proxy selection is

@@ -13,6 +13,7 @@ import {
 } from "../../types.js";
 import { fetchWithRetry } from "../../fetch-with-retry.js";
 import type { QuotaFetchContext } from "../adapter.js";
+import { DEFAULT_PROVIDER, getProviderProjectId } from "../credential-helpers.js";
 import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
 import { sortQuotaPools } from "../registry.js";
 
@@ -92,7 +93,9 @@ export async function fetchProviderQuota(
         Authorization: `Bearer ${account.accessToken}`,
         "User-Agent": QUOTA_USER_AGENT,
       },
-      body: JSON.stringify({ project: account.config.projectId }),
+      body: JSON.stringify({
+        project: getProviderProjectId(account.config, DEFAULT_PROVIDER),
+      }),
       timeoutMs: 8000,
       dispatcher: getAccountProxyDispatcher(account, "google-antigravity"),
     });

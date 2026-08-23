@@ -106,9 +106,9 @@ export interface Config {
   rotateOnQuotaDrop: number;
   // How often to poll quota (ms). Default: 5min
   quotaPollIntervalMs: number;
-  // Hard cap on parallel requests per account. Conservative default is 1.
+  // Hard cap on parallel requests per account across model pools. Default is 5.
   maxConcurrentRequestsPerAccount?: number;
-  // Hard cap on parallel requests per projectId/model. Conservative default is 1.
+  // Hard cap on parallel requests per projectId/model. Default is 5.
   maxConcurrentRequestsPerProjectModel?: number;
   // Global delay in ms added to every request to slow down traffic and avoid rate limits.
   globalRequestDelayMs?: number;

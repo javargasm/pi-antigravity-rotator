@@ -55,6 +55,7 @@ import {
   getProviderAdapter,
   getProviderForAccount,
   hasCredential,
+  getProviderProjectId,
   primaryProviderId,
   findProviderForModel,
   getProviderIdForPoolKey,
@@ -99,12 +100,11 @@ export function getProviderCredentialDetails(
   fingerprint: string;
 } {
   const provider = cred?.provider ?? DEFAULT_PROVIDER;
-  let projectId = cred?.projectId || "";
+  const projectId = getProviderProjectId(norm, provider);
   let providerAccountId = cred?.providerAccountId || "";
   let secret = cred?.refreshToken || cred?.apiKey || "";
 
   if (provider === "google-antigravity") {
-    projectId ||= norm.projectId || "";
     secret ||= norm.refreshToken || norm.apiKey || "";
   } else if (provider === "openai-codex") {
     providerAccountId ||= norm.codexAccountId || "";
@@ -221,6 +221,17 @@ function projectModelKey(projectId: string, modelKey: string): string {
   return `${projectId}::${modelKey}`;
 }
 
+const REQUEST_QUEUE_TIMEOUT_MS = 300_000;
+
+interface AccountRequestWaiter {
+  model?: string;
+  signal?: AbortSignal;
+  timer: ReturnType<typeof setTimeout>;
+  onAbort?: () => void;
+  resolve: (account: AccountRuntime | null) => void;
+  reject: (error: unknown) => void;
+}
+
 // Reverse map: upstream model → the quota pool key it primarily represents (for deduplication).
 const QUOTA_POOL_FOR_KICKSTART_MODEL: Record<string, string> = {
   "gpt-oss-120b-medium": "claude-opus-4-6-thinking",
@@ -237,6 +248,12 @@ export class AccountRotator {
   private quotaPollTimer: ReturnType<typeof setInterval> | null = null;
   private quotaInitialPollTimer: ReturnType<typeof setTimeout> | null = null;
   private inFlightRefreshes = new WeakMap<AccountRuntime, Map<string, Promise<void>>>();
+  private requestCursorIndex = -1;
+  private requestWaiters: AccountRequestWaiter[] = [];
+  private drainingRequestWaiters = false;
+  private requestWaiterDrainRequested = false;
+  private requestWaiterWakeTimer: ReturnType<typeof setTimeout> | null = null;
+  private requestWaiterWakeAt = 0;
   private protectivePauseUntil = 0;
   private protectivePauseReason: string | null = null;
   private allowFreshWindowStarts = true;
@@ -259,6 +276,7 @@ export class AccountRotator {
 
   setOllamaModels(models: string[]): void {
     this.ollamaModels = new Set(models.map((m) => m.trim()).filter(Boolean));
+    this.requestWaiterDrain();
   }
 
   getOllamaModels(): string[] {
@@ -280,6 +298,7 @@ export class AccountRotator {
         .map((model) => model.trim())
         .filter((model): model is string => isCodexProviderModelId(model)),
     );
+    this.requestWaiterDrain();
   }
 
   getCodexModels(): string[] {
@@ -774,6 +793,7 @@ export class AccountRotator {
     void this.refreshOllamaCatalogOnce().catch(() => {});
 
     const available = this.accounts.filter((a) => !a.disabled && !a.flagged);
+    let quotaPublished = false;
     for (const account of available) {
       try {
         const quotaCtx: QuotaFetchContext = {
@@ -797,6 +817,7 @@ export class AccountRotator {
           try {
             await this.ensureValidTokenForProvider(account, pid);
             await getProviderAdapter(pid).fetchQuota(account, quotaCtx);
+            quotaPublished = true;
           } catch {
             // One invalid provider credential must not suppress sibling pools.
           }
@@ -845,6 +866,8 @@ export class AccountRotator {
         }
       }
     }
+
+    if (quotaPublished) this.requestWaiterDrain();
 
     if (this.isProtectivePauseActive(Date.now())) {
       return;
@@ -1126,6 +1149,32 @@ export class AccountRotator {
     return best;
   }
 
+  private pickLeastLoadedModelAccount(
+    modelKey: string,
+    now: number,
+  ): AccountRuntime | null {
+    let best: AccountRuntime | null = null;
+    let bestLoad = Infinity;
+    let bestDistance = Infinity;
+
+    for (let i = 0; i < this.accounts.length; i++) {
+      const account = this.accounts[i];
+      if (!this.isRoutableForModel(account, modelKey, now)) continue;
+      const load = account.inFlightRequests;
+      const distance = this.requestCursorIndex < 0
+        ? i
+        : (i - this.requestCursorIndex + this.accounts.length) %
+            this.accounts.length || this.accounts.length;
+      if (load < bestLoad || (load === bestLoad && distance < bestDistance)) {
+        best = account;
+        bestLoad = load;
+        bestDistance = distance;
+      }
+    }
+
+    return best;
+  }
+
   countModelAssignment(modelKey: string): void {
     const state = this.modelState.get(modelKey);
     if (state) {
@@ -1176,6 +1225,7 @@ export class AccountRotator {
 
   private getProjectDailyCount(projectId: string, now: number): number {
     this.rollDailySafetyIfNeeded(now);
+    if (!projectId) return 0;
     return this.projectRequests[projectId] ?? 0;
   }
 
@@ -1196,15 +1246,16 @@ export class AccountRotator {
       };
     }
 
-    const projectCount = this.getProjectDailyCount(account.config.projectId ?? "",
-      now,
-    );
-    const projectLimit = this.config.dailyProjectStopRequests ?? 1200;
-    if (projectCount >= projectLimit) {
-      return {
-        reason: "daily-project-stop",
-        detail: `daily project budget exhausted (${projectCount}/${projectLimit} upstream attempts; resets at ${resetIso})`,
-      };
+    const projectId = this.getAccountProjectId(account);
+    if (projectId) {
+      const projectCount = this.getProjectDailyCount(projectId, now);
+      const projectLimit = this.config.dailyProjectStopRequests ?? 1200;
+      if (projectCount >= projectLimit) {
+        return {
+          reason: "daily-project-stop",
+          detail: `daily project budget exhausted (${projectCount}/${projectLimit} upstream attempts; resets at ${resetIso})`,
+        };
+      }
     }
 
     return null;
@@ -1214,9 +1265,26 @@ export class AccountRotator {
     return this.getDailySafetyRejection(account, now) !== null;
   }
 
+  private getProjectIdForModel(
+    account: AccountRuntime,
+    modelKey: string,
+  ): string {
+    return getProviderProjectId(
+      account.config,
+      getProviderIdForPoolKey(modelKey),
+    );
+  }
+
+  private getAccountProjectId(account: AccountRuntime): string {
+    return getProviderProjectId(account.config, DEFAULT_PROVIDER);
+  }
+
   private getProjectInFlight(modelKey: string, projectId: string): number {
+    if (!projectId) return 0;
     return this.accounts
-      .filter((account) => account.config.projectId === projectId)
+      .filter(
+        (account) => this.getProjectIdForModel(account, modelKey) === projectId,
+      )
       .reduce(
         (sum, account) => sum + (account.inFlightByModel[modelKey] ?? 0),
         0,
@@ -1228,6 +1296,7 @@ export class AccountRotator {
     modelKey: string,
     now: number,
   ): boolean {
+    if (!projectId) return false;
     const until =
       this.projectModelBreakers[projectModelKey(projectId, modelKey)] ?? 0;
     if (until <= now) {
@@ -1251,16 +1320,18 @@ export class AccountRotator {
     account: AccountRuntime,
     modelKey: string,
     now: number,
+    ignoreConcurrency = false,
   ): string | null {
+    const projectId = this.getProjectIdForModel(account, modelKey);
     if (this.isModelBreakerActive(modelKey, now))
       return "model circuit breaker active";
-    if (
-      this.isProjectModelBreakerActive(account.config.projectId ?? "", modelKey, now)
-    )
+    if (this.isProjectModelBreakerActive(projectId, modelKey, now))
       return "project circuit breaker active";
     if (
-      this.getProjectInFlight(modelKey, account.config.projectId ?? "") >=
-      (this.config.maxConcurrentRequestsPerProjectModel ?? 1)
+      projectId &&
+      !ignoreConcurrency &&
+      this.getProjectInFlight(modelKey, projectId) >=
+      (this.config.maxConcurrentRequestsPerProjectModel ?? 5)
     )
       return "project concurrency limit reached";
     const dailySafety = this.getDailySafetyRejection(account, now);
@@ -1307,6 +1378,7 @@ export class AccountRotator {
     modelKey: string,
     now: number,
     policy: Config["routingPolicy"],
+    ignoreConcurrency = false,
   ): { reason: RoutingRejectionReason; detail: string } | null {
     if (account.disabled)
       return { reason: "disabled", detail: "account disabled" };
@@ -1328,9 +1400,10 @@ export class AccountRotator {
     // long-running streams while the same model on another account is
     // still serving. Antigravity keeps the per-account limit.
     if (
+      !ignoreConcurrency &&
       modelKey !== "session" &&
-      (account.inFlightByModel[modelKey] ?? 0) >=
-      (this.config.maxConcurrentRequestsPerAccount ?? 1)
+      account.inFlightRequests >=
+      (this.config.maxConcurrentRequestsPerAccount ?? 5)
     ) {
       return {
         reason: "account-concurrency",
@@ -1341,6 +1414,7 @@ export class AccountRotator {
       account,
       modelKey,
       now,
+      ignoreConcurrency,
     );
     if (unavailable) return this.mapRoutingRejection(unavailable);
     if (this.getModelQuota(account, modelKey) === 0)
@@ -1673,14 +1747,214 @@ export class AccountRotator {
   // Account Selection (per-model)
   // =========================================================================
 
-  // Get the active account for a specific model.
-  // model is the raw model name from the request body.
-  async getActiveAccount(model?: string): Promise<AccountRuntime | null> {
+  async getActiveAccount(
+    model?: string,
+    signal?: AbortSignal,
+  ): Promise<AccountRuntime | null> {
+    if (signal?.aborted) return null;
+    if (
+      this.requestWaiters.length > 0 ||
+      this.isConcurrencySaturated(model)
+    ) {
+      return this.enqueueAccountRequest(model, signal);
+    }
+
+    const account = await this.tryGetActiveAccount(model);
+    if (account || !this.isConcurrencySaturated(model)) return account;
+    return this.enqueueAccountRequest(model, signal);
+  }
+
+  private enqueueAccountRequest(
+    model?: string,
+    signal?: AbortSignal,
+  ): Promise<AccountRuntime | null> {
+    if (signal?.aborted) return Promise.resolve(null);
+
+    return new Promise<AccountRuntime | null>((resolve, reject) => {
+      const waiter = {} as AccountRequestWaiter;
+      waiter.model = model;
+      waiter.signal = signal;
+      waiter.resolve = resolve;
+      waiter.reject = reject;
+      waiter.timer = setTimeout(() => {
+        if (!this.removeAccountRequestWaiter(waiter)) return;
+        resolve(null);
+        this.requestWaiterDrain();
+      }, REQUEST_QUEUE_TIMEOUT_MS);
+      waiter.onAbort = () => {
+        if (!this.removeAccountRequestWaiter(waiter)) return;
+        resolve(null);
+        this.requestWaiterDrain();
+      };
+      signal?.addEventListener("abort", waiter.onAbort, { once: true });
+      this.requestWaiters.push(waiter);
+      this.requestWaiterDrain();
+    });
+  }
+
+  private removeAccountRequestWaiter(waiter: AccountRequestWaiter): boolean {
+    const index = this.requestWaiters.indexOf(waiter);
+    if (index < 0) return false;
+    this.requestWaiters.splice(index, 1);
+    clearTimeout(waiter.timer);
+    if (waiter.onAbort) {
+      waiter.signal?.removeEventListener("abort", waiter.onAbort);
+    }
+    if (this.requestWaiters.length === 0) this.clearRequestWaiterWake();
+    return true;
+  }
+
+  private settleAccountRequestWaiter(
+    waiter: AccountRequestWaiter,
+    account: AccountRuntime | null,
+  ): void {
+    if (!this.removeAccountRequestWaiter(waiter)) return;
+    waiter.resolve(account);
+  }
+
+  private rejectAccountRequestWaiter(
+    waiter: AccountRequestWaiter,
+    error: unknown,
+  ): void {
+    if (!this.removeAccountRequestWaiter(waiter)) return;
+    waiter.reject(error);
+  }
+
+  private clearRequestWaiterWake(): void {
+    if (this.requestWaiterWakeTimer) clearTimeout(this.requestWaiterWakeTimer);
+    this.requestWaiterWakeTimer = null;
+    this.requestWaiterWakeAt = 0;
+  }
+
+  private scheduleRequestWaiterWake(wakeAt: number): void {
+    if (
+      this.requestWaiterWakeTimer &&
+      this.requestWaiterWakeAt > 0 &&
+      this.requestWaiterWakeAt <= wakeAt
+    ) {
+      return;
+    }
+    this.clearRequestWaiterWake();
+    this.requestWaiterWakeAt = wakeAt;
+    this.requestWaiterWakeTimer = setTimeout(() => {
+      this.requestWaiterWakeTimer = null;
+      this.requestWaiterWakeAt = 0;
+      this.requestWaiterDrain();
+    }, Math.max(1, wakeAt - Date.now()));
+  }
+
+  private requestWaiterDrain(): void {
+    if (this.requestWaiters.length === 0) return;
+    this.clearRequestWaiterWake();
+    this.requestWaiterDrainRequested = true;
+    if (!this.drainingRequestWaiters) void this.drainAccountRequestWaiters();
+  }
+
+  private async drainAccountRequestWaiters(): Promise<void> {
+    if (this.drainingRequestWaiters) return;
+    this.drainingRequestWaiters = true;
+    try {
+      let progressed: boolean;
+      do {
+        this.requestWaiterDrainRequested = false;
+        progressed = false;
+        for (const waiter of [...this.requestWaiters]) {
+          if (waiter.signal?.aborted) {
+            this.settleAccountRequestWaiter(waiter, null);
+            progressed = true;
+            break;
+          }
+
+          let account: AccountRuntime | null;
+          try {
+            account = await this.tryGetActiveAccount(waiter.model);
+          } catch (error) {
+            this.rejectAccountRequestWaiter(waiter, error);
+            progressed = true;
+            break;
+          }
+
+          if (!this.requestWaiters.includes(waiter)) {
+            if (account) {
+              this.finishRequest(
+                account,
+                waiter.model
+                  ? this.resolveRequestPoolKey(waiter.model)
+                  : undefined,
+              );
+            }
+            progressed = true;
+            break;
+          }
+          if (account) {
+            this.settleAccountRequestWaiter(waiter, account);
+            progressed = true;
+            break;
+          }
+          if (this.requestWaiterDrainRequested) {
+            progressed = true;
+            break;
+          }
+          const wakeAt = this.getNextRequestAvailabilityAt(waiter.model);
+          if (wakeAt !== null) this.scheduleRequestWaiterWake(wakeAt);
+          if (!this.isConcurrencySaturated(waiter.model) && wakeAt === null) {
+            this.settleAccountRequestWaiter(waiter, null);
+            progressed = true;
+          }
+          break;
+        }
+      } while (progressed || this.requestWaiterDrainRequested);
+    } finally {
+      this.drainingRequestWaiters = false;
+      if (this.requestWaiterDrainRequested) this.requestWaiterDrain();
+    }
+  }
+
+  private isConcurrencySaturated(model?: string): boolean {
+    const now = Date.now();
+    if (this.isProtectivePauseActive(now)) return false;
+    const modelKey = model ? this.resolveRequestPoolKey(model) : null;
+    if (!modelKey) return false;
+    const policy = this.config.routingPolicy || "timer-first";
+
+    let concurrencyBlocked = false;
+    for (const account of this.accounts) {
+      if (
+        this.getRoutingRejectionForModel(
+          account,
+          modelKey,
+          now,
+          policy,
+          true,
+        )
+      ) {
+        continue;
+      }
+      const rejection = this.getRoutingRejectionForModel(
+        account,
+        modelKey,
+        now,
+        policy,
+      );
+      if (!rejection) return false;
+      if (
+        rejection.reason === "account-concurrency" ||
+        rejection.reason === "project-concurrency"
+      ) {
+        concurrencyBlocked = true;
+      }
+    }
+    return concurrencyBlocked;
+  }
+
+  // Try to reserve an account immediately. The public method queues only
+  // when every otherwise-eligible account is blocked by concurrency.
+  private async tryGetActiveAccount(model?: string): Promise<AccountRuntime | null> {
     const now = Date.now();
     if (this.accounts.length === 0) return null;
     if (this.isProtectivePauseActive(now)) return null;
 
-    const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
+    const modelKey = model ? this.resolveRequestPoolKey(model) : null;
     const state = modelKey ? this.modelState.get(modelKey) : null;
     const idx = state?.activeAccountIndex ?? this.defaultIndex;
     const current = this.accounts[idx];
@@ -1704,7 +1978,17 @@ export class AccountRotator {
       this.scheduleStateSave();
     }
 
-    if (modelKey && state) {
+    const hasActiveRequests = this.accounts.some(
+      (account) => account.inFlightRequests > 0,
+    );
+    if (modelKey && hasActiveRequests) {
+      const leastLoaded = this.pickLeastLoadedModelAccount(modelKey, now);
+      if (leastLoaded && leastLoaded !== current) {
+        return this.rotateModelForRequest(modelKey, now, idx);
+      }
+    }
+
+    if (modelKey && state && !hasActiveRequests) {
       try {
         const restored = await this.restorePreferredModelAccount(
           modelKey,
@@ -1853,7 +2137,9 @@ export class AccountRotator {
       -1,
     forRequest = false,
   ): Promise<AccountRuntime | null> {
-    const best = this.pickBestModelAccount(modelKey, now, excludeIdx);
+    const best = forRequest
+      ? this.pickLeastLoadedModelAccount(modelKey, now)
+      : this.pickBestModelAccount(modelKey, now, excludeIdx);
 
     if (best) {
       const previous = this.modelState.get(modelKey);
@@ -2049,7 +2335,7 @@ export class AccountRotator {
     failedAccount?: AccountRuntime | number | string,
   ): Promise<AccountRuntime | null> {
     if (this.isProtectivePauseActive(Date.now())) return null;
-    const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
+    const modelKey = model ? this.resolveRequestPoolKey(model) : null;
     let excludeIdx: number;
     if (typeof failedAccount === "number") {
       excludeIdx = failedAccount;
@@ -2079,7 +2365,7 @@ export class AccountRotator {
     account.consecutiveErrors = 0;
     account.lastError = null;
 
-    const modelKey = model ? this.resolvePoolKeyForModel(model) : null;
+    const modelKey = model ? this.resolveRequestPoolKey(model) : null;
     const state = modelKey ? this.modelState.get(modelKey) : null;
     const shouldRotate =
       !!modelKey &&
@@ -2644,7 +2930,7 @@ export class AccountRotator {
     const threshold = this.config.projectCircuitBreaker429Threshold ?? 3;
     const breakerCooldownMs =
       this.config.projectCircuitBreakerCooldownMs ?? 60 * 60 * 1000;
-    const projectId = account.config.projectId ?? "";
+    const projectId = this.getProjectIdForModel(account, modelKey);
     this.provider429Events = this.provider429Events
       .filter((event) => now - event.ts <= windowMs)
       .concat({ ts: now, projectId, modelKey, account: account.config.email });
@@ -2661,7 +2947,7 @@ export class AccountRotator {
         .filter((event) => event.modelKey === modelKey)
         .map((event) => event.account),
     );
-    if (uniqueAccounts.size >= threshold) {
+    if (projectId && uniqueAccounts.size >= threshold) {
       const until = now + Math.max(cooldownMs, breakerCooldownMs);
       this.projectModelBreakers[projectModelKey(projectId, modelKey)] = until;
       this.log(
@@ -2692,8 +2978,10 @@ export class AccountRotator {
     this.rollDailySafetyIfNeeded(now);
     this.getAccountDailyCount(account, now);
     account.dailyRequestCount++;
-    this.projectRequests[account.config.projectId ?? ""] =
-      (this.projectRequests[account.config.projectId ?? ""] ?? 0) + 1;
+    const projectId = this.getAccountProjectId(account);
+    if (projectId) {
+      this.projectRequests[projectId] = (this.projectRequests[projectId] ?? 0) + 1;
+    }
     this.scheduleStateSave();
   }
 
@@ -2702,9 +2990,11 @@ export class AccountRotator {
     const accountSlow =
       this.getAccountDailyCount(account, now) >=
       (this.config.dailyAccountSlowRequests ?? 250);
-    const projectSlow =
-      this.getProjectDailyCount(account.config.projectId ?? "", now) >=
-      (this.config.dailyProjectSlowRequests ?? 900);
+    const projectId = this.getAccountProjectId(account);
+    const projectSlow = projectId
+      ? this.getProjectDailyCount(projectId, now) >=
+        (this.config.dailyProjectSlowRequests ?? 900)
+      : false;
     if (!accountSlow && !projectSlow) return 0;
     const min = this.config.slowModeJitterMinMs ?? 8_000;
     const max = Math.max(min, this.config.slowModeJitterMaxMs ?? 25_000);
@@ -2745,6 +3035,7 @@ export class AccountRotator {
     account.cooldownsByModel = {};
     await this.saveState();
     this.log(`${email}: re-enabled`);
+    this.requestWaiterDrain();
     return true;
   }
 
@@ -2780,6 +3071,7 @@ export class AccountRotator {
     account.lastError = null;
     await this.saveState();
     this.log(`${email}: restored by operator`, "warn");
+    this.requestWaiterDrain();
     return true;
   }
 
@@ -2810,6 +3102,7 @@ export class AccountRotator {
         : "Operator disabled fresh window starts; the rotator will only use buckets whose timers are already running",
       "warn",
     );
+    this.requestWaiterDrain();
     return true;
   }
 
@@ -2828,6 +3121,7 @@ export class AccountRotator {
         : `${email}: operator override cleared; this account now follows the global fresh-window policy`,
       "warn",
     );
+    this.requestWaiterDrain();
     return true;
   }
 
@@ -2861,6 +3155,7 @@ export class AccountRotator {
     );
     await this.saveState();
     this.log(`[${modelKey}] Operator manually cleared circuit breaker`, "warn");
+    this.requestWaiterDrain();
     return hadAny;
   }
 
@@ -2876,6 +3171,7 @@ export class AccountRotator {
       `Operator cleared all circuit breakers (${count} entries)`,
       "warn",
     );
+    this.requestWaiterDrain();
     return count;
   }
 
@@ -2890,6 +3186,7 @@ export class AccountRotator {
         `${email}: operator cleared ${previous} in-flight request(s) for ${modelKey}`,
         "warn",
       );
+      this.requestWaiterDrain();
       return true;
     }
     const previous = account.inFlightRequests;
@@ -2899,6 +3196,7 @@ export class AccountRotator {
       `${email}: operator cleared ${previous} in-flight request(s)`,
       "warn",
     );
+    this.requestWaiterDrain();
     return true;
   }
 
@@ -3101,8 +3399,8 @@ export class AccountRotator {
     // single account while siblings sit idle.
     if (
       modelKey !== "session" &&
-      (account.inFlightByModel[modelKey] ?? 0) >=
-      (this.config.maxConcurrentRequestsPerAccount ?? 1)
+      account.inFlightRequests >=
+      (this.config.maxConcurrentRequestsPerAccount ?? 5)
     )
       return false;
     if (this.getUnavailableReasonForModel(account, modelKey, now)) return false;
@@ -3119,6 +3417,7 @@ export class AccountRotator {
     account.lastError = reason;
     account.inFlightRequests = 0;
     account.inFlightByModel = {};
+    this.requestWaiterDrain();
     this.log(`${account.config.email}: FLAGGED - ${reason}`, "error");
     const triggerProtectivePause = options.triggerProtectivePause ?? true;
     if (triggerProtectivePause && this.shouldTriggerProtectivePause(reason)) {
@@ -3144,6 +3443,7 @@ export class AccountRotator {
     }
     account.inFlightByModel[key] = (account.inFlightByModel[key] ?? 0) + 1;
     this.recalculateInFlightRequests(account);
+    this.requestCursorIndex = this.accounts.indexOf(account);
     this.consumeTokenBucket(account, Date.now());
   }
 
@@ -3156,6 +3456,7 @@ export class AccountRotator {
     );
     if (account.inFlightByModel[key] === 0) delete account.inFlightByModel[key];
     this.recalculateInFlightRequests(account);
+    this.requestWaiterDrain();
   }
 
   private recalculateInFlightRequests(account: AccountRuntime): void {
@@ -3176,8 +3477,12 @@ export class AccountRotator {
   }
 
   /** Public pool-key resolution for quota routing display/logging. */
-  resolveQuotaModelKeyForDisplay(model: string): string | null {
-    return this.resolvePoolKeyForModel(model);
+  resolveQuotaModelKeyForDisplay(model: string): string {
+    return this.resolveRequestPoolKey(model);
+  }
+
+  private resolveRequestPoolKey(model: string): string {
+    return this.resolvePoolKeyForModel(model) ?? "__default__";
   }
 
   private resolvePoolKeyForModel(model: string): string | null {
@@ -3221,8 +3526,10 @@ export class AccountRotator {
     return true;
   }
 
-  getRetryAfterMs(model?: string): number {
-    const now = Date.now();
+  private getRequestAvailabilityTimes(
+    model: string | undefined,
+    now: number,
+  ): number[] {
     const retryTimes: number[] = [];
     if (this.protectivePauseUntil > now)
       retryTimes.push(this.protectivePauseUntil);
@@ -3234,6 +3541,15 @@ export class AccountRotator {
     if (modelBreaker > now) retryTimes.push(modelBreaker);
     for (const account of this.accounts) {
       if (account.disabled || account.flagged) continue;
+      const providerId = getProviderIdForPoolKey(modelKey);
+      if (
+        !hasCredential(account.config, providerId) ||
+        account.invalidProviders?.[providerId]
+      ) {
+        continue;
+      }
+      const providerCooldown = account.providerCooldowns?.[providerId] ?? 0;
+      if (providerCooldown > now) retryTimes.push(providerCooldown);
       if (this.isDailySafetyStopped(account, now))
         retryTimes.push(dailyResetAt);
       const cooldown = Math.max(
@@ -3241,11 +3557,12 @@ export class AccountRotator {
         account.cooldownsByModel.__default__ ?? 0,
       );
       if (cooldown > now) retryTimes.push(cooldown);
-      const projectBreaker =
-        this.projectModelBreakers[
-          projectModelKey(account.config.projectId ?? "", modelKey)
-        ] ?? 0;
-      if (projectBreaker > now) retryTimes.push(projectBreaker);
+      const projectId = this.getProjectIdForModel(account, modelKey);
+      if (projectId) {
+        const projectBreaker =
+          this.projectModelBreakers[projectModelKey(projectId, modelKey)] ?? 0;
+        if (projectBreaker > now) retryTimes.push(projectBreaker);
+      }
       if ((this.config.routingPolicy || "timer-first") === "hybrid") {
         const tokenSnapshot = this.getTokenBucketSnapshot(account, now);
         if (
@@ -3257,6 +3574,18 @@ export class AccountRotator {
         }
       }
     }
+    return retryTimes;
+  }
+
+  private getNextRequestAvailabilityAt(model?: string): number | null {
+    const now = Date.now();
+    const retryTimes = this.getRequestAvailabilityTimes(model, now);
+    return retryTimes.length > 0 ? Math.min(...retryTimes) : null;
+  }
+
+  getRetryAfterMs(model?: string): number {
+    const now = Date.now();
+    const retryTimes = this.getRequestAvailabilityTimes(model, now);
     if (retryTimes.length === 0) return 0;
     return Math.max(1000, Math.min(...retryTimes) - now);
   }
@@ -3301,7 +3630,7 @@ export class AccountRotator {
         totalRequests: a.totalRequests,
         dailyRequestCount: this.getAccountDailyCount(a, now),
         dailyAccountStopRequests: this.config.dailyAccountStopRequests ?? 350,
-        dailyProjectRequestCount: this.getProjectDailyCount(a.config.projectId ?? "",
+        dailyProjectRequestCount: this.getProjectDailyCount(this.getAccountProjectId(a),
           now,
         ),
         dailyProjectStopRequests: this.config.dailyProjectStopRequests ?? 1200,
@@ -3500,6 +3829,7 @@ export class AccountRotator {
     const mergedAccounts = normalized.accounts.map(matchAndReuseAccount);
     this.config = { ...normalized, accounts: mergedAccounts.map((account) => account.config) };
     this.accounts = mergedAccounts;
+    this.requestWaiterDrain();
     await saveAccountsConfig(this.config);
     await this.saveState();
     this.refreshHealthScores();
@@ -3612,6 +3942,7 @@ export class AccountRotator {
 
     await saveAccountsConfig(this.config);
     await this.saveState();
+    this.requestWaiterDrain();
     void this.pollAllQuotas();
   }
 
@@ -3987,7 +4318,7 @@ export class AccountRotator {
       clearTimeout(timeout);
     } else {
       const body = JSON.stringify({
-        project: account.config.projectId,
+        project: this.getProjectIdForModel(account, quotaModelKey),
         model: upstreamModel,
         request: {
           contents: [{ role: "user", parts: [{ text: "." }] }],

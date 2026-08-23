@@ -164,8 +164,21 @@ const RESOURCE_EXHAUSTED_COOLDOWN_MS = 30 * 60 * 1000; // Stop hammering provide
 const STREAM_IDLE_TIMEOUT_MS = 2 * 60 * 1000; // Release account if a stream goes silent.
 const LARGE_CONTEXT_WARN_BYTES = 1 * 1024 * 1024;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("Request aborted"));
+
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error("Request aborted"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export class PreFlushStreamError extends Error {
@@ -922,7 +935,7 @@ export async function benchmarkAccount(
   const startedAt = Date.now();
   const maxConcurrent = Math.max(
     1,
-    rotator.getConfig().maxConcurrentRequestsPerAccount ?? 1,
+    rotator.getConfig().maxConcurrentRequestsPerAccount ?? 5,
   );
   if (account.inFlightRequests >= maxConcurrent) {
     return {
@@ -1143,8 +1156,11 @@ export async function withRotation<T>(
   const maxAttempts = maxRetries + 1;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const account = await rotator.getActiveAccount(model);
+    const account = await rotator.getActiveAccount(model, signal);
     if (!account) {
+      if (signal?.aborted) {
+        return { ok: false, status: 499, errorText: "Client closed request" };
+      }
       return sendNoAccountsAvailable("rotation returned no available account");
     }
 
@@ -1196,7 +1212,7 @@ export async function withRotation<T>(
             "info",
           );
         }
-        await sleep(totalDelayMs);
+        await sleep(totalDelayMs, signal);
       }
 
       rotator.recordUpstreamAttempt(account);
@@ -1262,6 +1278,9 @@ export async function withRotation<T>(
       }
       return { ok: true, result, endpoint, context };
     } catch (err) {
+      if (signal?.aborted) {
+        return { ok: false, status: 499, errorText: "Client closed request" };
+      }
       const formattedError = formatError(err);
       log(
         `[${label}] Request failed: ${formattedError}`,
@@ -1433,6 +1452,15 @@ async function handleProxyRequest(
     return;
   }
   const apiKeyHash = auth.key?.tokenHash || (auth.rawKey ? hashKey(auth.rawKey) : null);
+  const clientController = new AbortController();
+  const abortClient = (): void => clientController.abort();
+  const removeAbortListeners = (): void => {
+    req.off("aborted", abortClient);
+    res.off("close", abortClient);
+  };
+  req.once("aborted", abortClient);
+  res.once("close", abortClient);
+  res.once("finish", removeAbortListeners);
 
   const proxyLog = (
     msg: string,
@@ -1448,6 +1476,7 @@ async function handleProxyRequest(
   }
 
   const sendNoAccountsAvailable = (reason: string): void => {
+    if (clientController.signal.aborted || res.destroyed) return;
     proxyLog(`[${body.model}] No healthy account available: ${reason}`, "warn");
     const retryAfterMs = rotator.getRetryAfterMs(body.model);
     if (retryAfterMs > 0) {
@@ -1478,6 +1507,7 @@ async function handleProxyRequest(
     );
   };
   const sendFailureDecision = (decision: UpstreamFailureDecision): void => {
+    if (clientController.signal.aborted || res.destroyed) return;
     if (decision.noReplacementReason) {
       sendNoAccountsAvailable(decision.noReplacementReason);
       return;
@@ -1544,8 +1574,12 @@ async function handleProxyRequest(
   const maxRetries = getStreamRecoveryMaxRetries(rotator);
   const maxAttempts = maxRetries + 1;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const account = await rotator.getActiveAccount(body.model);
+    const account = await rotator.getActiveAccount(
+      body.model,
+      clientController.signal,
+    );
     if (!account) {
+      if (clientController.signal.aborted || res.destroyed) return;
       sendNoAccountsAvailable("rotation returned no available account");
       return;
     }
@@ -1613,7 +1647,7 @@ async function handleProxyRequest(
             "info",
           );
         }
-        await sleep(totalDelayMs);
+        await sleep(totalDelayMs, clientController.signal);
       }
       rotator.recordUpstreamAttempt(account);
       const provider = providerAdapterForModel(
@@ -1626,6 +1660,7 @@ async function handleProxyRequest(
         account,
         { ...body },
         flattenHeaders(req.headers),
+        clientController.signal,
       );
       const { response, endpoint } = forwarded;
       const context: RotationAttemptContext = {
@@ -1754,6 +1789,7 @@ async function handleProxyRequest(
       }
       return;
     } catch (err) {
+      if (clientController.signal.aborted || res.destroyed) return;
       const formattedError = formatError(err);
       proxyLog(
         `[${label}] Request failed: ${formattedError}`,
@@ -1790,6 +1826,7 @@ async function handleProxyRequest(
     }
   }
 
+  if (clientController.signal.aborted || res.destroyed) return;
   if (!res.headersSent) {
     res.writeHead(502, { "Content-Type": "application/json" });
   }
@@ -1835,17 +1872,32 @@ async function handleCodeAssistPassthrough(
     return;
   }
 
+  const clientController = new AbortController();
+  const abortClient = (): void => clientController.abort();
+  const removeAbortListeners = (): void => {
+    req.off("aborted", abortClient);
+    res.off("close", abortClient);
+  };
+  req.once("aborted", abortClient);
+  res.once("close", abortClient);
+  res.once("finish", removeAbortListeners);
+
   const maxRetries = getStreamRecoveryMaxRetries(rotator);
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     let account: AccountRuntime | null;
     try {
-      account = await rotator.getActiveAccount(CODE_ASSIST_ROUTING_MODEL);
+      account = await rotator.getActiveAccount(
+        CODE_ASSIST_ROUTING_MODEL,
+        clientController.signal,
+      );
     } catch {
+      if (clientController.signal.aborted || res.destroyed) return;
       res.writeHead(502, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Account token refresh failed" }));
       return;
     }
     if (!account) {
+      if (clientController.signal.aborted || res.destroyed) return;
       res.writeHead(503, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "All Google accounts exhausted or disabled" }));
       return;
@@ -1871,14 +1923,17 @@ async function handleCodeAssistPassthrough(
         action,
         body,
         flattenHeaders(req.headers),
+        clientController.signal,
       );
       const responseBody = await forwarded.response.text();
+      if (clientController.signal.aborted || res.destroyed) return;
       res.writeHead(forwarded.response.status, {
         "Content-Type": forwarded.response.headers.get("content-type") || "application/json",
       });
       res.end(responseBody);
       return;
     } catch (err) {
+      if (clientController.signal.aborted || res.destroyed) return;
       if (!isFetchTransportError(err) || attempt >= maxRetries) {
         res.writeHead(502, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Code Assist upstream request failed" }));
