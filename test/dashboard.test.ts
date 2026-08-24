@@ -49,6 +49,111 @@ function readDashboardCss(): string {
   );
 }
 
+function renderAccountCards(
+  accounts: Array<Record<string, unknown>>,
+  maxConcurrentRequestsPerAccount: number,
+): string {
+  const elements = new Map<string, Record<string, unknown>>();
+  const getElement = (id: string): Record<string, unknown> => {
+    let element = elements.get(id);
+    if (!element) {
+      element = {
+        addEventListener: () => {},
+        className: "",
+        innerHTML: "",
+        style: {},
+        textContent: "",
+        value: "",
+      };
+      elements.set(id, element);
+    }
+    return element;
+  };
+  function EventSourceStub(this: { close: () => void }) {
+    this.close = () => {};
+  }
+  const sandbox: Record<string, unknown> = {
+    window: { location: { search: "" } },
+    URLSearchParams: globalThis.URLSearchParams,
+    EventSource: EventSourceStub,
+    fetch: () => new Promise(() => {}),
+    setInterval: () => {},
+    clearInterval: () => {},
+    setTimeout: () => {},
+    clearTimeout: () => {},
+    localStorage: {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+    },
+    document: {
+      getElementById: getElement,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener: () => {},
+    },
+    console: { error: () => {} },
+  };
+  const script = new Script(readDashboardJs() + "\nthis.__renderAccounts = renderAccounts;");
+  script.runInNewContext(sandbox);
+  for (const helper of [
+    "renderUpdateBanner",
+    "renderNotifications",
+    "renderAttentionPanel",
+    "renderRoutingInspector",
+    "renderTokenChart",
+    "renderHeatmap",
+    "renderLatencyPanel",
+    "renderForecastPanel",
+    "renderRequestLog",
+    "renderRecentEvents",
+  ]) {
+    sandbox[helper] = () => {};
+  }
+
+  const renderAccounts = sandbox.__renderAccounts as (
+    data: Record<string, unknown>,
+  ) => void;
+  renderAccounts({
+    version: "test",
+    uptime: 0,
+    proxyPort: 51200,
+    requestsPerRotation: 5,
+    totalRequestsAllAccounts: 0,
+    maxConcurrentRequestsPerAccount,
+    accounts,
+    routingHealth: {},
+    operatorControls: {},
+    protectivePauseRemaining: 0,
+    protectivePauseReason: null,
+    circuitBreakers: { model: {}, project: {} },
+  });
+  return String(getElement("accounts").innerHTML);
+}
+
+function accountCardFixture(
+  inFlightRequests: number,
+  provider = "google-antigravity",
+): Record<string, unknown> {
+  return {
+    email: `${provider}-${inFlightRequests}@example.com`,
+    label: `Account ${inFlightRequests}`,
+    provider,
+    status: "ready",
+    quota: [],
+    cooldownsByModel: {},
+    requestsSinceRotation: 0,
+    totalRequests: 0,
+    lastUsed: 0,
+    inFlightRequests,
+    hasValidToken: true,
+    healthScore: 1,
+    effectiveFreshWindowStartsAllowed: true,
+    allowFreshWindowStartsOverride: false,
+    lastError: null,
+  };
+}
+
 describe("dashboard", () => {
   it("serves a complete HTML document", () => {
     const html = renderDashboard();
@@ -61,6 +166,23 @@ describe("dashboard", () => {
     const js = readDashboardJs();
     assert.ok(js.length > 0, "dashboard.js is empty");
     assert.doesNotThrow(() => new Script(js));
+  });
+
+  it("shows total Antigravity concurrency utilization with the effective account cap", () => {
+    const html = renderAccountCards(
+      [accountCardFixture(0), accountCardFixture(3), accountCardFixture(4, "ollama")],
+      5,
+    );
+
+    assert.match(html, />Concurrency<\/div><div class="stat-value"[^>]*>0\/5<\/div>/);
+    assert.match(html, />Concurrency<\/div><div class="stat-value"[^>]*>3\/5<\/div>/);
+    assert.equal((html.match(/>Concurrency<\/div>/g) || []).length, 2);
+
+    const configurable = renderAccountCards([accountCardFixture(3)], 7);
+    assert.match(
+      configurable,
+      />Concurrency<\/div><div class="stat-value"[^>]*>3\/7<\/div>/,
+    );
   });
 
   it("assigns distinct family colors for token graph (Claude: Red, Gemini: Blue, Ollama: Green)", () => {

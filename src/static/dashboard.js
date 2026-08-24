@@ -354,6 +354,9 @@ function renderAccounts(data) {
         );
       }
       var tierLabel = a.tier ? String(a.tier).toUpperCase() : "UNKNOWN";
+      var hasAntigravity = String(a.provider || "")
+        .split("+")
+        .includes("google-antigravity");
 
       return (
         '<div class="account-card ' +
@@ -421,9 +424,11 @@ function renderAccounts(data) {
             formatDuration(cooldownRemaining) +
             "</div></div>"
           : "") +
-        (a.inFlightRequests > 0
-          ? '<div class="card-stat"><div class="stat-label">In Flight</div><div class="stat-value" style="color:var(--blue)">' +
-            a.inFlightRequests +
+        (hasAntigravity
+          ? '<div class="card-stat"><div class="stat-label">Concurrency</div><div class="stat-value" style="color:var(--blue)">' +
+            (a.inFlightRequests || 0) +
+            "/" +
+            data.maxConcurrentRequestsPerAccount +
             "</div></div>"
           : "") +
         '<div class="card-stat"><div class="stat-label">Token</div><div class="stat-value" style="color:' +

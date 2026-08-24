@@ -128,6 +128,30 @@ describe("Antigravity request queue", () => {
     assert.equal(explicit.maxConcurrentRequestsPerProjectModel, 1);
   });
 
+  it("reports the effective account cap with total mixed-model utilization", async () => {
+    const { rotator } = makeRotator(["project-a"], {
+      maxConcurrentRequestsPerAccount: 7,
+      maxConcurrentRequestsPerProjectModel: 7,
+    });
+    const models = [GEMINI_MODEL, CLAUDE_MODEL, UNKNOWN_MODEL];
+    const leases = await Promise.all(
+      models.map(async (model) => {
+        const account = await rotator.getActiveAccount(model);
+        assert.ok(account);
+        return {
+          account,
+          modelKey: rotator.resolveQuotaModelKeyForDisplay(model)!,
+        };
+      }),
+    );
+
+    const status = rotator.getStatus();
+    assert.equal(status.maxConcurrentRequestsPerAccount, 7);
+    assert.equal(status.accounts[0].inFlightRequests, 3);
+
+    releaseAll(rotator, leases);
+  });
+
   it("distributes 25 mixed-pool leases in five layers and queues request 26", async () => {
     const { rotator, accounts } = makeRotator();
     const leases = await fillCapacity(rotator);

@@ -495,6 +495,7 @@ export interface StatusResponse {
   version: string;
   proxyPort: number;
   requestsPerRotation: number;
+  maxConcurrentRequestsPerAccount: number;
   totalRequestsAllAccounts: number;
   uptime: number;
   // Per-model active account

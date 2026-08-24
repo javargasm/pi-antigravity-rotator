@@ -3708,6 +3708,8 @@ export class AccountRotator {
       version: updateInfo.currentVersion,
       proxyPort: this.config.proxyPort,
       requestsPerRotation: this.config.requestsPerRotation,
+      maxConcurrentRequestsPerAccount:
+        this.config.maxConcurrentRequestsPerAccount ?? 5,
       activeAccounts,
       totalRequestsAllAccounts: this.accounts.reduce(
         (sum, a) => sum + a.totalRequests,
