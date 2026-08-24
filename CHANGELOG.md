@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.3.0] - 2026-08-24
+
+### Added
+- **Queued multi-request Antigravity pooling (5×5 concurrent streams)**: Up to 5 concurrent Antigravity streams per account across model pools, with a 25-stream total across 5 accounts. Requests are distributed breadth-first by total account load across mixed Gemini and Claude traffic ([#24](https://github.com/tuxevil/tuxevil-rotator/pull/24) by [@javargasm](https://github.com/javargasm)).
+- **Process-local strict FIFO request queue**: Requests exceeding total pool capacity wait in a strict FIFO queue with automatic 300-second expiration, early client disconnect cancellation (`AbortSignal`), and immediate wakeup on lease release, cooldown expiry, circuit-breaker reset, catalog discovery, or config reload ([#24](https://github.com/tuxevil/tuxevil-rotator/pull/24) by [@javargasm](https://github.com/javargasm)).
+- **Dashboard concurrency metrics**: Account cards on the web dashboard display active vs. max concurrency (e.g. `Concurrency: 3/5`) for Google Antigravity accounts ([#24](https://github.com/tuxevil/tuxevil-rotator/pull/24) by [@javargasm](https://github.com/javargasm)).
+
+### Changed
+- **Config defaults**: `maxConcurrentRequestsPerAccount` and `maxConcurrentRequestsPerProjectModel` default values raised from `1` to `5` ([#24](https://github.com/tuxevil/tuxevil-rotator/pull/24) by [@javargasm](https://github.com/javargasm)).
+
+### Fixed
+- **Canonical project ID resolution**: Forwarding, quota polling, Code Assist passthrough, and admission gating consistently resolve trimmed nested `google-antigravity` credentials before legacy flat `projectId` fields, preventing unkeyed empty project ID collision across unrelated accounts ([#24](https://github.com/tuxevil/tuxevil-rotator/pull/24) by [@javargasm](https://github.com/javargasm)).
+
 ## [3.2.3] - 2026-08-21
 
 ### Fixed
