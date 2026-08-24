@@ -943,6 +943,109 @@ describe("compat observability", () => {
     });
   });
 
+  it("cancels a queued non-stream compat request before it can be admitted", async () => {
+    let upstreamCalls = 0;
+    const upstream = await listenServer((req, res) => {
+      upstreamCalls++;
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(
+          'data: {"response":{"candidates":[{"content":{"parts":[{"text":"late"}]}}]}}\n\n',
+        );
+      });
+    });
+    endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
+
+    const tracking = createTracking();
+    const rotator = createRotatorStub(tracking);
+    const account = createAccount();
+    let capturedSignal: AbortSignal | undefined;
+    let admit = (): void => {};
+    let queuedResolve!: () => void;
+    const queued = new Promise<void>((resolve) => {
+      queuedResolve = resolve;
+    });
+    rotator.getActiveAccount = async (_model?: string, signal?: AbortSignal) => {
+      capturedSignal = signal;
+      queuedResolve();
+      return new Promise<AccountRuntime | null>((resolve) => {
+        let settled = false;
+        const onAbort = (): void => {
+          if (settled) return;
+          settled = true;
+          resolve(null);
+        };
+        admit = () => {
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener("abort", onAbort);
+          resolve(account);
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    };
+
+    const proxy = await startTestProxy(rotator);
+    const port = (proxy.address() as AddressInfo).port;
+    const body = JSON.stringify({
+      model: "gemini-3.5-flash",
+      messages: [{ role: "user", content: "wait in queue" }],
+      stream: false,
+    });
+    let clientRequest: ReturnType<typeof httpRequest> | undefined;
+
+    try {
+      const clientClosed = new Promise<void>((resolve, reject) => {
+        let closed = false;
+        const settle = (): void => {
+          if (closed) return;
+          closed = true;
+          resolve();
+        };
+        clientRequest = httpRequest(
+          `http://127.0.0.1:${port}/v1/chat/completions`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Content-Length": String(Buffer.byteLength(body)),
+            },
+          },
+          (response) => {
+            response.resume();
+            response.once("end", settle);
+          },
+        );
+        clientRequest.once("close", settle);
+        clientRequest.once("error", (error: NodeJS.ErrnoException) => {
+          if (error.code === "ECONNRESET") settle();
+          else reject(error);
+        });
+        clientRequest.end(body);
+      });
+
+      await queued;
+      clientRequest?.destroy();
+      await clientClosed;
+      for (let attempt = 0; attempt < 20 && !capturedSignal?.aborted; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const abortedWhileQueued = capturedSignal?.aborted === true;
+      admit();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      assert.equal(abortedWhileQueued, true, "non-stream admission must receive the client signal");
+      assert.equal(upstreamCalls, 0, "a closed client must never consume a later lease");
+      assert.equal(tracking.finishRequests, 0);
+    } finally {
+      clientRequest?.destroy();
+      admit();
+      await closeHttpServer(proxy);
+      await closeHttpServer(upstream.server);
+    }
+  });
+
   it("lists ollama models on /v1/models with owned_by ollama", async () => {
     ollamaCatalog = ["gpt-oss:20b", "nemotron-nano:8b"];
     const tracking = createTracking();

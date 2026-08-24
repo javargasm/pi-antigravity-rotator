@@ -22,6 +22,7 @@ export {
   primaryProviderId,
   hasCredential,
   getCredential,
+  getProviderProjectId,
   type CredentialEntry,
   type AccountLike as ProviderCredentialLike,
   PROVIDER_ORDER,

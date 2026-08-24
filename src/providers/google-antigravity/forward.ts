@@ -13,6 +13,7 @@ import type { AccountRuntime } from "../../types.js";
 import type { RequestBody, ForwardedResponse } from "../../proxy.js";
 import { logger } from "../../logger.js";
 import type { TokenUsage } from "../adapter.js";
+import { DEFAULT_PROVIDER, getProviderProjectId } from "../credential-helpers.js";
 import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
 import type { RequestInitWithDispatcher } from "../../fetch-with-retry.js";
 
@@ -234,7 +235,7 @@ const BENCHMARK_TIMEOUT_MS = 30_000;
 
 function benchmarkRequestBody(account: AccountRuntime): RequestBody {
   return {
-    project: account.config.projectId as string,
+    project: getProviderProjectId(account.config, DEFAULT_PROVIDER),
     model: BENCHMARK_MODEL,
     request: {
       contents: [
@@ -297,7 +298,7 @@ export async function forwardRequest(
   signal?: AbortSignal,
 ): Promise<ForwardedResponse> {
   // Swap credentials
-  body.project = account.config.projectId ?? "";
+  body.project = getProviderProjectId(account.config, DEFAULT_PROVIDER);
 
   // Map internal display/compat names to Google upstream names (single source
   // of truth: src/types.ts:applyModelAlias)
@@ -404,6 +405,7 @@ export async function forwardRequest(
 
       return { response, endpoint };
     } catch (err) {
+      if (signal?.aborted) throw err;
       if (endpointIdx < ANTIGRAVITY_ENDPOINTS.length - 1) {
         forwardLogger.log("info",
           `Endpoint ${endpoint} failed: ${

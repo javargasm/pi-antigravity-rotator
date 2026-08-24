@@ -7,6 +7,7 @@ import {
 import type { AccountRuntime } from "../../types.js";
 import type { ForwardedResponse } from "../../proxy.js";
 import { fetchWithRetry } from "../../fetch-with-retry.js";
+import { DEFAULT_PROVIDER, getProviderProjectId } from "../credential-helpers.js";
 import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
 
 export const CODE_ASSIST_ACTIONS = [
@@ -101,7 +102,7 @@ function buildUpstreamBody(
 		"retrieveUserQuotaSummary",
 	]);
 	if (!projectScoped.has(action)) return { ...body };
-	const projectId = account.config.projectId?.trim();
+	const projectId = getProviderProjectId(account.config, DEFAULT_PROVIDER);
 	if (!projectId) {
 		throw new Error(`Code Assist ${action} requires the active account projectId`);
 	}
@@ -151,6 +152,7 @@ export async function forwardCodeAssistRequest(
 			return { response, endpoint };
 		} catch (err) {
 			lastError = err;
+			if (signal?.aborted) throw err;
 			if (index < ANTIGRAVITY_ENDPOINTS.length - 1) continue;
 		}
 	}

@@ -14,6 +14,7 @@ import {
 } from "../src/proxy.js";
 import { ANTIGRAVITY_ENDPOINTS, type AccountRuntime } from "../src/types.js";
 import type { AccountRotator } from "../src/rotator.js";
+import { fetchProviderQuota } from "../src/providers/google-antigravity/quota.js";
 
 const endpointOverrides = ANTIGRAVITY_ENDPOINTS as unknown as string[];
 const originalEndpoints = [...endpointOverrides];
@@ -559,6 +560,134 @@ describe("proxy e2e: 429 rate-limited", () => {
 			await upstream.close();
 		}
 	});
+
+	it("releases a pre-header abort, admits the queued successor, and preserves nested projectId", async () => {
+		const forwardedProjects: string[] = [];
+		let upstreamCalls = 0;
+		let firstArrivedResolve!: () => void;
+		const firstArrived = new Promise<void>((resolve) => {
+			firstArrivedResolve = resolve;
+		});
+		let firstClosedResolve!: () => void;
+		const firstClosed = new Promise<void>((resolve) => {
+			firstClosedResolve = resolve;
+		});
+		const upstream = await listen((req, res) => {
+			let raw = "";
+			req.on("data", (chunk) => { raw += chunk.toString(); });
+			req.on("end", () => {
+				upstreamCalls++;
+				forwardedProjects.push((JSON.parse(raw) as { project: string }).project);
+				if (upstreamCalls === 1) {
+					res.once("close", firstClosedResolve);
+					firstArrivedResolve();
+					return;
+				}
+				res.writeHead(200, { "Content-Type": "text/event-stream" });
+				res.end('data: {"response":{"candidates":[{"content":{"parts":[{"text":"successor ok"}]}}]}}\n\ndata: [DONE]\n\n');
+			});
+		});
+		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
+
+		const account = makeAccount("nested-project@example.com");
+		account.config = {
+			email: account.config.email,
+			label: account.config.label,
+			projectId: "legacy-project-must-not-win",
+			credentials: [{
+				provider: "google-antigravity",
+				refreshToken: "nested-refresh",
+				projectId: " nested-project ",
+			}],
+		};
+		const tracking = { finishRequest: 0, markError: 0 };
+		const rotator = makeRotator(account, tracking);
+		let leased = false;
+		let queuedResolve!: () => void;
+		const queued = new Promise<void>((resolve) => {
+			queuedResolve = resolve;
+		});
+		let admitQueued: (() => void) | undefined;
+		rotator.getActiveAccount = async (_model?: string, signal?: AbortSignal) => {
+			if (!leased) {
+				leased = true;
+				return account;
+			}
+			queuedResolve();
+			return new Promise<AccountRuntime | null>((resolve) => {
+				let settled = false;
+				const onAbort = (): void => {
+					if (settled) return;
+					settled = true;
+					resolve(null);
+				};
+				admitQueued = () => {
+					if (settled) return;
+					settled = true;
+					signal?.removeEventListener("abort", onAbort);
+					leased = true;
+					resolve(account);
+				};
+				signal?.addEventListener("abort", onAbort, { once: true });
+			});
+		};
+		rotator.finishRequest = () => {
+			tracking.finishRequest++;
+			leased = false;
+			const admit = admitQueued;
+			admitQueued = undefined;
+			admit?.();
+		};
+
+		const proxy = startProxy(rotator, 0, "127.0.0.1");
+		await once(proxy, "listening");
+		const address = proxy.address();
+		if (!address || typeof address === "string") throw new Error("proxy did not bind");
+		const url = `http://127.0.0.1:${address.port}/v1internal:streamGenerateContent?alt=sse`;
+		const requestBody = JSON.stringify({
+			project: "client-project-must-not-win",
+			model: "gemini-3.1-pro",
+			request: { contents: [{ role: "user", parts: [{ text: "hello" }] }] },
+		});
+		const firstController = new AbortController();
+
+		try {
+			const firstRequest = fetch(url, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: requestBody,
+				signal: firstController.signal,
+			}).then(
+				() => assert.fail("the aborted request unexpectedly received headers"),
+				(error: unknown) => error,
+			);
+			await firstArrived;
+
+			const successor = fetch(url, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: requestBody,
+			});
+			await queued;
+			assert.equal(upstreamCalls, 1, "the successor must wait for the lease");
+
+			firstController.abort();
+			await firstRequest;
+			const response = await successor;
+			assert.equal(response.status, 200);
+			assert.match(await response.text(), /successor ok/);
+			await firstClosed;
+
+			assert.deepEqual(forwardedProjects, ["nested-project", "nested-project"]);
+			assert.equal(tracking.finishRequest, 2);
+			assert.equal(tracking.markError, 0, "client aborts must not penalize the account");
+			assert.equal(leased, false);
+		} finally {
+			firstController.abort();
+			await new Promise<void>((resolve, reject) => proxy.close((err) => (err ? reject(err) : resolve())));
+			await upstream.close();
+		}
+	});
 });
 
 describe("native Code Assist passthrough", () => {
@@ -575,7 +704,17 @@ describe("native Code Assist passthrough", () => {
 			});
 		});
 		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
-		const proxy = startProxy(makeRotator(makeAccount("code-assist@example.com")), 0, "127.0.0.1");
+		const account = makeAccount("code-assist@example.com");
+		account.config = {
+			...account.config,
+			projectId: "legacy-project-must-not-win",
+			credentials: [{
+				provider: "google-antigravity",
+				refreshToken: "nested-refresh",
+				projectId: " code-assist-project ",
+			}],
+		};
+		const proxy = startProxy(makeRotator(account), 0, "127.0.0.1");
 		await once(proxy, "listening");
 		const address = proxy.address();
 		if (!address || typeof address === "string") throw new Error("proxy did not bind");
@@ -590,11 +729,44 @@ describe("native Code Assist passthrough", () => {
 			assert.deepEqual(await response.json(), { models: [{ name: "gemini-3-flash" }] });
 			assert.deepEqual(requests, [{
 				action: "fetchAvailableModels",
-				body: { project: "test-project", metadata: { ideType: "ANTIGRAVITY" } },
+				body: { project: "code-assist-project", metadata: { ideType: "ANTIGRAVITY" } },
 			}]);
 		} finally {
 			await new Promise<void>((resolve, reject) => proxy.close((err) => (err ? reject(err) : resolve())));
 			await upstream.close();
+		}
+	});
+
+	it("uses the same trimmed legacy fallback for quota polling", async () => {
+		const account = makeAccount("quota-project@example.com");
+		account.config = {
+			...account.config,
+			projectId: " legacy-quota-project ",
+			credentials: [{
+				provider: "google-antigravity",
+				refreshToken: "nested-refresh",
+				projectId: "   ",
+			}],
+		};
+		let forwardedProject: unknown;
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (_input, init) => {
+			forwardedProject = JSON.parse(String(init?.body)).project;
+			return new Response(JSON.stringify({ models: {} }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as typeof fetch;
+
+		try {
+			await fetchProviderQuota(account, {
+				log: () => {},
+				markFlagged: () => {},
+				reportQuotaPollFlag: () => {},
+			});
+			assert.equal(forwardedProject, "legacy-quota-project");
+		} finally {
+			globalThis.fetch = originalFetch;
 		}
 	});
 
