@@ -315,4 +315,20 @@ describe("serveLoginLanding", () => {
 		assert.match(state.body, /&lt;img src=x onerror=alert\(1\)&gt;/);
 		process.env.ANTIGRAVITY_REDIRECT_URI = "https://example.test/callback";
 	});
+
+	it("carries the admin token on the Continue With Google link", () => {
+		const prevToken = process.env.PI_ROTATOR_ADMIN_TOKEN;
+		process.env.PI_ROTATOR_ADMIN_TOKEN = "secret-token-123";
+		try {
+			const { res, state } = mockRes();
+			serveLoginLanding(res);
+			assert.match(state.body, /href="\/auth\/antigravity\/start\?token=secret-token-123"/);
+		} finally {
+			if (prevToken === undefined) {
+				delete process.env.PI_ROTATOR_ADMIN_TOKEN;
+			} else {
+				process.env.PI_ROTATOR_ADMIN_TOKEN = prevToken;
+			}
+		}
+	});
 });
