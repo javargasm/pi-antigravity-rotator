@@ -1,6 +1,6 @@
 {
   "name": "tuxevil-rotator",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "description": "Multi-provider, multi-account AI proxy rotator with per-model routing, real-time quota tracking, and infringement detection (Google Antigravity, Ollama Cloud)",
   "license": "MIT",
   "type": "module",
@@ -45,7 +45,7 @@
     "type": "git",
     "url": "git+https://github.com/tuxevil/tuxevil-rotator.git"
   },
-  "author": "Sebasti\u00e1n Real (tuxevil)",
+  "author": "Sebastián Real (tuxevil)",
   "dependencies": {
     "pg": "^8.22.0",
     "tsx": "^4.22.4",
