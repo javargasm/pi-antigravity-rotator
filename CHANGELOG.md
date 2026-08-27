@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Admin token propagation on hosted login**: Propagate the configured admin token to the "Continue With Google" link on the `/login` landing page, preventing a 401 Unauthorized error when navigating to `/auth/antigravity/start` ([#25](https://github.com/tuxevil/tuxevil-rotator/pull/25) by [@CelestialCreator](https://github.com/CelestialCreator)).
+
 ## [3.3.0] - 2026-08-24
 
 ### Added
