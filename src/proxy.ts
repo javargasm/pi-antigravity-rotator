@@ -150,6 +150,7 @@ import { applyConfigDefaults } from "./account-store.js";
 import {
   classifyRateLimitReason,
   parseRetryAfterMs,
+  RESOURCE_EXHAUSTED_FALLBACK_MS,
 } from "./rate-limit-parser.js";
 import { authenticateVirtualKey, sendAuthErrorResponse } from "./key-auth.js";
 import { logSpend } from "./spend-logger.js";
@@ -160,7 +161,6 @@ const GENERIC_UPSTREAM_ERROR = "Upstream request failed";
 
 const DEFAULT_STREAM_RECOVERY_MAX_RETRIES = 2;
 const MAX_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes max cooldown
-const RESOURCE_EXHAUSTED_COOLDOWN_MS = 30 * 60 * 1000; // Stop hammering provider-side daily/request buckets
 const STREAM_IDLE_TIMEOUT_MS = 2 * 60 * 1000; // Release account if a stream goes silent.
 const LARGE_CONTEXT_WARN_BYTES = 1 * 1024 * 1024;
 
@@ -299,13 +299,20 @@ export async function classifyUpstreamResponse(
   account: AccountRuntime,
   model: string,
   modelKey: string,
+  providerId = DEFAULT_PROVIDER,
 ): Promise<UpstreamAction> {
   if (response.status === 429) {
     const errorText = await response.text().catch(() => "");
     const rateLimitReason = classifyRateLimitReason(errorText, response.status);
     const providerResourceExhausted = rateLimitReason === "quota-exhausted";
     const cooldownMs = providerResourceExhausted
-      ? RESOURCE_EXHAUSTED_COOLDOWN_MS
+      ? providerId === DEFAULT_PROVIDER
+        ? parseRetryAfterMs(
+            errorText,
+            response.headers,
+            RESOURCE_EXHAUSTED_FALLBACK_MS,
+          )
+        : RESOURCE_EXHAUSTED_FALLBACK_MS
       : capCooldown(parseRetryAfterMs(errorText, response.headers));
     return {
       kind: "rate-limited",
@@ -1248,6 +1255,7 @@ export async function withRotation<T>(
         account,
         model,
         modelKey,
+        provider.id,
       );
 
       if (action.kind !== "success") {
@@ -1680,6 +1688,7 @@ async function handleProxyRequest(
         account,
         body.model,
         modelKey,
+        provider.id,
       );
 
       if (action.kind !== "success") {

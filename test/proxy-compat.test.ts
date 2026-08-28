@@ -306,19 +306,51 @@ describe("classifyUpstreamResponse", () => {
 		return new Response(bodyText, { status, headers: { "content-type": "text/plain" } });
 	}
 
-	it("classifies 429 with RESOURCE_EXHAUSTED as providerResourceExhausted", async () => {
+	it("uses the complete Antigravity RESOURCE_EXHAUSTED reset duration", async () => {
+		const action = await classifyUpstreamResponse(
+			response(429, `{"error":{"status":"RESOURCE_EXHAUSTED","message":"quota exceeded. Resets in 1h20m14s"}}`),
+			"https://api.example.com",
+			fakeAccount,
+			"gemini-3.1-pro",
+			fakeModelKey,
+			"google-antigravity",
+		);
+		assert.equal(action.kind, "rate-limited");
+		if (action.kind === "rate-limited") {
+			assert.equal(action.providerResourceExhausted, true);
+			assert.equal(action.cooldownMs, 4_815_000);
+			assert.match(action.errorText, /quota exceeded/);
+		}
+	});
+
+	it("uses the 30 minute Antigravity fallback without a parseable reset", async () => {
 		const action = await classifyUpstreamResponse(
 			response(429, `{"error":{"status":"RESOURCE_EXHAUSTED","message":"quota exceeded"}}`),
 			"https://api.example.com",
 			fakeAccount,
 			"gemini-3.1-pro",
 			fakeModelKey,
+			"google-antigravity",
 		);
 		assert.equal(action.kind, "rate-limited");
 		if (action.kind === "rate-limited") {
 			assert.equal(action.providerResourceExhausted, true);
-			assert.ok(action.cooldownMs > 0);
-			assert.match(action.errorText, /quota exceeded/);
+			assert.equal(action.cooldownMs, 1_800_000);
+		}
+	});
+
+	it("keeps RESOURCE_EXHAUSTED reset-duration semantics scoped to Antigravity", async () => {
+		const action = await classifyUpstreamResponse(
+			response(429, `{"error":{"status":"RESOURCE_EXHAUSTED","message":"Resets in 1h20m14s"}}`),
+			"https://api.example.com",
+			fakeAccount,
+			"gpt-oss:20b",
+			"session",
+			"ollama",
+		);
+		assert.equal(action.kind, "rate-limited");
+		if (action.kind === "rate-limited") {
+			assert.equal(action.cooldownMs, 1_800_000);
 		}
 	});
 

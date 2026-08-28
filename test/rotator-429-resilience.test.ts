@@ -28,6 +28,7 @@ let AccountRotator: typeof import("../src/rotator.js").AccountRotator;
 let initDb: typeof import("../src/db-store.js").initDb;
 let closeDb: typeof import("../src/db-store.js").closeDb;
 let isDbConfigured: typeof import("../src/db-store.js").isDbConfigured;
+let setCachedState: typeof import("../src/db-store.js").setCachedState;
 let getAccountsPath: typeof import("../src/paths.js").getAccountsPath;
 let getProviderAdapter: typeof import("../src/providers/registry.js").getProviderAdapter;
 type AccountRuntime = import("../src/types.js").AccountRuntime;
@@ -41,6 +42,7 @@ before(async () => {
   initDb = dbStore.initDb;
   closeDb = dbStore.closeDb;
   isDbConfigured = dbStore.isDbConfigured;
+  setCachedState = dbStore.setCachedState;
   AccountRotator = rotatorMod.AccountRotator;
   getAccountsPath = pathsMod.getAccountsPath;
   getProviderAdapter = regMod.getProviderAdapter;
@@ -119,6 +121,111 @@ describe("429 RESOURCE_EXHAUSTED resilience and in-flight lifecycle", () => {
   it("hostile database environment variables do not select external database backend", () => {
     // Assert db-store is not connected to PostgreSQL
     assert.equal(isDbConfigured(), false, "isDbConfigured must be false when DB URL is not set");
+  });
+
+  it("cools only the exhausted Antigravity pool and keeps its sibling routable", async () => {
+    const account = makeAccount("pool-isolation@example.com", "pool-project", "claude", 100);
+    account.quota = [
+      account.quota[0],
+      {
+        modelKey: "gemini",
+        displayName: "Gemini",
+        providerId: "google-antigravity",
+        percentRemaining: 100,
+        resetTime: null,
+        timerType: "fresh",
+      },
+    ];
+    const rotator = new AccountRotator({
+      proxyPort: 51223,
+      rotateOnQuotaDrop: 20,
+      routingPolicy: "timer-first",
+      quotaPollIntervalMs: 300000,
+      requestsPerRotation: 5,
+      accounts: [account.config],
+    });
+    rotator.stopQuotaPolling();
+    (rotator as any).accounts = [account];
+
+    const before = Date.now();
+    rotator.markExhausted(
+      account,
+      "claude-sonnet-4-6",
+      4_815_000,
+      "RESOURCE_EXHAUSTED",
+    );
+
+    assert.ok((account.cooldownsByModel.claude ?? 0) >= before + 4_815_000);
+    assert.equal(account.cooldownsByModel.gemini, undefined);
+    assert.equal(account.cooldownsByModel.__default__, undefined);
+    assert.equal(account.providerCooldowns?.["google-antigravity"], undefined);
+
+    const sibling = await rotator.getActiveAccount("gemini-3.1-pro");
+    assert.equal(sibling, account, "Gemini must remain routable while Claude cools down");
+    rotator.finishRequest(sibling!, "gemini");
+
+    const uiAccount = rotator
+      .getStatus()
+      .accounts.find((candidate) => candidate.email === account.config.email);
+    assert.notEqual(uiAccount?.status, "cooldown", "one cooled pool is not a global account cooldown");
+
+    rotator.markExhausted(account, "gemini-3.1-pro", 4_815_000, "RESOURCE_EXHAUSTED");
+    const fullyCooling = rotator
+      .getStatus()
+      .accounts.find((candidate) => candidate.email === account.config.email);
+    assert.equal(fullyCooling?.status, "cooldown", "all known pools cooling is a global account cooldown");
+  });
+
+  it("preserves persisted Antigravity pool deadlines beyond 30 minutes", async () => {
+    const now = Date.now();
+    const claudeDeadline = now + 4_815_000;
+    const geminiDeadline = now + 3_900_000;
+    const defaultDeadline = now + 4 * 60 * 60 * 1000;
+    const email = "persisted-pools@example.com";
+
+    await setCachedState({
+      modelAccounts: {},
+      accounts: {
+        [email]: {
+          totalRequests: 0,
+          cooldownsByModel: {
+            claude: claudeDeadline,
+            gemini: geminiDeadline,
+            __default__: defaultDeadline,
+          },
+          quotaExhaustedAt: now,
+          disabled: false,
+          flagged: false,
+        },
+      },
+    });
+
+    try {
+      const rotator = new AccountRotator({
+        proxyPort: 51224,
+        rotateOnQuotaDrop: 20,
+        quotaPollIntervalMs: 300000,
+        requestsPerRotation: 5,
+        accounts: [
+          {
+            email,
+            projectId: "persisted-project",
+            refreshToken: "persisted-refresh",
+          },
+        ],
+      }) as any;
+      rotator.stopQuotaPolling();
+      const restored = rotator.accounts[0] as AccountRuntime;
+
+      assert.equal(restored.cooldownsByModel.claude, claudeDeadline);
+      assert.equal(restored.cooldownsByModel.gemini, geminiDeadline);
+      assert.ok(
+        (restored.cooldownsByModel.__default__ ?? 0) <= Date.now() + 30 * 60 * 1000,
+        "generic stale cooldowns must remain capped",
+      );
+    } finally {
+      await setCachedState({ modelAccounts: {}, accounts: {} });
+    }
   });
 
   it("rotateModel and activateModelAccount do not leak in-flight counters during background polling", async () => {

@@ -882,6 +882,8 @@ export const ANTIGRAVITY_ENDPOINTS = [
 // used for kickstart warmup requests. Gemini 3.6/3.5 Flash and Gemini 3.1 Pro
 // share the same upstream pool, so all map to gemini-3-flash.
 export const KICKSTART_MODEL_FOR_QUOTA_POOL: Record<string, string> = {
+  claude: "gpt-oss-120b-medium",
+  gemini: "gemini-3-flash",
   "claude-opus-4-6-thinking": "gpt-oss-120b-medium",
   "gemini-3.5-flash": "gemini-3-flash",
   "gemini-3.6-flash": "gemini-3-flash",

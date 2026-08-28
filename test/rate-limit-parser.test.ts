@@ -25,9 +25,19 @@ describe("rate limit parser", () => {
 		assert.equal(ms, 46000);
 	});
 
+	it("parses the full Antigravity reset duration", () => {
+		const ms = parseRetryAfterMs("RESOURCE_EXHAUSTED. Resets in 1h20m14s", new Headers());
+		assert.equal(ms, 4_815_000);
+	});
+
 	it("falls back to the default retry window", () => {
 		const ms = parseRetryAfterMs("unstructured error", new Headers());
 		assert.equal(ms, 60000);
+	});
+
+	it("accepts the caller's configured fallback when no reset is parseable", () => {
+		const ms = parseRetryAfterMs("unstructured error", new Headers(), 1_800_000);
+		assert.equal(ms, 1_800_000);
 	});
 
 	it("classifies quota exhaustion and capacity distinctly", () => {

@@ -25,29 +25,23 @@ function timerDisplayLabel(timerType) {
   return timerType === "fresh" ? "idle" : timerType;
 }
 
-// A pool is "idle" (worth kickstarting) when either:
-//   1. The server reports timerType === "fresh" (no active timer at all), or
-//   2. Google is showing a "rolling" timer: 100% quota AND remaining time is
-//      very close to a full 5h or 7d window (the timer exists but hasn't been
-//      touched yet — a kickstart request will start consuming from it).
-function isIdleForKickstart(q, now) {
-  if (q.timerType === "fresh") return true;
-  if (!q.resetTime || q.percentRemaining !== 100) return false;
-  var remaining = new Date(q.resetTime).getTime() - now;
-  if (remaining <= 0) return false;
-  var isRolling5h = Math.abs(remaining - 5 * 3600000) < 600000;
-  var isRolling7d = Math.abs(remaining - 7 * 86400000) < 600000;
-  return isRolling5h || isRolling7d;
+// A pool is "idle" (worth kickstarting) when it has no active timer running (fresh).
+function isIdleForKickstart(q) {
+  return q.timerType === "fresh";
 }
 
 function isKickstartSupported(q) {
   if (!q) return false;
-  if (q.providerId === "openai-codex") return false;
+  if (q.providerId === "openai-codex" || q.providerId === "opencode-zen") return false;
+  if (q.providerId === "ollama" && q.modelKey !== "session") return false;
   var key = String(q.modelKey || "");
   return (
     key !== "openai-codex" &&
     key !== "openai-codex-spark" &&
-    key.indexOf("openai-codex:") !== 0
+    key.indexOf("openai-codex:") !== 0 &&
+    key !== "opencode-zen" &&
+    key.indexOf("opencode-zen:") !== 0 &&
+    key !== "weekly"
   );
 }
 
@@ -76,32 +70,44 @@ function renderQuotaBars(account) {
   var sortedQuota = quota.slice().sort(function (a, b) {
     return getQuotaItemProviderRank(a) - getQuotaItemProviderRank(b);
   });
-  var now = Date.now();
+  var accountInactive = account.status === "disabled" || account.status === "flagged";
   var rows = sortedQuota
     .map(function (q) {
       var inFlightForModel = (account.inFlightByModel || {})[q.modelKey] || 0;
-      var clearButton =
-        inFlightForModel > 0
-          ? '<button class="btn-clear-flight" title="Clear in-flight counter for ' +
-            escapeHtml(q.displayName) +
-            '" onclick="clearInFlight(\'' +
-            jsString(account.email) +
-            "', '" +
-            jsString(q.modelKey) +
-            "')\">" +
-            "Clear</button>"
-          : '<button class="btn-clear-flight" title="No in-flight requests for ' +
-            escapeHtml(q.displayName) +
-            '" disabled>Clear</button>';
-      var idle = isKickstartSupported(q) && isIdleForKickstart(q, now);
-      var kickstartBtn = "";
+      var idle =
+        !accountInactive && isKickstartSupported(q) && isIdleForKickstart(q);
+      var actionButton = "";
+      if (inFlightForModel > 0) {
+        actionButton =
+          '<button class="btn-clear-flight" title="Clear in-flight counter for ' +
+          escapeHtml(q.displayName) +
+          '" onclick="clearInFlight(\'' +
+          jsString(account.email) +
+          "', '" +
+          jsString(q.modelKey) +
+          "')\">" +
+          "Clear</button>";
+      } else if (idle) {
+        actionButton =
+          '<button class="btn-clear-flight" title="Send minimal request to start idle timer for ' +
+          escapeHtml(q.displayName) +
+          '" onclick="kickstartTimer(\'' +
+          jsString(account.email) +
+          "', '" +
+          jsString(q.modelKey) +
+          "')\">▶ Start</button>";
+      } else {
+        actionButton =
+          '<button class="btn-clear-flight" title="No in-flight requests for ' +
+          escapeHtml(q.displayName) +
+          '" disabled>Clear</button>';
+      }
       var color = quotaBarColor(q.percentRemaining);
       var timerClass = "timer-" + q.timerType;
       var resetLabel = "";
-      if (idle && q.resetTime && q.timerType !== "fresh") {
-        // Rolling idle timer already has resetTime set; show "idle" label
+      if (q.timerType === "fresh") {
         resetLabel = '<span style="color:var(--text-dim)">idle</span>';
-      } else if (q.resetTime && q.timerType !== "fresh") {
+      } else if (q.resetTime) {
         var remaining = new Date(q.resetTime).getTime() - Date.now();
         if (remaining > 0) {
           resetLabel = formatDuration(remaining);
@@ -126,8 +132,7 @@ function renderQuotaBars(account) {
         (resetLabel || "--") +
         "</span>" +
         '<span class="quota-action">' +
-        clearButton +
-        kickstartBtn +
+        actionButton +
         "</span>" +
         "</div>"
       );
@@ -494,8 +499,10 @@ function renderAccounts(data) {
           ? "Use Global Fresh Policy"
           : "Allow Fresh On This Account") +
         "</button>" +
-        ((a.quota || []).some(function (q) {
-          return isKickstartSupported(q) && isIdleForKickstart(q, Date.now());
+        (a.status !== "disabled" &&
+        a.status !== "flagged" &&
+        (a.quota || []).some(function (q) {
+          return isKickstartSupported(q) && isIdleForKickstart(q);
         })
           ? '<button class="btn-enable" onclick="kickstartAllTimers(\'' +
             jsString(a.email) +
@@ -2809,6 +2816,16 @@ async function kickstartAllTimers(email) {
     alert("Kickstart failed: " + data.error);
   } else if (data.results && data.results.length === 0) {
     alert("No idle timers found for this account.");
+  } else if (!data.ok) {
+    var failed = (data.results || []).filter(function (r) {
+      return !r.ok;
+    });
+    var details = failed
+      .map(function (r) {
+        return r.upstreamModel + " (status " + r.status + ")";
+      })
+      .join(", ");
+    alert("Kickstart partially failed: " + (details || "unknown error"));
   }
   refresh();
 }
