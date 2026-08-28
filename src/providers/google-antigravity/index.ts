@@ -162,7 +162,10 @@ export const googleAntigravityAdapter: ProviderAdapter = {
   createStreamAccumulator: createGoogleStreamAccumulator,
 
   getKickstartModelForPool(quotaModelKey: string): string | undefined {
-    return KICKSTART_MODEL_FOR_QUOTA_POOL[quotaModelKey];
+    return (
+      KICKSTART_MODEL_FOR_QUOTA_POOL[quotaModelKey] ??
+      KICKSTART_MODEL_FOR_QUOTA_POOL[resolveQuotaModelKey(quotaModelKey) ?? ""]
+    );
   },
 
   ownsModel(model: string): boolean {

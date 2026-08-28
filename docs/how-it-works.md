@@ -199,8 +199,9 @@ Flagged accounts are **immediately excluded** from all model routing. If the rea
 
 ## Cooldown Management
 
-- Cooldowns are capped at **30 minutes** max
-- Stale cooldowns from previous sessions are capped on startup
+- Generic rate-limit cooldowns are capped at **30 minutes** max
+- Explicit reset durations reported by Antigravity `RESOURCE_EXHAUSTED` responses are honored in full; the generic 30-minute cap does not truncate them
+- Stale generic cooldowns from previous sessions are capped on startup, while persisted Antigravity Claude/Gemini reset deadlines are preserved
 - When every non-flagged account is cooling down, the routing state becomes `cooldown_wait`
 - The dashboard shows why routing is waiting, how long until the next retry window, and which accounts are cooling down
 - Quota-based rotation only triggers if a healthy account is available; the proxy won't rotate away from a working account if there's no better alternative

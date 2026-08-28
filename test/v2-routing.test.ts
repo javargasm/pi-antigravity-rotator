@@ -1,24 +1,31 @@
-import { describe, it, before, afterEach } from "node:test";
+import { describe, it, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/types.js";
 
-// Keep direct execution of this file from persisting its fixture accounts in
-// the operator's real config directory. `npm test` already sets this env var,
-// but `node --test test/v2-routing.test.ts` does not.
-if (!process.env.TUXEVIL_ROTATOR_DIR) {
-  process.env.TUXEVIL_ROTATOR_DIR = mkdtempSync(
-    join(tmpdir(), "tuxevil-v2-routing-"),
-  );
-}
+const savedEnv = {
+  TUXEVIL_ROTATOR_DIR: process.env.TUXEVIL_ROTATOR_DIR,
+  PI_ROTATOR_DIR: process.env.PI_ROTATOR_DIR,
+  DATABASE_URL: process.env.DATABASE_URL,
+  TUXEVIL_ROTATOR_DATABASE_URL: process.env.TUXEVIL_ROTATOR_DATABASE_URL,
+  PI_ROTATOR_DATABASE_URL: process.env.PI_ROTATOR_DATABASE_URL,
+};
+const testDir = mkdtempSync(join(tmpdir(), "tuxevil-v2-routing-"));
+process.env.TUXEVIL_ROTATOR_DIR = testDir;
+process.env.PI_ROTATOR_DIR = testDir;
+delete process.env.DATABASE_URL;
+delete process.env.TUXEVIL_ROTATOR_DATABASE_URL;
+delete process.env.PI_ROTATOR_DATABASE_URL;
 
 // These modules resolve their config paths during import, so load them only
 // after the isolated test directory has been selected above.
 const { AccountRotator } = await import("../src/rotator.js");
-const { initDb } = await import("../src/db-store.js");
+const { initDb, closeDb } = await import("../src/db-store.js");
 const { setPersistedAdminToken } = await import("../src/admin-auth.js");
+const { getProviderAdapter } = await import("../src/providers/registry.js");
+const { providerAdapterForModel } = await import("../src/proxy.js");
 
 function makeConfig(): Config {
   return {
@@ -52,6 +59,15 @@ function makeConfig(): Config {
 describe("v2 routing and status", () => {
   before(async () => {
     await initDb();
+  });
+
+  after(async () => {
+    await closeDb();
+    rmSync(testDir, { recursive: true, force: true });
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   afterEach(() => {
@@ -89,9 +105,16 @@ describe("v2 routing and status", () => {
   it("kickstarts the Gemini pool through the shared Gemini 3 upstream model", async () => {
     const originalFetch = globalThis.fetch;
     let requestBody: { model?: string } | undefined;
-    globalThis.fetch = (async (_input, init) => {
-      requestBody = JSON.parse(String(init?.body)) as { model?: string };
-      return new Response("", { status: 200 });
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("streamGenerateContent")) {
+        requestBody = JSON.parse(String(init?.body)) as { model?: string };
+        return new Response("", { status: 200 });
+      }
+      if (url.includes("fetchAvailableModels")) {
+        return new Response(JSON.stringify({ models: {} }), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch in direct kickstart test: ${url}`);
     }) as typeof fetch;
 
     try {
@@ -108,6 +131,594 @@ describe("v2 routing and status", () => {
       assert.equal(result.ok, true);
       assert.equal(result.upstreamModel, "gemini-3-flash");
       assert.equal(requestBody?.model, "gemini-3-flash");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("kickstarts family pool keys (gemini, claude) and kickstartAllFreshTimers", async () => {
+    const originalFetch = globalThis.fetch;
+    const requestedModels: string[] = [];
+    let quotaPolls = 0;
+    const mockQuotaResponse = {
+      models: {
+        "gemini-3.5-flash": { quotaInfo: { remainingFraction: 1.0, resetTime: null } },
+        "claude-opus-4-6-thinking": { quotaInfo: { remainingFraction: 1.0, resetTime: null } },
+      },
+    };
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.includes("streamGenerateContent")) {
+        const body = JSON.parse(String(init?.body)) as { model?: string };
+        if (body.model) requestedModels.push(body.model);
+        return new Response("", { status: 200 });
+      }
+      if (url.includes("fetchAvailableModels")) {
+        quotaPolls++;
+        return new Response(JSON.stringify(mockQuotaResponse), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch in kickstart test: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const rotator = new AccountRotator(makeConfig()) as any;
+      rotator.stopQuotaPolling();
+      rotator.accounts[0].accessToken = "test-access-token";
+      rotator.accounts[0].tokenExpires = Date.now() + 60_000;
+      rotator.accounts[0].quota = [
+        {
+          modelKey: "gemini",
+          displayName: "Gemini",
+          providerId: "google-antigravity",
+          percentRemaining: 100,
+          resetTime: null,
+          timerType: "fresh",
+        },
+        {
+          modelKey: "claude",
+          displayName: "Claude",
+          providerId: "google-antigravity",
+          percentRemaining: 100,
+          resetTime: null,
+          timerType: "fresh",
+        },
+      ];
+
+      const resGemini = await rotator.kickstartTimerForAccount("a@example.com", "gemini");
+      assert.equal(resGemini.ok, true);
+      assert.equal(resGemini.upstreamModel, "gemini-3-flash");
+      assert.equal(quotaPolls, 1, "a direct kickstart must refresh quota immediately");
+
+      quotaPolls = 0;
+      const resClaude = await rotator.kickstartTimerForAccount("a@example.com", "claude");
+      assert.equal(resClaude.ok, true);
+      assert.equal(resClaude.upstreamModel, "gpt-oss-120b-medium");
+      assert.equal(quotaPolls, 1, "a direct kickstart must refresh quota immediately");
+
+      requestedModels.length = 0;
+      quotaPolls = 0;
+      const allRes = await rotator.kickstartAllFreshTimers("a@example.com");
+      assert.equal(allRes.ok, true);
+      assert.equal(allRes.results.length, 2);
+      assert.deepEqual(
+        allRes.results.map((r: any) => r.upstreamModel).sort(),
+        ["gemini-3-flash", "gpt-oss-120b-medium"].sort(),
+      );
+      assert.deepEqual(requestedModels.sort(), ["gemini-3-flash", "gpt-oss-120b-medium"].sort());
+      assert.equal(quotaPolls, 1, "bulk kickstart must perform one account repoll");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("serializes quota polls per account and publishes the trailing snapshot", async () => {
+    const rotator = new AccountRotator(makeConfig()) as any;
+    rotator.stopQuotaPolling();
+    const account = rotator.accounts[0];
+    account.accessToken = "test-access-token";
+    account.tokenExpires = Date.now() + 60_000;
+
+    const adapter = getProviderAdapter("google-antigravity") as any;
+    const originalFetchQuota = adapter.fetchQuota;
+    let calls = 0;
+    let active = 0;
+    let maxActive = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let announceFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      announceFirst = resolve;
+    });
+
+    adapter.fetchQuota = async (target: any) => {
+      calls++;
+      const call = calls;
+      active++;
+      maxActive = Math.max(maxActive, active);
+      try {
+        if (call === 1) {
+          announceFirst();
+          await firstGate;
+        }
+        target.quota = [
+          {
+            modelKey: "claude",
+            displayName: "Claude",
+            providerId: "google-antigravity",
+            percentRemaining: call === 1 ? 10 : 90,
+            resetTime: null,
+            timerType: "fresh",
+          },
+        ];
+      } finally {
+        active--;
+      }
+    };
+
+    try {
+      const first = rotator.pollAccountQuota(account);
+      await firstStarted;
+      const second = rotator.pollAccountQuota(account);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      releaseFirst();
+      await Promise.all([first, second]);
+
+      assert.equal(calls, 2, "one overlapping request must schedule one trailing repoll");
+      assert.equal(maxActive, 1, "quota fetches for one account must never overlap");
+      assert.equal(account.quota[0]?.percentRemaining, 90, "the trailing snapshot must win");
+    } finally {
+      adapter.fetchQuota = originalFetchQuota;
+      releaseFirst();
+    }
+  });
+
+  it("reconciles an exhausted Google pool cooldown with its latest RAW POLL reset", async () => {
+    const now = Date.now();
+    const claudeResetTime = new Date(now + 51 * 60_000).toISOString();
+    const geminiResetTime = new Date(now + 4 * 60 * 60_000).toISOString();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      assert.match(String(input), /fetchAvailableModels/);
+      return new Response(
+        JSON.stringify({
+          models: {
+            "claude-opus-4-6-thinking": {
+              quotaInfo: { remainingFraction: 0, resetTime: claudeResetTime },
+            },
+            "gemini-3.1-pro": {
+              quotaInfo: { remainingFraction: 0.93, resetTime: geminiResetTime },
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const rotator = new AccountRotator({
+      ...makeConfig(),
+      accounts: [makeConfig().accounts[0]],
+    }) as any;
+    rotator.stopQuotaPolling();
+    const account = rotator.accounts[0];
+    account.accessToken = "test-access-token";
+    account.tokenExpires = now + 60_000;
+    account.cooldownsByModel = { claude: now + 80 * 60_000 };
+
+    let saves = 0;
+    let drains = 0;
+    rotator.scheduleStateSave = () => saves++;
+    rotator.requestWaiterDrain = () => drains++;
+
+    try {
+      await rotator.pollAccountQuota(account);
+
+      assert.equal(
+        account.cooldownsByModel.claude,
+        new Date(claudeResetTime).getTime(),
+      );
+      assert.equal(account.cooldownsByModel.gemini, undefined);
+      assert.equal(account.cooldownsByModel.__default__, undefined);
+      assert.equal(rotator.isRoutableForModel(account, "gemini", Date.now()), true);
+      assert.equal(saves, 1);
+      assert.equal(drains, 1);
+
+      await rotator.pollAccountQuota(account);
+      assert.equal(saves, 1, "an unchanged reset must not schedule another save");
+      assert.equal(drains, 1, "an unchanged reset must not drain waiters again");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("shares one auto-warmup cycle across overlapping quota polls", async () => {
+    const originalFetch = globalThis.fetch;
+    const requestedModels: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (!url.includes("streamGenerateContent")) {
+        throw new Error(`Unexpected fetch in overlapping warmup test: ${url}`);
+      }
+      const body = JSON.parse(String(init?.body)) as { model?: string };
+      if (body.model) requestedModels.push(body.model);
+      return new Response("", { status: 200 });
+    }) as typeof fetch;
+
+    const rotator = new AccountRotator({
+      ...makeConfig(),
+      accounts: [makeConfig().accounts[0]],
+    }) as any;
+    rotator.stopQuotaPolling();
+    const account = rotator.accounts[0];
+    account.accessToken = "test-access-token";
+    account.tokenExpires = Date.now() + 60_000;
+    account.allowFreshWindowStartsOverride = true;
+    account.quota = [
+      {
+        modelKey: "gemini",
+        displayName: "Gemini",
+        providerId: "google-antigravity",
+        percentRemaining: 100,
+        resetTime: null,
+        timerType: "fresh",
+      },
+      {
+        modelKey: "claude",
+        displayName: "Claude",
+        providerId: "google-antigravity",
+        percentRemaining: 100,
+        resetTime: null,
+        timerType: "fresh",
+      },
+    ];
+    rotator.autoWarmupEnabled = true;
+
+    let pollCalls = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let announceFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      announceFirst = resolve;
+    });
+    rotator.pollAccountQuota = async () => {
+      pollCalls++;
+      if (pollCalls === 1) {
+        announceFirst();
+        await firstGate;
+      }
+      return true;
+    };
+
+    try {
+      const first = rotator.pollAllQuotas();
+      await firstStarted;
+      const second = rotator.pollAllQuotas();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      releaseFirst();
+      await Promise.all([first, second]);
+
+      assert.deepEqual(
+        requestedModels.sort(),
+        ["gemini-3-flash", "gpt-oss-120b-medium"].sort(),
+        "each upstream should be warmed exactly once",
+      );
+      assert.equal(pollCalls, 2, "one initial poll plus one post-warmup repoll");
+    } finally {
+      globalThis.fetch = originalFetch;
+      releaseFirst();
+    }
+  });
+
+  it("kickstarts gpt-oss:20b through Ollama on a Google plus Ollama account", async () => {
+    const config = makeConfig();
+    config.accounts = [
+      {
+        email: "dual-gpt-oss@example.com",
+        credentials: [
+          { provider: "google-antigravity", refreshToken: "g", projectId: "pg" },
+          { provider: "ollama", apiKey: "o" },
+        ],
+      },
+    ];
+    const rotator = new AccountRotator(config) as any;
+    rotator.stopQuotaPolling();
+    const account = rotator.accounts[0];
+    account.accessToken = "google-access-token";
+    account.tokenExpires = Date.now() + 60_000;
+    account.quota = [
+      {
+        modelKey: "session",
+        displayName: "Ollama Session",
+        providerId: "ollama",
+        percentRemaining: 100,
+        resetTime: null,
+        timerType: "fresh",
+      },
+    ];
+
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{
+      url: string;
+      authorization: string | null;
+      body: { model?: string };
+    }> = [];
+    globalThis.fetch = (async (input, init) => {
+      calls.push({
+        url: String(input),
+        authorization: new Headers(init?.headers).get("authorization"),
+        body: JSON.parse(String(init?.body)) as { model?: string },
+      });
+      return new Response("", { status: 200 });
+    }) as typeof fetch;
+    const recordedPools: string[] = [];
+    rotator.recordRequest = (_target: unknown, model: string) => {
+      recordedPools.push(model);
+      return false;
+    };
+    let quotaPolls = 0;
+    rotator.pollAccountQuota = async () => {
+      quotaPolls++;
+      return true;
+    };
+
+    try {
+      const result = await rotator.kickstartTimerForAccount(
+        "dual-gpt-oss@example.com",
+        "gpt-oss:20b",
+      );
+
+      assert.equal(result.ok, true);
+      assert.equal(result.upstreamModel, "gpt-oss:20b");
+      assert.equal(calls.length, 1, "the kickstart must make no Google request");
+      assert.match(calls[0].url, /\/api\/chat$/);
+      assert.equal(calls[0].authorization, "Bearer o");
+      assert.equal(calls[0].body.model, "gpt-oss:20b");
+      assert.deepEqual(recordedPools, ["session"]);
+      assert.equal(quotaPolls, 1, "a direct kickstart must refresh quota immediately");
+      assert.equal(providerAdapterForModel(account, "gpt-oss:20b", rotator).id, "ollama");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses the Antigravity reset duration for a kickstart 429 on one pool", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            status: "RESOURCE_EXHAUSTED",
+            message: "quota exceeded. Resets in 1h20m14s",
+          },
+        }),
+        { status: 429, headers: { "Content-Type": "application/json" } },
+      )) as typeof fetch;
+
+    try {
+      const rotator = new AccountRotator({
+        ...makeConfig(),
+        accounts: [makeConfig().accounts[0]],
+      }) as any;
+      rotator.stopQuotaPolling();
+      const account = rotator.accounts[0];
+      account.accessToken = "test-access-token";
+      account.tokenExpires = Date.now() + 60_000;
+      account.quota = [
+        {
+          modelKey: "claude",
+          displayName: "Claude",
+          providerId: "google-antigravity",
+          percentRemaining: 100,
+          resetTime: null,
+          timerType: "fresh",
+        },
+        {
+          modelKey: "gemini",
+          displayName: "Gemini",
+          providerId: "google-antigravity",
+          percentRemaining: 100,
+          resetTime: null,
+          timerType: "fresh",
+        },
+      ];
+
+      const before = Date.now();
+      const result = await rotator.kickstartTimerForAccount(
+        "a@example.com",
+        "claude",
+        false,
+      );
+      const after = Date.now();
+
+      assert.equal(result.status, 429);
+      assert.ok(account.cooldownsByModel.claude >= before + 4_815_000);
+      assert.ok(account.cooldownsByModel.claude <= after + 4_815_000);
+      assert.equal(account.cooldownsByModel.gemini, undefined);
+      assert.equal(account.cooldownsByModel.__default__, undefined);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("falls back to 30 minutes for a kickstart RESOURCE_EXHAUSTED without a duration", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          error: { status: "RESOURCE_EXHAUSTED", message: "quota exceeded" },
+        }),
+        { status: 429, headers: { "Content-Type": "application/json" } },
+      )) as typeof fetch;
+
+    try {
+      const rotator = new AccountRotator({
+        ...makeConfig(),
+        accounts: [makeConfig().accounts[0]],
+      }) as any;
+      rotator.stopQuotaPolling();
+      const account = rotator.accounts[0];
+      account.accessToken = "test-access-token";
+      account.tokenExpires = Date.now() + 60_000;
+      account.quota = [
+        {
+          modelKey: "gemini",
+          displayName: "Gemini",
+          providerId: "google-antigravity",
+          percentRemaining: 100,
+          resetTime: null,
+          timerType: "fresh",
+        },
+      ];
+
+      const before = Date.now();
+      const result = await rotator.kickstartTimerForAccount(
+        "a@example.com",
+        "gemini",
+        false,
+      );
+      const after = Date.now();
+
+      assert.equal(result.status, 429);
+      assert.ok(account.cooldownsByModel.gemini >= before + 1_800_000);
+      assert.ok(account.cooldownsByModel.gemini <= after + 1_800_000);
+      assert.equal(account.cooldownsByModel.__default__, undefined);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("caps a generic kickstart 429 retry-after at 30 minutes", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          error: { status: "RATE_LIMITED", message: "rate limit exceeded" },
+        }),
+        {
+          status: 429,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": "7200",
+          },
+        },
+      )) as typeof fetch;
+
+    try {
+      const rotator = new AccountRotator({
+        ...makeConfig(),
+        accounts: [makeConfig().accounts[0]],
+      }) as any;
+      rotator.stopQuotaPolling();
+      const account = rotator.accounts[0];
+      account.accessToken = "test-access-token";
+      account.tokenExpires = Date.now() + 60_000;
+      account.quota = [
+        {
+          modelKey: "gemini",
+          displayName: "Gemini",
+          providerId: "google-antigravity",
+          percentRemaining: 100,
+          resetTime: null,
+          timerType: "fresh",
+        },
+      ];
+
+      let recordedCooldownMs: number | undefined;
+      rotator.recordProvider429 = (
+        _target: unknown,
+        model: string,
+        cooldownMs: number,
+      ) => {
+        assert.equal(model, "gemini");
+        recordedCooldownMs = cooldownMs;
+      };
+
+      const result = await rotator.kickstartTimerForAccount(
+        "a@example.com",
+        "gemini",
+        false,
+      );
+
+      assert.equal(result.status, 429);
+      assert.equal(recordedCooldownMs, 1_800_000);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps an Ollama kickstart 429 on the session pool", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ error: { message: "too many requests" } }),
+        { status: 429, headers: { "Content-Type": "application/json" } },
+      )) as typeof fetch;
+
+    try {
+      const config = makeConfig();
+      config.accounts = [
+        {
+          email: "ollama-429@example.com",
+          credentials: [{ provider: "ollama", apiKey: "ollama-secret" }],
+        },
+      ];
+      const rotator = new AccountRotator(config) as any;
+      rotator.stopQuotaPolling();
+      const account = rotator.accounts[0];
+      account.quota = [
+        {
+          modelKey: "session",
+          displayName: "Ollama Session",
+          providerId: "ollama",
+          percentRemaining: 100,
+          resetTime: null,
+          timerType: "fresh",
+        },
+      ];
+
+      const result = await rotator.kickstartTimerForAccount(
+        "ollama-429@example.com",
+        "gpt-oss:20b",
+        false,
+      );
+
+      assert.equal(result.status, 429);
+      assert.deepEqual(Object.keys(account.cooldownsByModel), ["session"]);
+      assert.equal(account.cooldownsByModel.__default__, undefined);
+      assert.deepEqual(rotator.provider429Events, []);
+      assert.deepEqual(rotator.modelBreakers, {});
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not kickstart a non-fresh pool whose reset time is unknown", async () => {
+    const rotator = new AccountRotator({
+      ...makeConfig(),
+      accounts: [makeConfig().accounts[0]],
+    }) as any;
+    rotator.stopQuotaPolling();
+    rotator.accounts[0].quota = [
+      {
+        modelKey: "gemini",
+        displayName: "Gemini",
+        providerId: "google-antigravity",
+        percentRemaining: 100,
+        resetTime: null,
+        timerType: "5h",
+      },
+    ];
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      throw new Error(`Unexpected fetch for non-fresh timer: ${String(input)}`);
+    }) as typeof fetch;
+    try {
+      const result = await rotator.kickstartAllFreshTimers("a@example.com");
+      assert.deepEqual(result.results, []);
     } finally {
       globalThis.fetch = originalFetch;
     }

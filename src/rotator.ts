@@ -83,6 +83,11 @@ import {
   getCachedTokenUsage,
   setCachedTokenUsage,
 } from "./db-store.js";
+import {
+  classifyRateLimitReason,
+  parseRetryAfterMs,
+  RESOURCE_EXHAUSTED_FALLBACK_MS,
+} from "./rate-limit-parser.js";
 
 function credentialFingerprint(secret?: string): string {
   if (!secret) return "";
@@ -236,6 +241,7 @@ interface AccountRequestWaiter {
 const QUOTA_POOL_FOR_KICKSTART_MODEL: Record<string, string> = {
   "gpt-oss-120b-medium": "claude",
   "gemini-3-flash": "gemini",
+  "gpt-oss:20b": "session",
 };
 
 export class AccountRotator {
@@ -247,6 +253,9 @@ export class AccountRotator {
   private startTime = Date.now();
   private quotaPollTimer: ReturnType<typeof setInterval> | null = null;
   private quotaInitialPollTimer: ReturnType<typeof setTimeout> | null = null;
+  private quotaPolls = new WeakMap<AccountRuntime, Promise<boolean>>();
+  private quotaRepollRequested = new WeakSet<AccountRuntime>();
+  private quotaPollCycle: Promise<void> | null = null;
   private inFlightRefreshes = new WeakMap<AccountRuntime, Map<string, Promise<void>>>();
   private requestCursorIndex = -1;
   private requestWaiters: AccountRequestWaiter[] = [];
@@ -372,9 +381,6 @@ export class AccountRotator {
   }> = [];
   private routingDiagnostics: Record<string, RoutingModelDiagnostics> = {};
   private autoWarmupEnabled = false;
-  // Tracks upstream models already warmed-up this poll cycle per account (email → Set<upstreamModel>).
-  // Cleared at the start of each pollAllQuotas() to enforce the one-per-cycle guarantee.
-  private warmupSentThisCycle = new Map<string, Set<string>>();
   // Debounced state writer: batches multiple saveState() calls within a 1s window
   // to a single disk write. Hot paths (markError, recordRequest, etc.) call
   // scheduleStateSave() instead of saveState() to avoid blocking the event loop.
@@ -576,14 +582,19 @@ export class AccountRotator {
             saved.allowFreshWindowStartsOverride ?? false;
         }
       }
-      // Cap any stale cooldowns to 30 min max from now
+      // Cap generic stale cooldowns to 30 min max from now. Antigravity's
+      // explicit Claude/Gemini reset deadlines must survive restarts intact.
       const maxCooldown = 30 * 60 * 1000;
       const now = Date.now();
       for (const account of this.accounts) {
         for (const [model, cooldown] of Object.entries(
           account.cooldownsByModel,
         )) {
-          if (cooldown > now + maxCooldown) {
+          if (
+            model !== "claude" &&
+            model !== "gemini" &&
+            cooldown > now + maxCooldown
+          ) {
             account.cooldownsByModel[model] = now + maxCooldown;
           }
         }
@@ -787,82 +798,125 @@ export class AccountRotator {
     account.lastPollByProvider = {};
   }
 
-  private async pollAllQuotas(): Promise<void> {
-    // Reset per-cycle warmup tracking so each poll cycle allows at most one warmup per upstream model per account.
-    this.warmupSentThisCycle.clear();
+  pollAccountQuota(account: AccountRuntime): Promise<boolean> {
+    const inFlight = this.quotaPolls.get(account);
+    if (inFlight) {
+      this.quotaRepollRequested.add(account);
+      return inFlight;
+    }
+
+    const run = (async (): Promise<boolean> => {
+      let quotaPublished = false;
+      do {
+        this.quotaRepollRequested.delete(account);
+        quotaPublished =
+          (await this.pollAccountQuotaOnce(account)) || quotaPublished;
+      } while (this.quotaRepollRequested.has(account));
+      return quotaPublished;
+    })();
+
+    const tracked = run.finally(() => {
+      this.quotaPolls.delete(account);
+    });
+    this.quotaPolls.set(account, tracked);
+    return tracked;
+  }
+
+  private async pollAccountQuotaOnce(account: AccountRuntime): Promise<boolean> {
+    let quotaPublished = false;
+    try {
+      const quotaCtx: QuotaFetchContext = {
+        log: (message) => this.log(message),
+        markFlagged: (acc, reason, options) =>
+          this.markFlagged(acc, reason, options),
+        reportQuotaPollFlag: (acc, statusCode, errorText) =>
+          this.reportQuotaPollFlag(acc, statusCode, errorText),
+        markProviderInvalid: (acc, providerId, reason) =>
+          this.markProviderInvalid(acc, providerId, reason),
+        setProviderCooldown: (acc, providerId, durationMs) =>
+          this.setProviderCooldown(acc, providerId, durationMs),
+      };
+      // Parent-account model: poll quota for every provider credential
+      // the account holds (Google OAuth pools + Ollama usage pools).
+      const providerIds = new Set<string>(
+        (account.config.credentials ?? []).map((c) => c.provider),
+      );
+      if (providerIds.size === 0) providerIds.add(primaryProviderId(account.config));
+      for (const pid of providerIds) {
+        try {
+          await this.ensureValidTokenForProvider(account, pid);
+          await getProviderAdapter(pid).fetchQuota(account, quotaCtx);
+          quotaPublished = true;
+        } catch {
+          // One invalid provider credential must not suppress sibling pools.
+        }
+      }
+    } catch {
+      // Token refresh or quota fetch failed, skip this account
+    }
+
+    let cooldownChanged = false;
+    if (account.lastPollByProvider?.[DEFAULT_PROVIDER] !== undefined) {
+      const now = Date.now();
+      for (const quota of account.quota) {
+        if (
+          quota.providerId !== DEFAULT_PROVIDER ||
+          quota.percentRemaining !== 0 ||
+          !quota.resetTime
+        ) {
+          continue;
+        }
+        const resetAt = new Date(quota.resetTime).getTime();
+        if (
+          !Number.isFinite(resetAt) ||
+          resetAt <= now ||
+          account.cooldownsByModel[quota.modelKey] === resetAt
+        ) {
+          continue;
+        }
+        account.cooldownsByModel[quota.modelKey] = resetAt;
+        cooldownChanged = true;
+      }
+    }
+    if (cooldownChanged) {
+      this.scheduleStateSave();
+      this.requestWaiterDrain();
+    }
+
+    // Consolidated RAW POLL across all providers on this account:
+    // google first (Antigravity OAuth pools), then ollama (usage pools).
+    this.logConsolidatedPoll(account);
+    return quotaPublished;
+  }
+
+  private pollAllQuotas(): Promise<void> {
+    if (this.quotaPollCycle) return this.quotaPollCycle;
+    this.quotaPollCycle = this.pollAllQuotasOnce().finally(() => {
+      this.quotaPollCycle = null;
+    });
+    return this.quotaPollCycle;
+  }
+
+  private async pollAllQuotasOnce(): Promise<void> {
     void this.refreshOllamaCatalogOnce().catch(() => {});
 
     const available = this.accounts.filter((a) => !a.disabled && !a.flagged);
     let quotaPublished = false;
     for (const account of available) {
-      try {
-        const quotaCtx: QuotaFetchContext = {
-          log: (message) => this.log(message),
-          markFlagged: (acc, reason, options) =>
-            this.markFlagged(acc, reason, options),
-          reportQuotaPollFlag: (acc, statusCode, errorText) =>
-            this.reportQuotaPollFlag(acc, statusCode, errorText),
-          markProviderInvalid: (acc, providerId, reason) =>
-            this.markProviderInvalid(acc, providerId, reason),
-          setProviderCooldown: (acc, providerId, durationMs) =>
-            this.setProviderCooldown(acc, providerId, durationMs),
-        };
-        // Parent-account model: poll quota for every provider credential
-        // the account holds (Google OAuth pools + Ollama usage pools).
-        const providerIds = new Set<string>(
-          (account.config.credentials ?? []).map((c) => c.provider),
-        );
-        if (providerIds.size === 0) providerIds.add(primaryProviderId(account.config));
-        for (const pid of providerIds) {
-          try {
-            await this.ensureValidTokenForProvider(account, pid);
-            await getProviderAdapter(pid).fetchQuota(account, quotaCtx);
-            quotaPublished = true;
-          } catch {
-            // One invalid provider credential must not suppress sibling pools.
-          }
-        }
-      } catch {
-        // Token refresh or quota fetch failed, skip this account
+      if (await this.pollAccountQuota(account)) {
+        quotaPublished = true;
       }
 
-      // Consolidated RAW POLL across all providers on this account:
-      // google first (Antigravity OAuth pools), then ollama (usage pools).
-      this.logConsolidatedPoll(account);
-
-      // Auto-warmup: send minimal kickstart requests for idle pools on accounts that have opted
-      // in via allowFreshWindowStartsOverride, but only if the operator has enabled the global
-      // auto-warmup toggle. "Idle" includes both fresh pools (no active timer) and rolling idle
-      // pools (100% quota with resetTime very close to a full 5h or 7d window — timer exists but
-      // untouched). Deduplicates by upstream model within this cycle.
+      // Auto-warmup reuses the bulk path so all successful kickstarts are
+      // followed by one account-level quota refresh, not one refresh per pool.
       if (this.autoWarmupEnabled && account.allowFreshWindowStartsOverride) {
-        const idlePools = account.quota.filter(
-          (q) =>
-            this.isQuotaIdleForKickstart(q) &&
-            this.getKickstartTarget(account, q.modelKey) !== null,
-        );
-        if (idlePools.length > 0) {
-          const alreadySent =
-            this.warmupSentThisCycle.get(account.config.email) ?? new Set<string>();
-          const upstreamToQuotaKey = new Map<string, string>();
-          for (const q of idlePools) {
-            const target = this.getKickstartTarget(account, q.modelKey);
-            if (!target) continue;
-            const upstream = target.upstreamModel;
-            if (!upstreamToQuotaKey.has(upstream)) {
-              upstreamToQuotaKey.set(upstream, q.modelKey);
-            }
+        try {
+          const warmup = await this.kickstartAllFreshTimers(account.config.email);
+          if (warmup.results.some((result) => result.ok)) {
+            quotaPublished = true;
           }
-          for (const [upstream, quotaKey] of upstreamToQuotaKey) {
-            if (!alreadySent.has(upstream)) {
-              alreadySent.add(upstream);
-              // Fire-and-forget — errors are handled internally by kickstartTimerForAccount
-              void this.kickstartTimerForAccount(account.config.email, quotaKey).catch(
-                () => {},
-              );
-            }
-          }
-          this.warmupSentThisCycle.set(account.config.email, alreadySent);
+        } catch {
+          // Warmup is opportunistic and must not abort the polling cycle.
         }
       }
     }
@@ -975,17 +1029,10 @@ export class AccountRotator {
     return q?.timerType ?? "fresh";
   }
 
-  // A pool is "idle for kickstart" when it has a fresh pool (no active timer)
-  // OR a rolling idle timer (100% quota with resetTime very close to a full 5h or 7d
-  // window — the timer exists but the quota is completely untouched). Sending a
-  // minimal kickstart request against an idle pool starts the consumption clock.
+  // A pool is "idle for kickstart" when it has a fresh pool (no active timer).
+  // Sending a minimal kickstart request against an idle pool starts the consumption clock.
   private isQuotaIdleForKickstart(q: ModelQuota): boolean {
-    if (q.timerType === "fresh") return true;
-    if (!q.resetTime || q.percentRemaining !== 100) return false;
-    const remaining = new Date(q.resetTime).getTime() - Date.now();
-    if (remaining <= 0) return false;
-    const within = (target: number) => Math.abs(remaining - target) < 600_000;
-    return within(5 * 3600 * 1000) || within(7 * 24 * 3600 * 1000);
+    return q.timerType === "fresh";
   }
 
   /**
@@ -996,22 +1043,28 @@ export class AccountRotator {
   private getKickstartTarget(
     account: AccountRuntime,
     quotaModelKey: string,
-  ): { providerId: string; adapter: ReturnType<typeof getProviderAdapter>; upstreamModel: string } | null {
-    const quota = account.quota.find((candidate) => candidate.modelKey === quotaModelKey);
+  ): {
+    poolKey: string;
+    providerId: string;
+    adapter: ReturnType<typeof getProviderAdapter>;
+    upstreamModel: string;
+  } | null {
+    const poolKey = this.resolveAccountPoolKey(account, quotaModelKey);
+    const quota = account.quota.find((candidate) => candidate.modelKey === poolKey);
     const providerId =
       quota?.providerId ??
-      (quotaModelKey === "session"
+      (poolKey === "session"
         ? "ollama"
-        : quotaModelKey === CODEX_QUOTA_MODEL_KEY ||
-            quotaModelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
+        : poolKey === CODEX_QUOTA_MODEL_KEY ||
+            poolKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
           ? "openai-codex"
           : DEFAULT_PROVIDER);
     if (!hasCredential(account.config, providerId)) return null;
 
     const adapter = getProviderAdapter(providerId);
-    const upstreamModel = adapter.getKickstartModelForPool(quotaModelKey);
+    const upstreamModel = adapter.getKickstartModelForPool(poolKey);
     if (!upstreamModel) return null;
-    return { providerId, adapter, upstreamModel };
+    return { poolKey, providerId, adapter, upstreamModel };
   }
 
   // Timer priority for a specific model:
@@ -1344,13 +1397,25 @@ export class AccountRotator {
     now: number,
     activeForModels: string[],
   ): AccountStatus["status"] {
-    const inCooldownModels = Object.values(account.cooldownsByModel).filter(
-      (ts) => ts > now,
-    );
+    const defaultCooldownActive =
+      (account.cooldownsByModel.__default__ ?? 0) > now;
+    const knownPools = new Set(account.quota.map((quota) => quota.modelKey));
+    for (const [modelKey, cooldownUntil] of Object.entries(
+      account.cooldownsByModel,
+    )) {
+      if (modelKey !== "__default__" && cooldownUntil > now) {
+        knownPools.add(modelKey);
+      }
+    }
+    const allKnownPoolsCooling =
+      knownPools.size > 0 &&
+      [...knownPools].every(
+        (modelKey) => (account.cooldownsByModel[modelKey] ?? 0) > now,
+      );
     if (account.flagged) return "flagged";
     if (account.disabled) return "disabled";
     if (account.consecutiveErrors > 0 && !account.disabled) return "error";
-    if (inCooldownModels.length > 0) return "cooldown";
+    if (defaultCooldownActive || allKnownPoolsCooling) return "cooldown";
     if (this.isDailySafetyStopped(account, now)) return "exhausted";
     if (activeForModels.length > 0) return "active";
     return "ready";
@@ -2883,7 +2948,7 @@ export class AccountRotator {
   ): void {
     const now = Date.now();
     const modelKey = model
-      ? (this.resolvePoolKeyForModel(model) ?? resolveQuotaModelKey(model) ?? "__default__")
+      ? this.resolveAccountPoolKey(account, model)
       : "__default__";
     if (model && (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`) || isCodexRequestModel(model))) {
       this.setProviderCooldown(account, "openai-codex", cooldownMs);
@@ -2910,7 +2975,7 @@ export class AccountRotator {
       this.setProviderCooldown(account, "openai-codex", cooldownMs);
       return;
     }
-    const poolKey = model ? this.resolvePoolKeyForModel(model) : null;
+    const poolKey = model ? this.resolveAccountPoolKey(account, model) : null;
     const isAccountScopedProvider =
       providerResourceExhausted ||
       (poolKey && (poolKey.startsWith("opencode-zen") || poolKey.startsWith("session")));
@@ -2923,7 +2988,7 @@ export class AccountRotator {
       return;
     }
     const modelKey = model
-      ? (this.resolvePoolKeyForModel(model) ?? resolveQuotaModelKey(model) ?? "__default__")
+      ? this.resolveAccountPoolKey(account, model)
       : "__default__";
     const windowMs =
       this.config.projectCircuitBreakerWindowMs ?? 10 * 60 * 1000;
@@ -3507,6 +3572,21 @@ export class AccountRotator {
       return "session";
     }
     return key;
+  }
+
+  /** Resolve upstream models and already-published quota keys to one account pool. */
+  private resolveAccountPoolKey(account: AccountRuntime, key: string): string {
+    const kickstartPool = QUOTA_POOL_FOR_KICKSTART_MODEL[key];
+    if (kickstartPool) return this.resolvePoolKey(account, kickstartPool);
+    if (
+      Object.values(QUOTA_POOL_FOR_KICKSTART_MODEL).includes(key) ||
+      account.quota.some((quota) => quota.modelKey === key) ||
+      getProviderIdForPoolKey(key) !== DEFAULT_PROVIDER
+    ) {
+      return this.resolvePoolKey(account, key);
+    }
+    const modelPool = this.resolvePoolKeyForModel(key) ?? resolveQuotaModelKey(key);
+    return this.resolvePoolKey(account, modelPool ?? "__default__");
   }
 
   private isRoutableForModel(
@@ -4246,6 +4326,7 @@ export class AccountRotator {
   async kickstartTimerForAccount(
     email: string,
     quotaModelKey: string,
+    refreshQuota = true,
   ): Promise<{ ok: boolean; status: number; upstreamModel: string; error?: string }> {
     const account = this.accounts.find((a) => a.config.email === email);
     if (!account) {
@@ -4288,6 +4369,7 @@ export class AccountRotator {
     }
 
     const upstreamModel = target.upstreamModel;
+    const poolKey = target.poolKey;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -4320,7 +4402,7 @@ export class AccountRotator {
       clearTimeout(timeout);
     } else {
       const body = JSON.stringify({
-        project: this.getProjectIdForModel(account, quotaModelKey),
+        project: this.getProjectIdForModel(account, poolKey),
         model: upstreamModel,
         request: {
           contents: [{ role: "user", parts: [{ text: "." }] }],
@@ -4354,21 +4436,49 @@ export class AccountRotator {
       clearTimeout(timeout);
     }
 
-    // Consume and discard the response body to free the connection
-    try {
-      await response.body?.cancel();
-    } catch {
-      // ignore
+    let errorText = "";
+    if (response.status === 429) {
+      errorText = await response.text().catch(() => "");
+    } else {
+      // Consume and discard the response body to free the connection.
+      try {
+        await response.body?.cancel();
+      } catch {
+        // ignore
+      }
     }
 
     const label = account.config.label || account.config.email;
 
     if (response.status === 429) {
-      const cooldownMs = 60_000;
-      this.markExhausted(account, quotaModelKey, cooldownMs, "kickstart 429");
-      this.recordProvider429(account, quotaModelKey, cooldownMs);
+      const providerResourceExhausted =
+        classifyRateLimitReason(errorText, response.status) === "quota-exhausted";
+      const cooldownMs = providerResourceExhausted
+        ? target.providerId === DEFAULT_PROVIDER
+          ? parseRetryAfterMs(
+              errorText,
+              response.headers,
+              RESOURCE_EXHAUSTED_FALLBACK_MS,
+            )
+          : RESOURCE_EXHAUSTED_FALLBACK_MS
+        : Math.min(
+            parseRetryAfterMs(errorText, response.headers),
+            RESOURCE_EXHAUSTED_FALLBACK_MS,
+          );
+      this.markExhausted(
+        account,
+        poolKey,
+        cooldownMs,
+        errorText || "kickstart 429",
+      );
+      this.recordProvider429(
+        account,
+        poolKey,
+        cooldownMs,
+        providerResourceExhausted,
+      );
       this.log(
-        `${label} [${quotaModelKey}]: kickstart 429 — cooldown ${cooldownMs / 1000}s`,
+        `${label} [${poolKey}]: kickstart 429 — cooldown ${cooldownMs / 1000}s`,
         "warn",
       );
       return { ok: false, status: 429, upstreamModel };
@@ -4389,20 +4499,28 @@ export class AccountRotator {
     }
 
     if (response.ok) {
-      this.recordRequest(account, quotaModelKey);
+      this.recordRequest(account, poolKey);
       this.log(
-        `${label} [${quotaModelKey}]: kickstart sent via ${upstreamModel} — timer should start within the next quota poll`,
+        `${label} [${poolKey}]: kickstart sent via ${upstreamModel} — ${refreshQuota ? "refreshing quota" : "bulk quota refresh pending"}`,
       );
+      // Immediately re-poll the account quota so newly started resetTime and timerType
+      // are captured and exposed without waiting for the background polling cycle.
+      if (refreshQuota) {
+        try {
+          await this.pollAccountQuota(account);
+        } catch {
+          // non-fatal
+        }
+      }
     }
 
     return { ok: response.ok, status: response.status, upstreamModel };
   }
 
   /**
-   * Kickstart all quota pools that are currently idle (no active timer, or rolling
-   * idle with 100% quota and a fresh resetTime) for a given account. Deduplicates by
-   * upstream model so that pools sharing the same upstream (e.g. gemini-3.5-flash and
-   * gemini-3.1-pro → gemini-3-flash) only receive one request.
+   * Kickstart all quota pools that are currently idle (no active timer)
+   * for a given account. Deduplicates by upstream model so that pools
+   * sharing the same upstream only receive one request.
    */
   async kickstartAllFreshTimers(email: string): Promise<{
     ok: boolean;
@@ -4450,8 +4568,20 @@ export class AccountRotator {
       // Use the primary quota pool key for this upstream (for recordRequest/markExhausted)
       const primaryQuotaKey =
         QUOTA_POOL_FOR_KICKSTART_MODEL[upstreamModel] ?? quotaPools[0];
-      const result = await this.kickstartTimerForAccount(email, primaryQuotaKey);
+      const result = await this.kickstartTimerForAccount(
+        email,
+        primaryQuotaKey,
+        false,
+      );
       results.push({ quotaPools, upstreamModel, ok: result.ok, status: result.status });
+    }
+
+    if (results.some((result) => result.ok)) {
+      try {
+        await this.pollAccountQuota(account);
+      } catch {
+        // A failed refresh must not rewrite successful kickstart results.
+      }
     }
 
     const allOk = results.every((r) => r.ok);

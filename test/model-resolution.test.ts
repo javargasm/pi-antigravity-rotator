@@ -181,6 +181,62 @@ describe("model resolution", () => {
 		assert.equal(quotas.length, 1);
 	});
 
+	it("treats intact Google quota as fresh even when reset times are present", () => {
+		const fiveHoursFromNow = new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString();
+		const sevenDaysFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+		const oldQuota = [
+			{
+				modelKey: "claude",
+				displayName: "Claude",
+				percentRemaining: 100,
+				resetTime: fiveHoursFromNow,
+				timerType: "5h" as const,
+			},
+			{
+				modelKey: "gemini",
+				displayName: "Gemini",
+				percentRemaining: 100,
+				resetTime: sevenDaysFromNow,
+				timerType: "7d" as const,
+			},
+		];
+		const quotas = extractQuotas(
+			{
+				models: {
+					claude: {
+						quotaInfo: { remainingFraction: 1, resetTime: fiveHoursFromNow },
+					},
+					gemini: {
+						quotaInfo: { remainingFraction: 1, resetTime: sevenDaysFromNow },
+					},
+				},
+			},
+			oldQuota,
+		);
+
+		for (const quota of quotas) {
+			assert.equal(quota.timerType, "fresh");
+			assert.equal(quota.resetTime, null);
+		}
+
+		const [partiallyUsed] = extractQuotas(
+			{
+				models: {
+					claude: {
+						quotaInfo: {
+							remainingFraction: 0.999,
+							resetTime: fiveHoursFromNow,
+						},
+					},
+				},
+			},
+			[],
+		);
+		assert.equal(partiallyUsed.percentRemaining, 100);
+		assert.equal(partiallyUsed.timerType, "5h");
+		assert.equal(partiallyUsed.resetTime, fiveHoursFromNow);
+	});
+
 it("orders quota model keys: claude, gemini", () => {
 		const orderedKeys = Object.keys(QUOTA_MODEL_KEYS);
 		assert.deepEqual(orderedKeys, ["claude", "gemini"]);

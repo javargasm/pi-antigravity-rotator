@@ -185,6 +185,78 @@ describe("dashboard", () => {
     );
   });
 
+  it("does not render kickstart actions for disabled or flagged accounts", () => {
+    for (const status of ["disabled", "flagged"]) {
+      const html = renderAccountCards(
+        [
+          {
+            ...accountCardFixture(0),
+            status,
+            quota: [
+              {
+                modelKey: "claude",
+                displayName: "Claude",
+                providerId: "google-antigravity",
+                percentRemaining: 100,
+                resetTime: null,
+                timerType: "fresh",
+              },
+            ],
+          },
+        ],
+        5,
+      );
+
+      assert.doesNotMatch(html, />▶ Start</);
+      assert.doesNotMatch(html, />Start Idle Timers</);
+    }
+
+    const ready = renderAccountCards(
+      [
+        {
+          ...accountCardFixture(0),
+          quota: [
+            {
+              modelKey: "claude",
+              displayName: "Claude",
+              providerId: "google-antigravity",
+              percentRemaining: 100,
+              resetTime: null,
+              timerType: "fresh",
+            },
+          ],
+        },
+      ],
+      5,
+    );
+    assert.match(ready, />▶ Start</);
+    assert.match(ready, />Start Idle Timers</);
+  });
+
+  it("renders an unknown non-fresh reset as -- instead of idle", () => {
+    const html = renderAccountCards(
+      [
+        {
+          ...accountCardFixture(0),
+          quota: [
+            {
+              modelKey: "gemini",
+              displayName: "Gemini",
+              providerId: "google-antigravity",
+              percentRemaining: 50,
+              resetTime: null,
+              timerType: "5h",
+            },
+          ],
+        },
+      ],
+      5,
+    );
+
+    assert.match(html, /<span class="quota-reset">--<\/span>/);
+    assert.doesNotMatch(html, /<span class="quota-reset"><span[^>]*>idle<\/span><\/span>/);
+  });
+
   it("assigns distinct family colors for token graph (Claude: Red, Gemini: Blue, Ollama: Green)", () => {
     const js = readDashboardJs();
     const sandbox: Record<string, unknown> = {
@@ -431,10 +503,13 @@ describe("dashboard", () => {
     };
     const script = new Script(
       js +
-        "\nthis.isKickstartSupported = isKickstartSupported;",
+        "\nthis.isKickstartSupported = isKickstartSupported;\nthis.isIdleForKickstart = isIdleForKickstart;",
     );
     script.runInNewContext(sandbox);
     const isKickstartSupported = sandbox.isKickstartSupported as (
+      quota: Record<string, unknown>,
+    ) => boolean;
+    const isIdleForKickstart = sandbox.isIdleForKickstart as (
       quota: Record<string, unknown>,
     ) => boolean;
 
@@ -443,8 +518,32 @@ describe("dashboard", () => {
       false,
     );
     assert.equal(
+      isKickstartSupported({ modelKey: "opencode-zen", providerId: "opencode-zen" }),
+      false,
+    );
+    assert.equal(
       isKickstartSupported({ modelKey: "session", providerId: "ollama" }),
       true,
+    );
+    assert.equal(
+      isKickstartSupported({ modelKey: "weekly", providerId: "ollama" }),
+      false,
+    );
+    assert.equal(
+      isKickstartSupported({ modelKey: "gemini", providerId: "google-antigravity" }),
+      true,
+    );
+    assert.equal(
+      isIdleForKickstart({ timerType: "fresh" }),
+      true,
+    );
+    assert.equal(
+      isIdleForKickstart({
+        timerType: "5h",
+        resetTime: new Date(Date.now() + 60_000).toISOString(),
+        percentRemaining: 100,
+      }),
+      false,
     );
   });
 

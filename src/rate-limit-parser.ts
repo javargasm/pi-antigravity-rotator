@@ -1,5 +1,7 @@
 export type RateLimitReason = "rate-limit" | "quota-exhausted" | "model-capacity" | "server-error" | "unknown";
 
+export const RESOURCE_EXHAUSTED_FALLBACK_MS = 30 * 60 * 1000;
+
 function parseDurationToMs(errorText: string): number | null {
 	const durationMatch = errorText.match(/(?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i);
 	if (!durationMatch) return null;
@@ -7,7 +9,8 @@ function parseDurationToMs(errorText: string): number | null {
 	const minutes = durationMatch[2] ? parseInt(durationMatch[2], 10) : 0;
 	const seconds = parseFloat(durationMatch[3]);
 	if (!Number.isFinite(seconds)) return null;
-	return Math.ceil(((hours * 60 + minutes) * 60 + seconds) * 1000);
+	const durationMs = ((hours * 60 + minutes) * 60 + seconds) * 1000;
+	return Number.isFinite(durationMs) ? Math.ceil(durationMs) : null;
 }
 
 export function classifyRateLimitReason(errorText: string, status?: number): RateLimitReason {
@@ -54,7 +57,11 @@ export function classifyRateLimitReason(errorText: string, status?: number): Rat
 	return "unknown";
 }
 
-export function parseRetryAfterMs(errorText: string, headers: Headers): number {
+export function parseRetryAfterMs(
+	errorText: string,
+	headers: Headers,
+	fallbackMs = 60_000,
+): number {
 	const retryAfter = headers.get("retry-after");
 	if (retryAfter) {
 		const seconds = Number(retryAfter);
@@ -123,5 +130,7 @@ export function parseRetryAfterMs(errorText: string, headers: Headers): number {
 	const duration = parseDurationToMs(errorText);
 	if (duration && duration > 0) return Math.ceil(duration + 1000);
 
-	return 60_000;
+	return Number.isFinite(fallbackMs) && fallbackMs > 0
+		? Math.ceil(fallbackMs)
+		: 60_000;
 }

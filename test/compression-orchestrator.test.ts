@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { readFileSync } from "node:fs";
 import {
   applyPromptCompression,
   parseCompressionMode,
@@ -7,6 +8,17 @@ import {
 import type { ChatMessage } from "../src/providers/google-antigravity/translators.js";
 
 describe("Compression Orchestrator", () => {
+  it("keeps the OpenCode compression header in Advanced settings only", () => {
+    const guide = readFileSync(
+      new URL("../docs/integrations/opencode.md", import.meta.url),
+      "utf8",
+    );
+    const advanced = guide.indexOf("## Advanced Settings & Prompt Compression");
+    assert.ok(advanced > 0);
+    assert.doesNotMatch(guide.slice(0, advanced), /X-Rotator-Compression/);
+    assert.match(guide.slice(advanced), /X-Rotator-Compression/);
+  });
+
   it("parses compression modes from headers and config", () => {
     assert.equal(parseCompressionMode("lite"), "lite");
     assert.equal(parseCompressionMode("rtk"), "rtk");
