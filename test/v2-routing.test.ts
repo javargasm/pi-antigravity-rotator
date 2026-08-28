@@ -273,6 +273,64 @@ describe("v2 routing and status", () => {
     }
   });
 
+  it("reconciles an exhausted Google pool cooldown with its latest RAW POLL reset", async () => {
+    const now = Date.now();
+    const claudeResetTime = new Date(now + 51 * 60_000).toISOString();
+    const geminiResetTime = new Date(now + 4 * 60 * 60_000).toISOString();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      assert.match(String(input), /fetchAvailableModels/);
+      return new Response(
+        JSON.stringify({
+          models: {
+            "claude-opus-4-6-thinking": {
+              quotaInfo: { remainingFraction: 0, resetTime: claudeResetTime },
+            },
+            "gemini-3.1-pro": {
+              quotaInfo: { remainingFraction: 0.93, resetTime: geminiResetTime },
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const rotator = new AccountRotator({
+      ...makeConfig(),
+      accounts: [makeConfig().accounts[0]],
+    }) as any;
+    rotator.stopQuotaPolling();
+    const account = rotator.accounts[0];
+    account.accessToken = "test-access-token";
+    account.tokenExpires = now + 60_000;
+    account.cooldownsByModel = { claude: now + 80 * 60_000 };
+
+    let saves = 0;
+    let drains = 0;
+    rotator.scheduleStateSave = () => saves++;
+    rotator.requestWaiterDrain = () => drains++;
+
+    try {
+      await rotator.pollAccountQuota(account);
+
+      assert.equal(
+        account.cooldownsByModel.claude,
+        new Date(claudeResetTime).getTime(),
+      );
+      assert.equal(account.cooldownsByModel.gemini, undefined);
+      assert.equal(account.cooldownsByModel.__default__, undefined);
+      assert.equal(rotator.isRoutableForModel(account, "gemini", Date.now()), true);
+      assert.equal(saves, 1);
+      assert.equal(drains, 1);
+
+      await rotator.pollAccountQuota(account);
+      assert.equal(saves, 1, "an unchanged reset must not schedule another save");
+      assert.equal(drains, 1, "an unchanged reset must not drain waiters again");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("shares one auto-warmup cycle across overlapping quota polls", async () => {
     const originalFetch = globalThis.fetch;
     const requestedModels: string[] = [];

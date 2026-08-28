@@ -855,6 +855,34 @@ export class AccountRotator {
       // Token refresh or quota fetch failed, skip this account
     }
 
+    let cooldownChanged = false;
+    if (account.lastPollByProvider?.[DEFAULT_PROVIDER] !== undefined) {
+      const now = Date.now();
+      for (const quota of account.quota) {
+        if (
+          quota.providerId !== DEFAULT_PROVIDER ||
+          quota.percentRemaining !== 0 ||
+          !quota.resetTime
+        ) {
+          continue;
+        }
+        const resetAt = new Date(quota.resetTime).getTime();
+        if (
+          !Number.isFinite(resetAt) ||
+          resetAt <= now ||
+          account.cooldownsByModel[quota.modelKey] === resetAt
+        ) {
+          continue;
+        }
+        account.cooldownsByModel[quota.modelKey] = resetAt;
+        cooldownChanged = true;
+      }
+    }
+    if (cooldownChanged) {
+      this.scheduleStateSave();
+      this.requestWaiterDrain();
+    }
+
     // Consolidated RAW POLL across all providers on this account:
     // google first (Antigravity OAuth pools), then ollama (usage pools).
     this.logConsolidatedPoll(account);
