@@ -39,7 +39,11 @@ export function extractQuotas(
     }
 
     if (modelInfo?.quotaInfo) {
-      const resetTime = modelInfo.quotaInfo.resetTime ?? null;
+      const remainingFraction = modelInfo.quotaInfo.remainingFraction ?? 0;
+      // Google can publish a nominal reset for an untouched pool; no usage means
+      // there is no active quota window yet.
+      const resetTime =
+        remainingFraction >= 1 ? null : modelInfo.quotaInfo.resetTime ?? null;
       let timerType: ModelQuota["timerType"] = "fresh";
 
       if (resetTime) {
@@ -63,9 +67,7 @@ export function extractQuotas(
       quotas.push({
         modelKey: config.key,
         displayName: config.display,
-        percentRemaining: Math.round(
-          (modelInfo.quotaInfo.remainingFraction ?? 0) * 100,
-        ),
+        percentRemaining: Math.round(remainingFraction * 100),
         resetTime,
         timerType,
       });
