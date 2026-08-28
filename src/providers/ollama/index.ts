@@ -27,6 +27,8 @@ const OLLAMA_TIER_RANKING = {
   unknown: 4,
 };
 
+const OLLAMA_KICKSTART_MODEL = "gpt-oss:20b";
+
 export const ollamaAdapter: ProviderAdapter = {
   id: "ollama",
   displayName: "Ollama Cloud",
@@ -74,11 +76,12 @@ export const ollamaAdapter: ProviderAdapter = {
 
   getKickstartModelForPool(quotaModelKey: string): string | undefined {
     // Only the session pool can be kickstarted for Ollama accounts.
-    return quotaModelKey === "session" ? "gpt-oss:20b" : undefined;
+    return quotaModelKey === "session" ? OLLAMA_KICKSTART_MODEL : undefined;
   },
 
   ownsModel(model: string, context?: { ollamaModels?: Set<string> }): boolean {
-    return context?.ollamaModels?.has(model) ?? false;
+    return model === OLLAMA_KICKSTART_MODEL ||
+      (context?.ollamaModels?.has(model) ?? false);
   },
 
   getPoolKey(): string {

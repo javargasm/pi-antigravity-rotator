@@ -68,6 +68,7 @@ function makeAccount(email: string, projectId = "test-project"): AccountRuntime 
 
 type RotatorTracking = {
 	markExhausted?: number;
+	lastMarkExhausted?: { model: string | undefined; cooldownMs: number };
 	markFlagged?: number;
 	markError?: number;
 	recordRequest?: number;
@@ -107,7 +108,14 @@ function makeRotator(
 		finishRequest: () => { tracking.finishRequest!++; },
 		getSafetyJitterMs: () => 0,
 		recordUpstreamAttempt: () => {},
-		markExhausted: () => { tracking.markExhausted!++; },
+		markExhausted: (
+			_account: AccountRuntime,
+			model: string | undefined,
+			cooldownMs: number,
+		) => {
+			tracking.markExhausted!++;
+			tracking.lastMarkExhausted = { model, cooldownMs };
+		},
 		recordProvider429: () => { tracking.recordProvider429!++; },
 		getFlagContext: () => ({
 			timerType: "fresh",
@@ -379,7 +387,11 @@ describe("proxy e2e: 429 rate-limited", () => {
 		});
 		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
 
-		const tracking = { markExhausted: 0, recordProvider429: 0, finishRequest: 0 };
+		const tracking: RotatorTracking = {
+			markExhausted: 0,
+			recordProvider429: 0,
+			finishRequest: 0,
+		};
 		const rotator = makeRotator(makeAccount("rl@example.com"), tracking);
 
 		try {
@@ -406,16 +418,20 @@ describe("proxy e2e: 429 rate-limited", () => {
 		}
 	});
 
-	it("uses RESOURCE_EXHAUSTED cooldown (30min) for quota-exhausted responses", async () => {
+	it("uses the full provider reset duration for RESOURCE_EXHAUSTED", async () => {
 		const upstream = await listen((req, res) => {
 			res.writeHead(429, {
 				"Content-Type": "application/json",
 			});
-			res.end(JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED", message: "quota exceeded" } }));
+			res.end(JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED", message: "quota exceeded. Resets in 1h20m14s" } }));
 		});
 		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
 
-		const tracking = { markExhausted: 0, recordProvider429: 0, finishRequest: 0 };
+		const tracking: RotatorTracking = {
+			markExhausted: 0,
+			recordProvider429: 0,
+			finishRequest: 0,
+		};
 		const rotator = makeRotator(makeAccount("quota@example.com"), tracking);
 
 		try {
@@ -430,10 +446,51 @@ describe("proxy e2e: 429 rate-limited", () => {
 			assert.equal(outcome.ok, false);
 			if (!outcome.ok) {
 				assert.equal(outcome.status, 429);
-				// RESOURCE_EXHAUSTED gets a fixed 30min cooldown regardless of Retry-After
-				assert.equal(outcome.retryAfterMs, 1_800_000);
+				assert.equal(outcome.retryAfterMs, 4_815_000);
 			}
 			assert.equal(tracking.finishRequest, 1, "RESOURCE_EXHAUSTED should release the account once");
+			assert.deepEqual(tracking.lastMarkExhausted, {
+				model: "gemini-3.1-pro",
+				cooldownMs: 4_815_000,
+			});
+		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("falls back to 30 minutes for RESOURCE_EXHAUSTED without a reset duration", async () => {
+		const upstream = await listen((_req, res) => {
+			res.writeHead(429, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED", message: "quota exceeded" } }));
+		});
+		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
+
+		const tracking: RotatorTracking = {
+			markExhausted: 0,
+			recordProvider429: 0,
+			finishRequest: 0,
+		};
+		const rotator = makeRotator(makeAccount("quota-fallback@example.com"), tracking);
+
+		try {
+			const outcome = await withRotation(
+				rotator,
+				"gemini-3.1-pro",
+				{},
+				makeBody(),
+				async () => "should-not-reach",
+			);
+
+			assert.equal(outcome.ok, false);
+			if (!outcome.ok) {
+				assert.equal(outcome.status, 429);
+				assert.equal(outcome.retryAfterMs, 1_800_000);
+			}
+			assert.equal(tracking.finishRequest, 1);
+			assert.deepEqual(tracking.lastMarkExhausted, {
+				model: "gemini-3.1-pro",
+				cooldownMs: 1_800_000,
+			});
 		} finally {
 			await upstream.close();
 		}
