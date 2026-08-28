@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.3.2] - 2026-08-28
+
+### Fixed
+- **Model-scoped Antigravity cooldowns**: `RESOURCE_EXHAUSTED` 429s now cool only the exhausted Claude or Gemini pool; sibling pools on the same account remain routable immediately ([#26](https://github.com/tuxevil/tuxevil-rotator/pull/26) by [@javargasm](https://github.com/javargasm)).
+- **Explicit reset duration honored on `RESOURCE_EXHAUSTED`**: The rotator parses `Resets in Xh Ym Zs` from Antigravity error messages and applies that exact cooldown instead of the generic 30-minute cap. Falls back to 30 minutes when no duration is present ([#26](https://github.com/tuxevil/tuxevil-rotator/pull/26) by [@javargasm](https://github.com/javargasm)).
+- **Persisted Antigravity pool deadlines survive restarts**: `claude` and `gemini` cooldown deadlines are no longer truncated to 30 minutes on startup; only generic model cooldowns are capped ([#26](https://github.com/tuxevil/tuxevil-rotator/pull/26) by [@javargasm](https://github.com/javargasm)).
+- **Untouched 100% pools show idle instead of a fake countdown**: When Google reports `remainingFraction >= 1` the reset timestamp is discarded and the pool renders as `idle` with no timer ([#26](https://github.com/tuxevil/tuxevil-rotator/pull/26) by [@javargasm](https://github.com/javargasm)).
+- **RAW POLL reconciliation of exhausted pool deadlines**: A successful quota poll reporting 0% with a valid future reset replaces the stale cooldown deadline for that pool; invalid, past, or unchanged resets are ignored ([#26](https://github.com/tuxevil/tuxevil-rotator/pull/26) by [@javargasm](https://github.com/javargasm)).
+- **Serialized per-account quota polling with trailing repoll**: Overlapping `pollAccountQuota` calls for the same account queue a single trailing repoll instead of running concurrently; `pollAllQuotas` is now single-flighted ([#26](https://github.com/tuxevil/tuxevil-rotator/pull/26) by [@javargasm](https://github.com/javargasm)).
+- **`gpt-oss:20b` kickstarts routed through Ollama**: On multi-provider accounts (Google + Ollama), the kickstart for the Ollama session pool is correctly sent to the Ollama endpoint with the Ollama API key ([#26](https://github.com/tuxevil/tuxevil-rotator/pull/26) by [@javargasm](https://github.com/javargasm)).
+- **Kickstart actions hidden for disabled/flagged accounts**: The dashboard no longer renders `▶ Start` or `Start Idle Timers` buttons for accounts that are not eligible for kickstart ([#26](https://github.com/tuxevil/tuxevil-rotator/pull/26) by [@javargasm](https://github.com/javargasm)).
+- **`gemini-3.7-flash-tiered` added to OpenCode integration docs**: Context window updated to 1,000,000 tokens; set as the recommended default model ([#26](https://github.com/tuxevil/tuxevil-rotator/pull/26) by [@javargasm](https://github.com/javargasm)).
+
 ## [3.3.1] - 2026-08-27
 
 ### Fixed

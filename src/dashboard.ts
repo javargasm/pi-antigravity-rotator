@@ -281,17 +281,17 @@ export function serveKickstartApi(
     rotator.kickstartTimerForAccount(email, modelKey).then((result) => {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(result));
-    }).catch((err) => {
+    }).catch(() => {
       res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: false, error: String(err) }));
+      res.end(JSON.stringify({ ok: false, error: "Kickstart failed" }));
     });
   } else {
     rotator.kickstartAllFreshTimers(email).then((result) => {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(result));
-    }).catch((err) => {
+    }).catch(() => {
       res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: false, error: String(err), results: [] }));
+      res.end(JSON.stringify({ ok: false, error: "Kickstart failed", results: [] }));
     });
   }
 }
