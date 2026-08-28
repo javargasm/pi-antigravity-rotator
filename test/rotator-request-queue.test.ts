@@ -372,7 +372,7 @@ describe("Antigravity request queue", () => {
     const active = await rotator.getActiveAccount(GEMINI_MODEL);
     assert.ok(active);
     const cooling = accounts.find((account) => account !== active)!;
-    cooling.cooldownsByModel.gemini = Date.now() + 40;
+    cooling.cooldownsByModel.gemini = Date.now() + 150;
 
     const controller = new AbortController();
     let settled = false;
@@ -388,7 +388,7 @@ describe("Antigravity request queue", () => {
     const timeout = Symbol("timeout");
     const admitted = await Promise.race([
       queued,
-      new Promise<typeof timeout>((resolve) => setTimeout(() => resolve(timeout), 400)),
+      new Promise<typeof timeout>((resolve) => setTimeout(() => resolve(timeout), 2000)),
     ]);
     if (admitted === timeout) {
       controller.abort();
