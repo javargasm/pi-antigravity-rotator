@@ -86,7 +86,7 @@ describe("v2 routing and status", () => {
     assert.equal(best?.config.email, "b@example.com");
   });
 
-  it("kickstarts Gemini 3.6 through the shared Gemini 3 upstream model", async () => {
+  it("kickstarts the Gemini pool through the shared Gemini 3 upstream model", async () => {
     const originalFetch = globalThis.fetch;
     let requestBody: { model?: string } | undefined;
     globalThis.fetch = (async (_input, init) => {
@@ -100,9 +100,10 @@ describe("v2 routing and status", () => {
       rotator.accounts[0].accessToken = "test-access-token";
       rotator.accounts[0].tokenExpires = Date.now() + 60_000;
 
+      // The canonical quota pool key for Gemini is "gemini" (from QUOTA_MODEL_KEYS)
       const result = await rotator.kickstartTimerForAccount(
         "a@example.com",
-        "gemini-3.6-flash",
+        "gemini",
       );
       assert.equal(result.ok, true);
       assert.equal(result.upstreamModel, "gemini-3-flash");

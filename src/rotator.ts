@@ -234,8 +234,8 @@ interface AccountRequestWaiter {
 
 // Reverse map: upstream model → the quota pool key it primarily represents (for deduplication).
 const QUOTA_POOL_FOR_KICKSTART_MODEL: Record<string, string> = {
-  "gpt-oss-120b-medium": "claude-opus-4-6-thinking",
-  "gemini-3-flash": "gemini-3.5-flash",
+  "gpt-oss-120b-medium": "claude",
+  "gemini-3-flash": "gemini",
 };
 
 export class AccountRotator {

@@ -879,13 +879,11 @@ export const ANTIGRAVITY_ENDPOINTS = [
 ] as const;
 
 // Maps each quota pool key (Google quota API) to the cheapest upstream model
-// used for kickstart warmup requests. Gemini 3.6/3.5 Flash and Gemini 3.1 Pro
-// share the same upstream pool, so all map to gemini-3-flash.
+// used for kickstart warmup requests. The pool key is the canonical family key
+// from QUOTA_MODEL_KEYS (i.e. "claude" or "gemini"), not an altKey/request model name.
 export const KICKSTART_MODEL_FOR_QUOTA_POOL: Record<string, string> = {
-  "claude-opus-4-6-thinking": "gpt-oss-120b-medium",
-  "gemini-3.5-flash": "gemini-3-flash",
-  "gemini-3.6-flash": "gemini-3-flash",
-  "gemini-3.1-pro": "gemini-3-flash",
+  "claude": "gpt-oss-120b-medium",
+  "gemini": "gemini-3-flash",
 };
 
 export const QUOTA_API_URL =
