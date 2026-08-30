@@ -799,16 +799,18 @@ export const MODEL_PRICING: Record<
     cachingPer1M: 0.02,
   },
 
-  // Ollama Cloud model pricing (USD per 1M tokens). Sourced from the
-  // ~/ollama-rotator project (verified 2026-08-09).
+  // Ollama Cloud model pricing (USD per 1M tokens). Sourced from LiteLLM
+  // (https://models.litellm.ai/) and verified 2026-08-30 via /api/tags
+  // discovery + /api/chat probes. Run scripts/verify_ollama_models.ts to refresh.
   "gpt-oss:20b":                 { inputPer1M: 0.075,  outputPer1M: 0.30 },
   "gpt-oss:120b":                { inputPer1M: 0.15,   outputPer1M: 0.60 },
-  "deepseek-v4-flash:preview":   { inputPer1M: 0.14,   outputPer1M: 0.28,  cachingPer1M: 0.0028 },
   "deepseek-v4-flash:0731":      { inputPer1M: 0.14,   outputPer1M: 0.28,  cachingPer1M: 0.0028 },
-  "deepseek-v4-pro":             { inputPer1M: 0.435,  outputPer1M: 0.87,  cachingPer1M: 0.0036 },
+  "deepseek-v4-pro:0813":        { inputPer1M: 1.74,   outputPer1M: 3.48 },
   "qwen3.5:397b":                { inputPer1M: 0.60,   outputPer1M: 3.60 },
   "glm-5.1":                     { inputPer1M: 0.80,   outputPer1M: 2.56 },
   "glm-5.2":                     { inputPer1M: 0.80,   outputPer1M: 2.56 },
+  "glm-5.3":                     { inputPer1M: 1.40,   outputPer1M: 4.40 },
+  "glm-5.3-flash":               { inputPer1M: 0.15,   outputPer1M: 0.50 },
   "gemma4:31b":                  { inputPer1M: 0.38,   outputPer1M: 1.15 },
   "kimi-k2.6":                   { inputPer1M: 0.95,   outputPer1M: 4.00 },
   "kimi-k2.7-code":              { inputPer1M: 0.95,   outputPer1M: 4.00 },
@@ -830,28 +832,30 @@ export const MODEL_PRICING: Record<
 };
 
 // Which Ollama Cloud models respond on which subscription tiers, verified
-// 2026-08-09 with minimal /api/chat probes against free-tier accounts
-// (HTTP 200 vs 403). "free" = served on the free tier; "subscription" =
-// the API returns "this model requires a subscription" until the account
-// is upgraded. Sourced from ~/ollama-rotator.
+// 2026-08-30 via scripts/verify_ollama_models.ts (/api/tags discovery +
+// /api/chat probes: HTTP 200 = free, HTTP 402 = subscription-only).
+// "free" = served on the free tier; "subscription" = requires a paid plan.
 export type ModelTierAccess = "free" | "subscription";
 export const MODEL_TIER_ACCESS: Record<string, ModelTierAccess> = {
+  // ── Free tier (HTTP 200 on free accounts) ───────────────────────────────
   "gpt-oss:20b":                  "free",
   "gpt-oss:120b":                 "free",
   "gemma4:31b":                   "free",
-  "minimax-m3":                   "free",
   "nemotron-3-nano:30b":          "free",
   "nemotron-3-super":             "free",
   "nemotron-3-ultra":             "free",
+  // ── Subscription tier (HTTP 402 on free accounts) ───────────────────────
   "deepseek-v4-flash:0731":       "subscription",
-  "deepseek-v4-flash:preview":    "subscription",
-  "deepseek-v4-pro":              "subscription",
+  "deepseek-v4-pro:0813":         "subscription",
   "glm-5.1":                      "subscription",
   "glm-5.2":                      "subscription",
+  "glm-5.3":                      "subscription",
+  "glm-5.3-flash":                "subscription",
   "kimi-k2.6":                    "subscription",
   "kimi-k2.7-code":               "subscription",
   "kimi-k3":                      "subscription",
   "minimax-m2.7":                 "subscription",
+  "minimax-m3":                   "subscription",
   "mistral-large-3:675b":         "subscription",
   "qwen3.5:397b":                 "subscription",
 };

@@ -21,13 +21,13 @@ export interface PoolBudgetEntry {
 // Measured on 2026-08-09 with controlled burns (see docs/usage-calibration.md).
 // Two gpt-oss:20b runs on different accounts agreed within ~1%, so these are
 // per-account, per-model budgets, not per-IP.
+// minimax-m3 removed 2026-08-30: moved to subscription tier (HTTP 402 on free).
 export const CALIBRATED_MODEL_BUDGETS: Readonly<Record<string, PoolBudgetEntry>> = {
   "gpt-oss:20b": { sessionTokens: 1_560_000, weeklyTokens: 4_210_000 },
   "gemma4:31b": { sessionTokens: 1_150_000, weeklyTokens: 3_110_000 },
   "nemotron-3-nano:30b": { sessionTokens: 1_930_000, weeklyTokens: 5_190_000 },
   "gpt-oss:120b": { sessionTokens: 760_000, weeklyTokens: 2_050_000 },
   "nemotron-3-super": { sessionTokens: 740_000, weeklyTokens: 2_010_000 },
-  "minimax-m3": { sessionTokens: 190_000, weeklyTokens: 520_000 },
   "nemotron-3-ultra": { sessionTokens: 120_000, weeklyTokens: 330_000 },
 };
 
