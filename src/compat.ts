@@ -515,6 +515,10 @@ function recordCompatOutcome(
     inputTokens: completion?.inputTokens ?? 0,
     outputTokens: completion?.outputTokens ?? 0,
   });
+  rotator.recordProxyEvent(
+    `[${context.requestId}] COMPAT END account=${context.label} model=${context.displayModelKey} status=${statusCode} ttfbMs=${ttfbMs} totalMs=${totalMs} inTokens=${completion?.inputTokens ?? 0} outTokens=${completion?.outputTokens ?? 0}`,
+    "info",
+  );
   logSpend({
     requestId: context.requestId,
     apiKeyHash: options?.apiKeyHash || null,
