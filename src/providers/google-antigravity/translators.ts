@@ -1418,8 +1418,7 @@ export function mapReasoningEffortToThinkingLevel(
   const lowerModel = modelId.toLowerCase();
   const isGemini31Pro = /gemini-3\.1-pro/i.test(modelId);
   const isGemini3Flash =
-    lowerModel.includes("gemini-3-flash") ||
-    lowerModel.includes("gemini-3.5-flash");
+    lowerModel.includes("gemini-3-flash");
 
   let effectiveEffort = effort;
   if (!effectiveEffort) {

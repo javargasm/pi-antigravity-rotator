@@ -5,9 +5,9 @@ import { IdempotencyManager } from "../src/idempotency.js";
 describe("IdempotencyManager", () => {
   it("computes reproducible fingerprints", () => {
     const mgr = new IdempotencyManager();
-    const key1 = mgr.computeKey("gemini-3.5-flash-high", { prompt: "hello" });
-    const key2 = mgr.computeKey("gemini-3.5-flash-high", { prompt: "hello" });
-    const key3 = mgr.computeKey("gemini-3.5-flash-high", { prompt: "world" });
+    const key1 = mgr.computeKey("gemini-3.8-flash-high", { prompt: "hello" });
+    const key2 = mgr.computeKey("gemini-3.8-flash-high", { prompt: "hello" });
+    const key3 = mgr.computeKey("gemini-3.8-flash-high", { prompt: "world" });
 
     assert.equal(key1, key2);
     assert.notEqual(key1, key3);
@@ -15,8 +15,8 @@ describe("IdempotencyManager", () => {
 
   it("prioritizes explicit client idempotency key", () => {
     const mgr = new IdempotencyManager();
-    const key1 = mgr.computeKey("gemini-3.5-flash-high", { prompt: "hello" }, "custom-id-123");
-    const key2 = mgr.computeKey("gemini-3.5-flash-high", { prompt: "different prompt" }, "custom-id-123");
+    const key1 = mgr.computeKey("gemini-3.8-flash-high", { prompt: "hello" }, "custom-id-123");
+    const key2 = mgr.computeKey("gemini-3.8-flash-high", { prompt: "different prompt" }, "custom-id-123");
 
     assert.equal(key1, key2);
   });

@@ -221,6 +221,43 @@ describe("telemetry receiver", () => {
 		assert.equal(stats.savings.byModel["google/gemini-3.7-flash-tiered"].totalUsd, 4.50);
 	});
 
+	it("calculates estimated savings for native gemini 3.8 flash levels", async () => {
+		const payload = {
+			event: "heartbeat",
+			installId: "gemini38-savings-test-install",
+			version: "3.3.2",
+			nodeVersion: process.version,
+			os: process.platform,
+			arch: process.arch,
+			ts: new Date().toISOString(),
+			accountCount: 1,
+			modelsUsed: ["gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high"],
+			totalRequests: 15,
+			uptimeSeconds: 300,
+			routingHealthState: "healthy",
+			tokensByModel: {
+				"gemini-3.8-flash-low": { input: 1_000_000, output: 1_000_000, requests: 5 },
+				"gemini-3.8-flash-medium": { input: 1_000_000, output: 1_000_000, requests: 5 },
+				"gemini-3.8-flash-high": { input: 1_000_000, output: 1_000_000, requests: 5 },
+			},
+		};
+
+		const postRes = await fetch(`http://127.0.0.1:${port}/v1/events`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(payload),
+		});
+		assert.equal(postRes.status, 202);
+
+		const statsRes = await fetch(`http://127.0.0.1:${port}/v1/stats`, {
+			headers: { Authorization: "Bearer secret-token" },
+		});
+		const stats = (await statsRes.json()) as any;
+		for (const variant of ["low", "medium", "high"]) {
+			assert.equal(stats.savings.byModel[`gemini-3.8-flash-${variant}`].totalUsd, 4.50);
+		}
+	});
+
 	it("calculates estimated savings for Ollama Cloud models in /v1/stats", async () => {
 		const payload = {
 			event: "heartbeat",

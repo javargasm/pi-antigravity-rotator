@@ -328,10 +328,6 @@ const MODEL_PRICING = {
 	"gemini-3.1-pro-low":       { inputPer1M: 2.00,  outputPer1M: 12.00 },
 	"gemini-3.1-pro-high":      { inputPer1M: 2.00,  outputPer1M: 12.00 },
 	"gemini-3-flash":           { inputPer1M: 0.50,  outputPer1M: 3.00 },
-	"gemini-3.5-flash":         { inputPer1M: 1.50,  outputPer1M: 9.00 },
-	"gemini-3.5-flash-low":     { inputPer1M: 1.50,  outputPer1M: 9.00 },
-	"gemini-3.5-flash-medium":  { inputPer1M: 1.50,  outputPer1M: 9.00 },
-	"gemini-3.5-flash-high":    { inputPer1M: 1.50,  outputPer1M: 9.00 },
 	"gemini-3.6-flash":         { inputPer1M: 1.50,  outputPer1M: 7.50 },
 	"gemini-3.6-flash-high":    { inputPer1M: 1.50,  outputPer1M: 7.50 },
 	"gemini-3.6-flash-medium":  { inputPer1M: 1.50,  outputPer1M: 7.50 },
@@ -341,6 +337,10 @@ const MODEL_PRICING = {
 	// 2026-08-13. Introductory rates through 2026-12-31; from 2027-01-01
 	// these double to input 1.50 / output 7.50 per 1M tokens.
 	"gemini-3.7-flash-tiered":  { inputPer1M: 0.75,  outputPer1M: 3.75 },
+	// Gemini 3.8 Flash uses the same introductory window and doubles on 2027-01-01.
+	"gemini-3.8-flash-low":     { inputPer1M: 0.75,  outputPer1M: 3.75 },
+	"gemini-3.8-flash-medium":  { inputPer1M: 0.75,  outputPer1M: 3.75 },
+	"gemini-3.8-flash-high":    { inputPer1M: 0.75,  outputPer1M: 3.75 },
 	"gpt-oss-120b-medium":      { inputPer1M: 2.00,  outputPer1M: 10.00 },
 
 	// Ollama Cloud models — mirrors MODEL_PRICING in src/types.ts
@@ -383,9 +383,9 @@ function getModelPricing(model) {
 	const lower = (model || "").toLowerCase();
 	if (lower.includes("opus")) return MODEL_PRICING["claude-opus-4-6-thinking"];
 	if (lower.includes("sonnet")) return MODEL_PRICING["claude-sonnet-4-6"];
+	if (lower.includes("3.8-flash")) return MODEL_PRICING["gemini-3.8-flash-high"];
 	if (lower.includes("3.7-flash")) return MODEL_PRICING["gemini-3.7-flash-tiered"];
 	if (lower.includes("3.6-flash")) return MODEL_PRICING["gemini-3.6-flash-high"];
-	if (lower.includes("3.5-flash")) return MODEL_PRICING["gemini-3.5-flash-high"];
 	if (lower.includes("flash")) return MODEL_PRICING["gemini-3-flash"];
 	if (lower.includes("pro")) return MODEL_PRICING["gemini-3.1-pro"];
 	return null;

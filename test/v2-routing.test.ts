@@ -142,7 +142,7 @@ describe("v2 routing and status", () => {
     let quotaPolls = 0;
     const mockQuotaResponse = {
       models: {
-        "gemini-3.5-flash": { quotaInfo: { remainingFraction: 1.0, resetTime: null } },
+        "gemini-3.8-flash-high": { quotaInfo: { remainingFraction: 1.0, resetTime: null } },
         "claude-opus-4-6-thinking": { quotaInfo: { remainingFraction: 1.0, resetTime: null } },
       },
     };

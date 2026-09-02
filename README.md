@@ -51,6 +51,10 @@ Originally built as a multi-account rotator for Google Antigravity. It now gener
 
 ---
 
+## Current Model Update
+
+- **Gemini 3.8 Flash Support**: Native Antigravity model IDs `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, and `gemini-3.8-flash-low`, with 1M-token context, 65,536-token output, pricing, quota routing, dashboard visualization, and telemetry support. Gemini 3.5 Flash has been removed from the user-facing catalog to match Antigravity 2.11.
+
 ## v3.2 Highlights
 
 - **Gemini 3.7 Flash Support**: Full support for Google's Gemini 3.7 Flash models (`gemini-3.7-flash`, `gemini-3.7-flash-tiered`, `gemini-3.7-flash-high`, `gemini-3.7-flash-medium`, `gemini-3.7-flash-low`) with reasoning effort / thinking level translation, pricing, dashboard visualization, and telemetry.

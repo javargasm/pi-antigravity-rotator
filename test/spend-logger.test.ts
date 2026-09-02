@@ -39,6 +39,19 @@ test("calculateCost never falls 3.7-flash through to gemini-3-flash rates", () =
 	assert.notEqual(tiered, legacy);
 });
 
+test("calculateCost uses Gemini 3.8 Flash rates for every native level", () => {
+	for (const variant of ["low", "medium", "high"]) {
+		assert.equal(
+			calculateCost(`gemini-3.8-flash-${variant}`, 1_000_000, 1_000_000),
+			4.5,
+		);
+	}
+	assert.equal(
+		calculateCost("google/gemini-3.8-flash-high", 1_000_000, 1_000_000),
+		4.5,
+	);
+});
+
 test("generateRequestId produces unique prefixed strings", () => {
   const id1 = generateRequestId();
   const id2 = generateRequestId();
@@ -52,7 +65,7 @@ test("logSpend enqueues log without throwing and keeps queue empty when DB is no
   resetSpendLoggerForTests();
   for (let i = 0; i < 120; i++) {
     logSpend({
-      model: "gemini-3.5-flash-high",
+      model: "gemini-3.8-flash-high",
       callType: "chat_completion",
       status: "success",
       promptTokens: 100,
@@ -91,7 +104,7 @@ test("logSpend enforces FIFO cap of 100 entries when DB is configured", async ()
     for (let i = 0; i < 105; i++) {
       logSpend({
         requestId: `req_${i.toString().padStart(3, "0")}`,
-        model: "gemini-3.5-flash-high",
+        model: "gemini-3.8-flash-high",
         callType: "chat_completion",
         status: "success",
         promptTokens: 100,
@@ -130,7 +143,7 @@ test("flushSpendLogs on DB failure preserves newest items (FIFO) under concurren
     for (let i = 0; i < 50; i++) {
       inFlight.push({
         requestId: `req_${i.toString().padStart(3, "0")}`,
-        model: "gemini-3.5-flash-high",
+        model: "gemini-3.8-flash-high",
         accountEmail: "test@example.com",
         callType: "chat_completion",
         status: "success",
@@ -151,7 +164,7 @@ test("flushSpendLogs on DB failure preserves newest items (FIFO) under concurren
     for (let i = 50; i < 150; i++) {
       concurrentNew.push({
         requestId: `req_${i.toString().padStart(3, "0")}`,
-        model: "gemini-3.5-flash-high",
+        model: "gemini-3.8-flash-high",
         accountEmail: "test@example.com",
         callType: "chat_completion",
         status: "success",

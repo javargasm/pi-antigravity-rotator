@@ -7,7 +7,7 @@ Connect Aider (AI pair programming CLI) to tuxevil-rotator using the OpenAI-comp
 ```bash
 export OPENAI_API_BASE=http://localhost:51200/v1
 export OPENAI_API_KEY=tuxevil
-aider --model openai/gemini-3.6-flash-high
+aider --model openai/gemini-3.8-flash-high
 ```
 
 > **Important:** The `openai/` prefix is required. It tells Aider/litellm to use the OpenAI-compatible provider path.
@@ -19,7 +19,7 @@ aider --model openai/gemini-3.6-flash-high
 ```dotenv
 OPENAI_API_BASE=http://localhost:51200/v1
 OPENAI_API_KEY=tuxevil
-AIDER_MODEL=openai/gemini-3.6-flash-high
+AIDER_MODEL=openai/gemini-3.8-flash-high
 ```
 
 ### Option B: `.aider.conf.yml`
@@ -27,7 +27,7 @@ AIDER_MODEL=openai/gemini-3.6-flash-high
 ```yaml
 openai-api-base: http://localhost:51200/v1
 openai-api-key: tuxevil
-model: openai/gemini-3.6-flash-high
+model: openai/gemini-3.8-flash-high
 show-model-warnings: false
 ```
 
@@ -37,7 +37,7 @@ show-model-warnings: false
 aider \
   --openai-api-base http://localhost:51200/v1 \
   --openai-api-key antigravity \
-  --model openai/gemini-3.6-flash-high
+  --model openai/gemini-3.8-flash-high
 ```
 
 ## Available Models
@@ -45,10 +45,12 @@ aider \
 Use the `openai/` prefix for all model names:
 
 ```
+openai/gemini-3.8-flash-high
+openai/gemini-3.8-flash-medium
+openai/gemini-3.8-flash-low
 openai/gemini-3.6-flash-high
 openai/gemini-3.6-flash-medium
 openai/gemini-3.6-flash-low
-openai/gemini-3.5-flash-high
 openai/gemini-3.1-pro-low
 openai/claude-sonnet-4-6
 openai/claude-opus-4-6-thinking

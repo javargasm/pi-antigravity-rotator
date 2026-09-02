@@ -10,7 +10,7 @@ Connect Open WebUI to tuxevil-rotator to use Google Antigravity models from the 
 4. Set **URL**: `http://localhost:51200/v1`
 5. Set **API Key**: `tuxevil` (or your `rk-...` Virtual Key)
 6. If model auto-discovery doesn't work, manually add model IDs:
-   - Type the model name (e.g. `gemini-3.6-flash-high`) and click **+**
+   - Type the model name (e.g. `gemini-3.8-flash-high`) and click **+**
 7. Click **Save**
 
 > **Docker users:** If Open WebUI runs in Docker and the rotator is on the host, use `http://host.docker.internal:51200/v1` instead of `localhost`.
@@ -41,8 +41,8 @@ services:
 ## Available Models
 
 ```
+gemini-3.8-flash-high     gemini-3.8-flash-medium    gemini-3.8-flash-low
 gemini-3.6-flash-high     gemini-3.6-flash-medium    gemini-3.6-flash-low
-gemini-3.5-flash-high     gemini-3.5-flash-medium    gemini-3.5-flash-low
 gemini-3.1-pro-high       gemini-3.1-pro-low
 claude-sonnet-4-6         claude-opus-4-6-thinking
 gpt-oss-120b-medium

@@ -8,7 +8,7 @@ Edit `~/.hermes/config.yaml`:
 
 ```yaml
 model:
-  default: gemini-3.6-flash-high
+  default: gemini-3.8-flash-high
   provider: custom
   base_url: http://localhost:51200/v1
   api_key: tuxevil
@@ -35,7 +35,7 @@ hermes model
 Or switch mid-session:
 
 ```
-/model custom:antigravity:gemini-3.6-flash-high
+/model custom:antigravity:gemini-3.8-flash-high
 ```
 
 ## Interactive Setup
@@ -45,14 +45,14 @@ hermes model
 # Select "Custom endpoint (self-hosted / VLLM / etc.)"
 # API base URL: http://localhost:51200/v1
 # API key: tuxevil
-# Model name: gemini-3.6-flash-high
+# Model name: gemini-3.8-flash-high
 ```
 
 ## Available Models
 
 ```
+gemini-3.8-flash-high     gemini-3.8-flash-medium    gemini-3.8-flash-low
 gemini-3.6-flash-high     gemini-3.6-flash-medium    gemini-3.6-flash-low
-gemini-3.5-flash-high     gemini-3.5-flash-medium    gemini-3.5-flash-low
 gemini-3.1-pro-high       gemini-3.1-pro-low
 claude-sonnet-4-6         claude-opus-4-6-thinking
 gpt-oss-120b-medium

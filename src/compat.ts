@@ -1966,24 +1966,8 @@ async function completeViaRotator(
 
 const MODEL_CATALOG = [
   {
-    id: "gemini-3.5-flash-medium",
-    family: "gemini-3.5-flash",
-    ctx: 1048576,
-    quotaPool: "gemini",
-    multimodal: true,
-    tools: true,
-  },
-  {
-    id: "gemini-3.5-flash-high",
-    family: "gemini-3.5-flash",
-    ctx: 1048576,
-    quotaPool: "gemini",
-    multimodal: true,
-    tools: true,
-  },
-  {
     id: "gemini-3-flash",
-    family: "gemini-3.5-flash",
+    family: "gemini-3-flash",
     ctx: 1048576,
     quotaPool: "gemini",
     multimodal: true,
@@ -2024,6 +2008,30 @@ const MODEL_CATALOG = [
   {
     id: "gemini-3.7-flash-tiered",
     family: "gemini-3.7-flash",
+    ctx: 1048576,
+    quotaPool: "gemini",
+    multimodal: true,
+    tools: true,
+  },
+  {
+    id: "gemini-3.8-flash-high",
+    family: "gemini-3.8-flash",
+    ctx: 1048576,
+    quotaPool: "gemini",
+    multimodal: true,
+    tools: true,
+  },
+  {
+    id: "gemini-3.8-flash-medium",
+    family: "gemini-3.8-flash",
+    ctx: 1048576,
+    quotaPool: "gemini",
+    multimodal: true,
+    tools: true,
+  },
+  {
+    id: "gemini-3.8-flash-low",
+    family: "gemini-3.8-flash",
     ctx: 1048576,
     quotaPool: "gemini",
     multimodal: true,

@@ -190,7 +190,7 @@ function createRotatorStub(
     hasActiveProvider: (providerId: string) =>
       providerId === "ollama" && useOllamaAccount,
     getRetryAfterMs: () => 0,
-    resolveQuotaModelKeyForDisplay: () => "gemini-3.5-flash",
+    resolveQuotaModelKeyForDisplay: () => "gemini-3.8-flash-high",
     rotateToNext: async () => null,
     finishRequest: () => {
       tracking.finishRequests++;
@@ -599,7 +599,7 @@ describe("compat observability", () => {
         {
           name: "openai chat",
           request: requestStream("POST", "/v1/chat/completions", {
-            model: "gemini-3.5-flash",
+            model: "gemini-3.8-flash-high",
             messages: [{ role: "user", content: "ping" }],
           }),
           run: handleOpenAIChatCompletions,
@@ -665,7 +665,7 @@ describe("compat observability", () => {
       const tracking = createTracking();
       const rotator = createRotatorStub(tracking);
       const req = requestStream("POST", "/v1/chat/completions", {
-        model: "gemini-3.5-flash",
+        model: "gemini-3.8-flash-high",
         messages: [{ role: "user", content: "ping" }],
       });
       const res = responseStub();
@@ -700,7 +700,7 @@ describe("compat observability", () => {
       const tracking = createTracking();
       const rotator = createRotatorStub(tracking);
       const req = requestStream("POST", "/v1/responses", {
-        model: "gemini-3.5-flash",
+        model: "gemini-3.8-flash-high",
         input: "ping",
         stream: true,
       });
@@ -737,7 +737,7 @@ describe("compat observability", () => {
 
     try {
       const body = JSON.stringify({
-        model: "gemini-3.5-flash",
+        model: "gemini-3.8-flash-high",
         messages: [{ role: "user", content: "ping" }],
         stream: true,
       });
@@ -785,7 +785,7 @@ describe("compat observability", () => {
       {
         path: "/v1/responses",
         payload: {
-          model: "gemini-3.5-flash",
+          model: "gemini-3.8-flash-high",
           input: "ping",
           stream: true,
         },
@@ -834,7 +834,7 @@ describe("compat observability", () => {
       {
         path: "/v1/chat/completions",
         payload: {
-          model: "gemini-3.5-flash",
+          model: "gemini-3.8-flash-high",
           messages: [{ role: "user", content: "ping" }],
           stream: true,
         },
@@ -842,7 +842,7 @@ describe("compat observability", () => {
       {
         path: "/v1/responses",
         payload: {
-          model: "gemini-3.5-flash",
+          model: "gemini-3.8-flash-high",
           input: "ping",
           stream: true,
         },
@@ -929,7 +929,7 @@ describe("compat observability", () => {
 
   it("releases an in-flight compat chat request when the client disconnects before upstream completes", async () => {
     await assertCompatAbortReleasesInFlight("/v1/chat/completions", {
-      model: "gemini-3.5-flash",
+      model: "gemini-3.8-flash-high",
       messages: [{ role: "user", content: "hold the stream open" }],
       stream: true,
     });
@@ -937,7 +937,7 @@ describe("compat observability", () => {
 
   it("releases an in-flight Responses request when the client disconnects before upstream completes", async () => {
     await assertCompatAbortReleasesInFlight("/v1/responses", {
-      model: "gemini-3.5-flash",
+      model: "gemini-3.8-flash-high",
       input: "hold the stream open",
       stream: true,
     });
@@ -989,7 +989,7 @@ describe("compat observability", () => {
     const proxy = await startTestProxy(rotator);
     const port = (proxy.address() as AddressInfo).port;
     const body = JSON.stringify({
-      model: "gemini-3.5-flash",
+      model: "gemini-3.8-flash-high",
       messages: [{ role: "user", content: "wait in queue" }],
       stream: false,
     });

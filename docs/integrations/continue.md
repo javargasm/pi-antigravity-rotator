@@ -12,9 +12,9 @@ version: 0.0.1
 schema: v1
 
 models:
-  - name: Gemini 3.6 Flash High
+  - name: Gemini 3.8 Flash High
     provider: openai
-    model: gemini-3.6-flash-high
+    model: gemini-3.8-flash-high
     apiBase: http://localhost:51200/v1
     apiKey: tuxevil
     roles:
@@ -22,7 +22,7 @@ models:
       - edit
       - apply
     defaultCompletionOptions:
-      contextLength: 200000
+      contextLength: 1000000
       maxTokens: 65536
 
   - name: Gemini 3.1 Pro
@@ -55,12 +55,12 @@ Edit `~/.continue/config.json`:
 {
   "models": [
     {
-      "title": "Gemini 3.6 Flash High",
+      "title": "Gemini 3.8 Flash High",
       "provider": "openai",
-      "model": "gemini-3.6-flash-high",
+      "model": "gemini-3.8-flash-high",
       "apiBase": "http://localhost:51200/v1",
       "apiKey": "tuxevil",
-      "contextLength": 200000
+      "contextLength": 1000000
     },
     {
       "title": "Claude Sonnet 4.6",
@@ -91,7 +91,7 @@ proxy_defaults: &proxy
 models:
   - name: Flash High
     <<: *proxy
-    model: gemini-3.6-flash-high
+    model: gemini-3.8-flash-high
     roles: [chat, edit, apply]
   - name: Pro
     <<: *proxy

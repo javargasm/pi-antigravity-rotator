@@ -55,7 +55,7 @@ Add `.claude/settings.local.json` to `.gitignore`.
 ```
 claude-sonnet-4-6           (recommended)
 claude-opus-4-6-thinking    (with extended thinking)
-gemini-3.6-flash-high       (via Anthropic-compatible adapter)
+gemini-3.8-flash-high       (via Anthropic-compatible adapter)
 ```
 
 ## Verify the Connection

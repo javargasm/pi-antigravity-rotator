@@ -313,7 +313,7 @@ data: [DONE]
 
 	it("summarizes tool history when a Gemini thinking turn has no cached signature", () => {
 		const req: OpenAIChatCompletionRequest = {
-			model: "gemini-3.5-flash-high",
+			model: "gemini-3.8-flash-high",
 			messages: [
 				{ role: "user", content: "Find the weather" },
 				{
@@ -369,7 +369,7 @@ data: [DONE]
 		cacheThoughtSignature(callId, "SG_TEST_SIGNATURE");
 		try {
 			const req: OpenAIChatCompletionRequest = {
-				model: "gemini-3.5-flash-high",
+				model: "gemini-3.8-flash-high",
 				messages: [
 					{ role: "user", content: "Find the weather" },
 					{

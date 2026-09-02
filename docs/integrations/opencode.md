@@ -17,6 +17,18 @@ Create or edit `~/.config/opencode/opencode.json` (global) or `opencode.json` in
         "baseURL": "http://localhost:51200/v1"
       },
       "models": {
+        "gemini-3.8-flash-high": {
+          "name": "Gemini 3.8 Flash High",
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "gemini-3.8-flash-medium": {
+          "name": "Gemini 3.8 Flash Medium",
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "gemini-3.8-flash-low": {
+          "name": "Gemini 3.8 Flash Low",
+          "limit": { "context": 1000000, "output": 65536 }
+        },
         "gemini-3.7-flash-tiered": {
           "name": "Gemini 3.7 Flash Tiered (Thinking)",
           "limit": { "context": 1000000, "output": 65536 },
@@ -47,7 +59,7 @@ Create or edit `~/.config/opencode/opencode.json` (global) or `opencode.json` in
       }
     }
   },
-  "model": "antigravity/gemini-3.7-flash-tiered"
+  "model": "antigravity/gemini-3.8-flash-high"
 }
 ```
 
@@ -83,22 +95,32 @@ Then set `TUXEVIL_ROTATOR_KEY=no-key` (or your `rk-...` key) in your shell.
 Set as default in config:
 
 ```json
-{ "model": "antigravity/gemini-3.7-flash-tiered" }
+{ "model": "antigravity/gemini-3.8-flash-high" }
 ```
 
 Or via CLI flag:
 
 ```bash
-opencode --model antigravity/gemini-3.7-flash-tiered
+opencode --model antigravity/gemini-3.8-flash-high
 ```
 
 Or use `/models` inside OpenCode to pick interactively.
 
 ## Thinking & Reasoning Levels
 
-Antigravity models handle reasoning and internal thinking in two ways:
+Antigravity models handle reasoning and internal thinking in three ways:
 
-### 1. Adaptive Thinking (`gemini-3.7-flash-tiered`)
+### 1. Named Reasoning Levels (Gemini 3.8)
+
+Gemini 3.8 exposes separate native model IDs for `low`, `medium`, and `high` reasoning. Select the desired level through the model ID; the rotator leaves thinking adaptive within that upstream level.
+
+| Model ID | Context Window | Reasoning Level |
+| :--- | :--- | :--- |
+| `gemini-3.8-flash-high` | 1,000,000 | High |
+| `gemini-3.8-flash-medium` | 1,000,000 | Medium |
+| `gemini-3.8-flash-low` | 1,000,000 | Low |
+
+### 2. Adaptive Thinking (`gemini-3.7-flash-tiered`)
 
 `gemini-3.7-flash-tiered` uses Google's dynamic thinking level. By default, it operates adaptively (the model decides how many tokens to think). You can control the thinking depth using standard `reasoning_effort`:
 
@@ -109,7 +131,7 @@ Antigravity models handle reasoning and internal thinking in two ways:
 | **`high`** | `HIGH` | Deep architectural design, complex bug diagnosis, deep multi-step planning. |
 | *(default)* | Adaptive | Model dynamically adjusts thinking tokens based on prompt complexity. |
 
-### 2. Fixed Token Budgets (Gemini 3.6 / 3.1 & Claude)
+### 3. Fixed Token Budgets (Gemini 3.6 / 3.1 & Claude)
 
 For earlier Gemini models and Claude, the thinking budget is predetermined by model ID:
 

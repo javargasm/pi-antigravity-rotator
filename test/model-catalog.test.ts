@@ -108,6 +108,53 @@ describe("model discovery", () => {
 		}
 	});
 
+	it("exposes all three native gemini-3.8-flash ids with expected metadata", () => {
+		const openAiPayload = captureJson(serveOpenAIModels) as {
+			data: Array<{
+				id: string;
+				owned_by: string;
+				context_window: number;
+				meta: Record<string, unknown>;
+			}>;
+		};
+		const geminiPayload = captureJson(serveGeminiModels) as {
+			models: Array<{ name: string; baseModelId: string; inputTokenLimit: number }>;
+		};
+
+		for (const variant of ["low", "medium", "high"]) {
+			const id = `gemini-3.8-flash-${variant}`;
+			const openAiEntries = openAiPayload.data.filter((model) => model.id === id);
+			assert.equal(openAiEntries.length, 1);
+			assert.equal(openAiEntries[0].owned_by, "tuxevil-rotator");
+			assert.equal(openAiEntries[0].context_window, 1048576);
+			assert.equal(openAiEntries[0].meta.family, "gemini-3.8-flash");
+			assert.equal(openAiEntries[0].meta.quota_pool, "gemini");
+
+			const geminiEntries = geminiPayload.models.filter(
+				(model) => model.name === `models/${id}`,
+			);
+			assert.equal(geminiEntries.length, 1);
+			assert.equal(geminiEntries[0].baseModelId, "gemini-3.8-flash");
+			assert.equal(geminiEntries[0].inputTokenLimit, 1048576);
+		}
+	});
+
+	it("does not advertise unsupported bare or tiered gemini-3.8-flash ids", () => {
+		const payload = captureJson(serveOpenAIModels) as {
+			data: Array<{ id: string }>;
+		};
+		for (const id of ["gemini-3.8-flash", "gemini-3.8-flash-tiered"]) {
+			assert.ok(!payload.data.some((model) => model.id === id));
+		}
+	});
+
+	it("does not advertise retired gemini-3.5-flash ids", () => {
+		const payload = captureJson(serveOpenAIModels) as {
+			data: Array<{ id: string }>;
+		};
+		assert.ok(!payload.data.some((model) => model.id.startsWith("gemini-3.5-flash")));
+	});
+
 	it("ships the exact default spec for gemini-3.7-flash-tiered", () => {
 		assert.deepEqual(getModelSpec("gemini-3.7-flash-tiered"), {
 			maxOutputTokens: 65536,
@@ -115,5 +162,16 @@ describe("model discovery", () => {
 			isThinking: true,
 			contextWindow: 1_000_000,
 		});
+	});
+
+	it("ships adaptive specs for native gemini-3.8-flash reasoning levels", () => {
+		for (const variant of ["low", "medium", "high"]) {
+			assert.deepEqual(getModelSpec(`gemini-3.8-flash-${variant}`), {
+				maxOutputTokens: 65536,
+				thinkingBudget: -1,
+				isThinking: true,
+				contextWindow: 1_000_000,
+			});
+		}
 	});
 });

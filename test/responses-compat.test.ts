@@ -415,6 +415,43 @@ describe("responses compat", () => {
 		}
 	});
 
+	it("forwards a native gemini-3.8 reasoning-level id with adaptive thinking", async () => {
+		const captures: Capture[] = [];
+		const upstream = await listenServer((req, res) => {
+			let body = "";
+			req.on("data", (chunk) => { body += chunk.toString(); });
+			req.on("end", () => {
+				captures.push({ url: req.url || "", headers: req.headers, body });
+				res.writeHead(200, { "Content-Type": "text/event-stream" });
+				res.end('data: {"response":{"candidates":[{"content":{"parts":[{"text":"pong"}]}}]}}\n\n');
+			});
+		});
+		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
+
+		try {
+			const rotator = createRotatorStub(createAccount());
+			const req = requestStream("POST", "/v1/responses", {
+				model: "gemini-3.8-flash-high",
+				input: "ping",
+				reasoning: { effort: "low" },
+			});
+			const res = responseStub();
+			await handleOpenAIResponsesCreate(req, res, rotator);
+			assert.equal(res.statusCodeCaptured, 200);
+
+			const upstreamBody = JSON.parse(captures[0].body) as {
+				model: string;
+				request: { generationConfig: { thinkingConfig?: Record<string, unknown> } };
+			};
+			assert.equal(upstreamBody.model, "gemini-3.8-flash-high");
+			assert.deepEqual(upstreamBody.request.generationConfig.thinkingConfig, {
+				includeThoughts: true,
+			});
+		} finally {
+			await closeServer(upstream.server);
+		}
+	});
+
 	it("streams Responses SSE events and keeps cancel coherent", async () => {
 		const upstream = await listenServer((req, res) => {
 			req.resume();
