@@ -214,6 +214,65 @@ describe("model resolution", () => {
 		assert.equal(quotas.length, 1);
 	});
 
+	it("uses the official Gemini 3.8 Flash pricing", () => {
+		assert.deepEqual(MODEL_PRICING["gemini-3.8-flash-high"], {
+			inputPer1M: 0.75,
+			outputPer1M: 3.75,
+			cachingPer1M: 0.075,
+			cachingStoragePer1MPerHour: 0.5,
+		});
+	});
+
+	it("resolves gemini-3.8-flash-high to the shared gemini quota pool", () => {
+		assert.equal(resolveQuotaModelKey("gemini-3.8-flash-high"), "gemini");
+		assert.equal(resolveQuotaModelKey("google/gemini-3.8-flash-high"), "gemini");
+	});
+
+	it("resolves gemini-3.8-flash variants to their exact display keys", () => {
+		assert.equal(
+			resolveDisplayModelKey("gemini-3.8-flash-high"),
+			"gemini-3.8-flash-high",
+		);
+		assert.equal(
+			resolveDisplayModelKey("google/gemini-3.8-flash-high"),
+			"gemini-3.8-flash-high",
+		);
+		assert.equal(
+			resolveDisplayModelKey("gemini-3.8-flash-medium"),
+			"gemini-3.8-flash-medium",
+		);
+		assert.equal(
+			resolveDisplayModelKey("gemini-3.8-flash-low"),
+			"gemini-3.8-flash-low",
+		);
+		assert.equal(
+			resolveDisplayModelKey("gemini-3.8-flash"),
+			"gemini-3.8-flash-high",
+		);
+	});
+
+	it("appends gemini-3.8-flash-high to the gemini quota altKeys", () => {
+		const altKeys = QUOTA_MODEL_KEYS.gemini.altKeys;
+		const matches = altKeys.filter((k) => k === "gemini-3.8-flash-high");
+		assert.equal(matches.length, 1);
+	});
+
+	it("extracts gemini pool quota via the gemini-3.8-flash-high alt key", () => {
+		const data = {
+			models: {
+				"gemini-3.8-flash-high": {
+					quotaInfo: { remainingFraction: 0.85 },
+				},
+			},
+		};
+		const quotas = extractQuotas(data, []);
+		const gemini = quotas.find((q) => q.modelKey === "gemini");
+		assert.ok(gemini, "alt-key extraction should surface the shared gemini pool");
+		assert.equal(gemini.displayName, "Gemini");
+		assert.equal(gemini.percentRemaining, 85);
+		assert.equal(quotas.length, 1);
+	});
+
 	it("treats intact Google quota as fresh even when reset times are present", () => {
 		const fiveHoursFromNow = new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString();
 		const sevenDaysFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();

@@ -162,6 +162,7 @@ export const MAX_QUOTA_POLL_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MODEL_ALIASES: Record<string, string> = {
   "gemini-3.1-pro-high": "gemini-pro-agent",
   "gpt-oss-120b": "gpt-oss-120b-medium",
+  "gemini-3.8-flash": "gemini-3.8-flash-high",
 };
 let modelAliasesOverride: Record<string, string> | null = null;
 
@@ -207,8 +208,18 @@ export interface GoogleQuotaResponse {
         remainingFraction?: number;
         resetTime?: string;
       };
+      displayName?: string;
+      maxTokens?: number;
+      maxOutputTokens?: number;
+      thinkingBudget?: number;
+      minThinkingBudget?: number;
+      supportsThinking?: boolean;
+      supportsImages?: boolean;
+      supportsVideo?: boolean;
     }
   >;
+  defaultAgentModelId?: string;
+  tieredModelIds?: Record<string, string[]>;
 }
 
 // Per-model thinking/output spec used by the compat layer.
@@ -351,6 +362,17 @@ export function resolveDisplayModelKey(requestModel: string): string {
     if (lower.includes("-tiered")) return "gemini-3.6-flash-tiered";
     if (lower.includes("-high")) return "gemini-3.6-flash-high";
     return "gemini-3.6-flash-high"; // unspecified variant
+  }
+  // Gemini 3.8 Flash — distinguish variants
+  if (
+    lower.includes("gemini") &&
+    lower.includes("3.8") &&
+    lower.includes("flash")
+  ) {
+    if (lower.includes("-low")) return "gemini-3.8-flash-low";
+    if (lower.includes("-medium")) return "gemini-3.8-flash-medium";
+    if (lower.includes("-high")) return "gemini-3.8-flash-high";
+    return "gemini-3.8-flash-high"; // unspecified variant
   }
   // Gemini 3.7 Flash — only the tiered variant exists. Unsupported
   // virtual variants (low/medium/high) intentionally fall through to the
@@ -691,16 +713,15 @@ export interface TokenUsageData {
   };
 }
 
+export interface ModelPricing {
+  inputPer1M: number;
+  outputPer1M: number;
+  cachingPer1M?: number;
+  cachingStoragePer1MPerHour?: number;
+}
+
 // Pricing per 1M tokens (USD) — what these would cost on paid APIs
-export const MODEL_PRICING: Record<
-  string,
-  {
-    inputPer1M: number;
-    outputPer1M: number;
-    cachingPer1M?: number;
-    cachingStoragePer1MPerHour?: number;
-  }
-> = {
+export const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-opus-4-6-thinking": { inputPer1M: 5.0, outputPer1M: 25.0 },
   "claude-sonnet-4-6": { inputPer1M: 3.0, outputPer1M: 15.0 },
   "gemini-3.1-pro": { inputPer1M: 2.0, outputPer1M: 12.0 },
@@ -823,6 +844,24 @@ export const MODEL_PRICING: Record<
 
 };
 
+/**
+ * Resolves pricing for a model, using exact lookup first and dynamic family fallbacks
+ * for newly released models without manual pricing entries.
+ */
+export function getModelPricing(model: string): ModelPricing | undefined {
+  if (!model) return undefined;
+  if (MODEL_PRICING[model]) return MODEL_PRICING[model];
+  const lower = model.toLowerCase();
+  if (MODEL_PRICING[lower]) return MODEL_PRICING[lower];
+  // Dynamic family fallbacks for unseen future models:
+  if (lower.includes("opus")) return MODEL_PRICING["claude-opus-4-6-thinking"];
+  if (lower.includes("sonnet")) return MODEL_PRICING["claude-sonnet-4-6"];
+  if (lower.includes("flash")) return MODEL_PRICING["gemini-3.8-flash-high"] ?? MODEL_PRICING["gemini-3.7-flash-tiered"];
+  if (lower.includes("pro")) return MODEL_PRICING["gemini-3.1-pro"];
+  if (lower.includes("gpt-oss")) return MODEL_PRICING["gpt-oss-120b-medium"];
+  return undefined;
+}
+
 // Which Ollama Cloud models respond on which subscription tiers, verified
 // 2026-08-30 via scripts/verify_ollama_models.ts (/api/tags discovery +
 // /api/chat probes: HTTP 200 = free, HTTP 402 = subscription-only).
@@ -908,7 +947,7 @@ export const ANTIGRAVITY_VERSION =
 	"2.11.0";
 export const QUOTA_USER_AGENT =
 	rotatorEnv("QUOTA_USER_AGENT") ||
-	`antigravity/${ANTIGRAVITY_VERSION} darwin/arm64`;
+	DEFAULT_ANTIGRAVITY_USER_AGENT;
 export const REQUEST_USER_AGENT =
   rotatorEnv("REQUEST_USER_AGENT") || QUOTA_USER_AGENT;
 export const REQUEST_GOOG_API_CLIENT =

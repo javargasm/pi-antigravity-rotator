@@ -1,5 +1,5 @@
 import randomBytes from "node:crypto";
-import { MODEL_PRICING, type SpendLog, type DailySpend } from "./types.js";
+import { MODEL_PRICING, getModelPricing, type SpendLog, type DailySpend } from "./types.js";
 import { isDbConfigured, queryDb } from "./db-store.js";
 import { rotatorEnv } from "./env.js";
 

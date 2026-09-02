@@ -214,6 +214,7 @@ export async function main(): Promise<void> {
   void loadResponsesStore();
 
   const rotator = new AccountRotator(config);
+  await rotator.primeAntigravityCatalog();
   await rotator.primeOllamaCatalog();
   await rotator.primeCodexCatalog();
 

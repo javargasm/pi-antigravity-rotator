@@ -60,10 +60,14 @@ export function getModelFamily(model: string): "claude" | "gemini" | "unknown" {
 	return "unknown";
 }
 
+import { dynamicCatalog } from "../providers/google-antigravity/dynamic-catalog.js";
+
 export function getModelSpec(model: string): ModelSpec {
 	const specs = getActiveModelSpecs();
 	const lower = model.toLowerCase();
 	if (specs[lower]) return specs[lower];
+	const dynamicSpec = dynamicCatalog.getModelSpec(lower);
+	if (dynamicSpec) return dynamicSpec;
 	for (const [key, spec] of Object.entries(specs)) {
 		if (lower.includes(key)) return spec;
 	}

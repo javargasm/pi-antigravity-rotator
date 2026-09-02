@@ -9,7 +9,7 @@ import {
 	withRotation,
 	type RequestBody,
 } from "../src/proxy.js";
-import { ANTIGRAVITY_ENDPOINTS, type AccountRuntime } from "../src/types.js";
+import { ANTIGRAVITY_ENDPOINTS, DEFAULT_ANTIGRAVITY_USER_AGENT, type AccountRuntime } from "../src/types.js";
 import type { AccountRotator } from "../src/rotator.js";
 
 type Capture = {

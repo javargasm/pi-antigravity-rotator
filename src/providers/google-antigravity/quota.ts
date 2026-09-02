@@ -17,6 +17,8 @@ import { DEFAULT_PROVIDER, getProviderProjectId } from "../credential-helpers.js
 import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
 import { sortQuotaPools } from "../registry.js";
 
+import { dynamicCatalog, DynamicModelRegistry } from "./dynamic-catalog.js";
+
 /**
  * Extract per-model quotas from a Google quota response, preserving the
  * previously classified timer type when the reset time is unchanged.
@@ -32,9 +34,20 @@ export function extractQuotas(
     let modelInfo = data.models[config.key];
 
     if (!modelInfo) {
-      for (const altKey of config.altKeys) {
+      const dynamicAltKeys = dynamicCatalog.getQuotaAltKeys(config.key);
+      const allAltKeys = [...config.altKeys, ...dynamicAltKeys];
+      for (const altKey of allAltKeys) {
         modelInfo = data.models[altKey];
         if (modelInfo) break;
+      }
+    }
+
+    if (!modelInfo) {
+      for (const [modelKey, info] of Object.entries(data.models)) {
+        if (DynamicModelRegistry.inferFamilyAndPool(modelKey).quotaPool === config.key) {
+          modelInfo = info;
+          break;
+        }
       }
     }
 

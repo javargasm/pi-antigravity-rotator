@@ -1228,6 +1228,7 @@ function getModelPricingClient(m) {
   if (lower.indexOf("3.6-flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.6-flash-high"];
   if (lower.indexOf("flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3-flash"];
   if (lower.indexOf("pro") !== -1) return MODEL_PRICING_CLIENT["gemini-3.1-pro"];
+  if (lower.indexOf("gpt-oss") !== -1) return MODEL_PRICING_CLIENT["gpt-oss-120b-medium"];
   return null;
 }
 
