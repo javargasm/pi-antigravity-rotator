@@ -1089,6 +1089,11 @@ var TOKEN_MODEL_COLORS = {
   "gemini-3.6-flash-medium": "#38bdf8",
   "gemini-3.6-flash-low": "#38bdf8",
   "gemini-3.6-flash-tiered": "#38bdf8",
+  "gemini-3.7-flash-tiered": "#06b6d4",
+  "gemini-3.8-flash-high": "#06b6d4",
+  "gemini-3.8-flash-medium": "#06b6d4",
+  "gemini-3.8-flash-low": "#06b6d4",
+  "gemini-3.8-flash": "#06b6d4",
   "gemini-3-flash": "#93c5fd", // Gemini 3 Flash (Azul pastel claro)
 
   // Codex Pool (Amarillos) — de más caro a más barato
@@ -1184,6 +1189,10 @@ var MODEL_PRICING_CLIENT = {
   // Introductory rates through 2026-12-31; from 2027-01-01 these double to
   // input 1.50 / output 7.50 per 1M tokens — update this entry then.
   "gemini-3.7-flash-tiered": { input: 0.75, output: 3.75 },
+  "gemini-3.8-flash-high": { input: 0.75, output: 3.75 },
+  "gemini-3.8-flash-medium": { input: 0.75, output: 3.75 },
+  "gemini-3.8-flash-low": { input: 0.75, output: 3.75 },
+  "gemini-3.8-flash": { input: 0.75, output: 3.75 },
   "gpt-oss-120b-medium": { input: 2.0, output: 10.0 },
   // OpenAI Codex GPT-5.6 models — mirrors MODEL_PRICING in types.ts.
   "gpt-5.6-sol": { input: 5.0, output: 30.0 },
@@ -1223,11 +1232,9 @@ function getModelPricingClient(m) {
   var lower = (m || "").toLowerCase();
   if (lower.indexOf("opus") !== -1) return MODEL_PRICING_CLIENT["claude-opus-4-6-thinking"];
   if (lower.indexOf("sonnet") !== -1) return MODEL_PRICING_CLIENT["claude-sonnet-4-6"];
-  if (lower.indexOf("3.7-flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.7-flash-tiered"];
-  if (lower.indexOf("3.6-flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.6-flash-high"];
-  if (lower.indexOf("3.5-flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.5-flash-high"];
-  if (lower.indexOf("flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3-flash"];
+  if (lower.indexOf("flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.8-flash-high"] || MODEL_PRICING_CLIENT["gemini-3.7-flash-tiered"];
   if (lower.indexOf("pro") !== -1) return MODEL_PRICING_CLIENT["gemini-3.1-pro"];
+  if (lower.indexOf("gpt-oss") !== -1) return MODEL_PRICING_CLIENT["gpt-oss-120b-medium"];
   return null;
 }
 

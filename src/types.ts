@@ -165,6 +165,7 @@ const DEFAULT_MODEL_ALIASES: Record<string, string> = {
   "gemini-3.5-flash-high": "gemini-3-flash-agent",
   "gemini-3.5-flash-medium": "gemini-3-flash-agent",
   "gpt-oss-120b": "gpt-oss-120b-medium",
+  "gemini-3.8-flash": "gemini-3.8-flash-high",
 };
 let modelAliasesOverride: Record<string, string> | null = null;
 
@@ -210,8 +211,18 @@ export interface GoogleQuotaResponse {
         remainingFraction?: number;
         resetTime?: string;
       };
+      displayName?: string;
+      maxTokens?: number;
+      maxOutputTokens?: number;
+      thinkingBudget?: number;
+      minThinkingBudget?: number;
+      supportsThinking?: boolean;
+      supportsImages?: boolean;
+      supportsVideo?: boolean;
     }
   >;
+  defaultAgentModelId?: string;
+  tieredModelIds?: Record<string, string[]>;
 }
 
 // Per-model thinking/output spec used by the compat layer.
@@ -278,6 +289,10 @@ export const QUOTA_MODEL_KEYS: Record<
       "gemini-3.6-flash-low",
       "gemini-3.6-flash-tiered",
       "gemini-3.7-flash-tiered",
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low",
+      "gemini-3.8-flash",
     ],
     display: "Gemini",
   },
@@ -346,6 +361,17 @@ export function resolveDisplayModelKey(requestModel: string): string {
     if (lower.includes("-high")) return "gemini-3.6-flash-high";
     return "gemini-3.6-flash-high"; // unspecified variant
   }
+  // Gemini 3.8 Flash — distinguish variants
+  if (
+    lower.includes("gemini") &&
+    lower.includes("3.8") &&
+    lower.includes("flash")
+  ) {
+    if (lower.includes("-low")) return "gemini-3.8-flash-low";
+    if (lower.includes("-medium")) return "gemini-3.8-flash-medium";
+    if (lower.includes("-high")) return "gemini-3.8-flash-high";
+    return "gemini-3.8-flash-high"; // unspecified variant
+  }
   // Gemini 3.7 Flash — only the tiered variant exists. Unsupported
   // virtual variants (low/medium/high) intentionally fall through to the
   // generic Flash fallback below instead of resolving as supported models.
@@ -367,6 +393,17 @@ export function resolveDisplayModelKey(requestModel: string): string {
       return "gemini-3.5-flash-medium";
     if (lower.includes("-high")) return "gemini-3.5-flash-high";
     return "gemini-3.5-flash"; // unspecified variant
+  }
+  // Generic Gemini Flash version resolver for future versions (e.g. 3.9, 4.0)
+  const genericFlash = lower.match(/gemini-([0-9.]+)-flash(-[a-z]+)?/);
+  if (genericFlash && genericFlash[1] !== "3.7" && genericFlash[1] !== "3.5") {
+    const v = genericFlash[1];
+    const variant = genericFlash[2];
+    if (variant === "-low") return `gemini-${v}-flash-low`;
+    if (variant === "-medium") return `gemini-${v}-flash-medium`;
+    if (variant === "-high") return `gemini-${v}-flash-high`;
+    if (variant === "-tiered") return `gemini-${v}-flash-tiered`;
+    return `gemini-${v}-flash-tiered`;
   }
   // Flash
   if (lower.includes("gemini") && lower.includes("flash"))
@@ -696,16 +733,15 @@ export interface TokenUsageData {
   };
 }
 
+export interface ModelPricing {
+  inputPer1M: number;
+  outputPer1M: number;
+  cachingPer1M?: number;
+  cachingStoragePer1MPerHour?: number;
+}
+
 // Pricing per 1M tokens (USD) — what these would cost on paid APIs
-export const MODEL_PRICING: Record<
-  string,
-  {
-    inputPer1M: number;
-    outputPer1M: number;
-    cachingPer1M?: number;
-    cachingStoragePer1MPerHour?: number;
-  }
-> = {
+export const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-opus-4-6-thinking": { inputPer1M: 5.0, outputPer1M: 25.0 },
   "claude-sonnet-4-6": { inputPer1M: 3.0, outputPer1M: 15.0 },
   "gemini-3.1-pro": { inputPer1M: 2.0, outputPer1M: 12.0 },
@@ -778,6 +814,30 @@ export const MODEL_PRICING: Record<
     cachingPer1M: 0.075,
     cachingStoragePer1MPerHour: 0.5,
   },
+  "gemini-3.8-flash-high": {
+    inputPer1M: 0.75,
+    outputPer1M: 3.75,
+    cachingPer1M: 0.075,
+    cachingStoragePer1MPerHour: 0.5,
+  },
+  "gemini-3.8-flash-medium": {
+    inputPer1M: 0.75,
+    outputPer1M: 3.75,
+    cachingPer1M: 0.075,
+    cachingStoragePer1MPerHour: 0.5,
+  },
+  "gemini-3.8-flash-low": {
+    inputPer1M: 0.75,
+    outputPer1M: 3.75,
+    cachingPer1M: 0.075,
+    cachingStoragePer1MPerHour: 0.5,
+  },
+  "gemini-3.8-flash": {
+    inputPer1M: 0.75,
+    outputPer1M: 3.75,
+    cachingPer1M: 0.075,
+    cachingStoragePer1MPerHour: 0.5,
+  },
   "gpt-oss-120b-medium": { inputPer1M: 2.0, outputPer1M: 10.0 },
 
   // OpenAI Codex GPT-5.6 models — official OpenAI API pricing checked
@@ -830,6 +890,24 @@ export const MODEL_PRICING: Record<
   "hy3-free":                    { inputPer1M: 0.25,   outputPer1M: 1.00 },
 
 };
+
+/**
+ * Resolves pricing for a model, using exact lookup first and dynamic family fallbacks
+ * for newly released models without manual pricing entries.
+ */
+export function getModelPricing(model: string): ModelPricing | undefined {
+  if (!model) return undefined;
+  if (MODEL_PRICING[model]) return MODEL_PRICING[model];
+  const lower = model.toLowerCase();
+  if (MODEL_PRICING[lower]) return MODEL_PRICING[lower];
+  // Dynamic family fallbacks for unseen future models:
+  if (lower.includes("opus")) return MODEL_PRICING["claude-opus-4-6-thinking"];
+  if (lower.includes("sonnet")) return MODEL_PRICING["claude-sonnet-4-6"];
+  if (lower.includes("flash")) return MODEL_PRICING["gemini-3.8-flash-high"] ?? MODEL_PRICING["gemini-3.7-flash-tiered"];
+  if (lower.includes("pro")) return MODEL_PRICING["gemini-3.1-pro"];
+  if (lower.includes("gpt-oss")) return MODEL_PRICING["gpt-oss-120b-medium"];
+  return undefined;
+}
 
 // Which Ollama Cloud models respond on which subscription tiers, verified
 // 2026-08-30 via scripts/verify_ollama_models.ts (/api/tags discovery +
@@ -913,10 +991,12 @@ export const TAGS_CACHE_TTL_MS = 5 * 60 * 1000;
 export const ANTIGRAVITY_VERSION =
 	rotatorEnv("ANTIGRAVITY_VERSION") ||
 	process.env.PI_AI_ANTIGRAVITY_VERSION ||
-	"1.107.0";
+	"2.5.5";
+export const DEFAULT_ANTIGRAVITY_USER_AGENT =
+  "antigravity/ide/2.5.5 (aidev_client; os_type=darwin; arch=arm64)";
 export const QUOTA_USER_AGENT =
 	rotatorEnv("QUOTA_USER_AGENT") ||
-	`antigravity/${ANTIGRAVITY_VERSION} darwin/arm64`;
+	DEFAULT_ANTIGRAVITY_USER_AGENT;
 export const REQUEST_USER_AGENT =
   rotatorEnv("REQUEST_USER_AGENT") || QUOTA_USER_AGENT;
 export const REQUEST_GOOG_API_CLIENT =

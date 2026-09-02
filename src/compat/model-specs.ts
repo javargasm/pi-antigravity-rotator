@@ -24,6 +24,10 @@ export const DEFAULT_MODEL_SPECS: Record<string, ModelSpec> = {
 	"gemini-3.6-flash-low":      { maxOutputTokens: 65536, thinkingBudget: 1000,  isThinking: true, contextWindow: 1_000_000 },
 	"gemini-3.6-flash-tiered":   { maxOutputTokens: 65536, thinkingBudget: -1,    isThinking: true, contextWindow: 1_000_000 },
 	"gemini-3.7-flash-tiered":   { maxOutputTokens: 65536, thinkingBudget: -1,    isThinking: true, contextWindow: 1_000_000 },
+	"gemini-3.8-flash-high":     { maxOutputTokens: 65536, thinkingBudget: -1,    isThinking: true, contextWindow: 1_000_000 },
+	"gemini-3.8-flash-medium":   { maxOutputTokens: 65536, thinkingBudget: 4000,  isThinking: true, contextWindow: 1_000_000 },
+	"gemini-3.8-flash-low":      { maxOutputTokens: 65536, thinkingBudget: 1000,  isThinking: true, contextWindow: 1_000_000 },
+	"gemini-3.8-flash":          { maxOutputTokens: 65536, thinkingBudget: -1,    isThinking: true, contextWindow: 1_000_000 },
 	"gemini-3-flash":            { maxOutputTokens: 65536, thinkingBudget: 4000,  isThinking: true, contextWindow: 1_000_000 },
 	"gemini-2.5-flash":          { maxOutputTokens: 65535, thinkingBudget: 24576, isThinking: true, contextWindow: 1_000_000 },
 	"gemini-2.5-pro":            { maxOutputTokens: 65535, thinkingBudget: 1024,  isThinking: true, contextWindow: 1_000_000 },
@@ -61,10 +65,14 @@ export function getModelFamily(model: string): "claude" | "gemini" | "unknown" {
 	return "unknown";
 }
 
+import { dynamicCatalog } from "../providers/google-antigravity/dynamic-catalog.js";
+
 export function getModelSpec(model: string): ModelSpec {
 	const specs = getActiveModelSpecs();
 	const lower = model.toLowerCase();
 	if (specs[lower]) return specs[lower];
+	const dynamicSpec = dynamicCatalog.getModelSpec(lower);
+	if (dynamicSpec) return dynamicSpec;
 	for (const [key, spec] of Object.entries(specs)) {
 		if (lower.includes(key)) return spec;
 	}

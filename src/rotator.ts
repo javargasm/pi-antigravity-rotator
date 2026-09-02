@@ -17,9 +17,11 @@ import {
   type TokenBucket,
   type TokenUsageData,
   type TokenUsageTiered,
-  MODEL_PRICING,
+  type GoogleQuotaResponse,
   MODEL_TIER_ACCESS,
+  getModelPricing,
   QUOTA_USER_AGENT,
+  QUOTA_API_URL,
   REQUEST_GOOG_API_CLIENT,
   REQUEST_CLIENT_METADATA,
   ANTIGRAVITY_ENDPOINTS,
@@ -32,6 +34,7 @@ import {
   resolveQuotaModelKey,
   resolveDisplayModelKey,
 } from "./types.js";
+import { dynamicCatalog } from "./providers/google-antigravity/dynamic-catalog.js";
 import {
   reportFlagEvent,
   FLAG_PATTERNS,
@@ -368,6 +371,50 @@ export class AccountRotator {
       if (names.length > 0) this.setOllamaModels(names);
     } catch {
       // Catalog refresh is non-fatal
+    }
+  }
+
+  /** Fetch the dynamic Antigravity catalog once at startup so models are discovered before the first request. */
+  primeAntigravityCatalog(): Promise<void> {
+    return this.refreshAntigravityCatalogOnce();
+  }
+
+  private async refreshAntigravityCatalogOnce(): Promise<void> {
+    const googleAccount = this.accounts.find(
+      (a) =>
+        hasCredential(a.config, DEFAULT_PROVIDER) &&
+        !a.disabled &&
+        !a.flagged,
+    );
+    if (!googleAccount) return;
+
+    try {
+      await this.ensureValidTokenForProvider(googleAccount, DEFAULT_PROVIDER);
+      if (!googleAccount.accessToken) return;
+
+      const projectId = getProviderProjectId(googleAccount.config, DEFAULT_PROVIDER);
+      const response = await fetchWithRetry(QUOTA_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${googleAccount.accessToken}`,
+          "User-Agent": QUOTA_USER_AGENT,
+        },
+        body: JSON.stringify({ project: projectId }),
+        timeoutMs: 8000,
+        dispatcher: getAccountProxyDispatcher(googleAccount, DEFAULT_PROVIDER),
+      });
+
+      if (!response.ok) return;
+      const data = (await response.json()) as GoogleQuotaResponse;
+      const newModels = dynamicCatalog.updateFromEndpointResponse(data);
+      if (newModels > 0) {
+        this.log(
+          `[rotator] Dynamic Antigravity catalog updated: ${newModels} new model(s) discovered (total: ${dynamicCatalog.getAllModels().length}, default: ${dynamicCatalog.getDefaultAgentModelId() ?? "n/a"})`,
+        );
+      }
+    } catch {
+      // Dynamic catalog refresh is non-fatal
     }
   }
 
@@ -902,6 +949,7 @@ export class AccountRotator {
 
   private async pollAllQuotasOnce(): Promise<void> {
     void this.refreshOllamaCatalogOnce().catch(() => {});
+    void this.refreshAntigravityCatalogOnce().catch(() => {});
 
     const available = this.accounts.filter((a) => !a.disabled && !a.flagged);
     let quotaPublished = false;
@@ -2888,17 +2936,7 @@ export class AccountRotator {
     let totalUsd = 0;
     const byModel: TokenUsageData["savings"]["byModel"] = {};
     for (const [model, totals] of Object.entries(modelTotals)) {
-      let pricing = MODEL_PRICING[model];
-      if (!pricing) {
-        const lower = model.toLowerCase();
-        if (lower.includes("opus")) pricing = MODEL_PRICING["claude-opus-4-6-thinking"];
-        else if (lower.includes("sonnet")) pricing = MODEL_PRICING["claude-sonnet-4-6"];
-        else if (lower.includes("3.7-flash")) pricing = MODEL_PRICING["gemini-3.7-flash-tiered"];
-        else if (lower.includes("3.6-flash")) pricing = MODEL_PRICING["gemini-3.6-flash-high"];
-        else if (lower.includes("3.5-flash")) pricing = MODEL_PRICING["gemini-3.5-flash-high"];
-        else if (lower.includes("flash")) pricing = MODEL_PRICING["gemini-3-flash"];
-        else if (lower.includes("pro")) pricing = MODEL_PRICING["gemini-3.1-pro"];
-      }
+      const pricing = getModelPricing(model);
       if (!pricing) continue;
       const inputUsd = (totals.input / 1_000_000) * pricing.inputPer1M;
       const outputUsd = (totals.output / 1_000_000) * pricing.outputPer1M;
