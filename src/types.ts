@@ -162,7 +162,6 @@ export const MAX_QUOTA_POLL_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MODEL_ALIASES: Record<string, string> = {
   "gemini-3.1-pro-high": "gemini-pro-agent",
   "gpt-oss-120b": "gpt-oss-120b-medium",
-  "gemini-3.8-flash": "gemini-3.8-flash-high",
 };
 let modelAliasesOverride: Record<string, string> | null = null;
 
@@ -290,6 +289,14 @@ export const QUOTA_MODEL_KEYS: Record<
   },
 };
 
+const STATIC_ANTIGRAVITY_MODEL_IDS = new Set(
+  Object.values(QUOTA_MODEL_KEYS).flatMap(({ altKeys }) => altKeys),
+);
+
+export function isStaticAntigravityModel(model: string): boolean {
+  return STATIC_ANTIGRAVITY_MODEL_IDS.has(model.toLowerCase());
+}
+
 // Map request model names to quota model keys (family buckets).
 export function resolveQuotaModelKey(requestModel: string): string | null {
   const lower = requestModel.toLowerCase();
@@ -362,17 +369,6 @@ export function resolveDisplayModelKey(requestModel: string): string {
     if (lower.includes("-tiered")) return "gemini-3.6-flash-tiered";
     if (lower.includes("-high")) return "gemini-3.6-flash-high";
     return "gemini-3.6-flash-high"; // unspecified variant
-  }
-  // Gemini 3.8 Flash — distinguish variants
-  if (
-    lower.includes("gemini") &&
-    lower.includes("3.8") &&
-    lower.includes("flash")
-  ) {
-    if (lower.includes("-low")) return "gemini-3.8-flash-low";
-    if (lower.includes("-medium")) return "gemini-3.8-flash-medium";
-    if (lower.includes("-high")) return "gemini-3.8-flash-high";
-    return "gemini-3.8-flash-high"; // unspecified variant
   }
   // Gemini 3.7 Flash — only the tiered variant exists. Unsupported
   // virtual variants (low/medium/high) intentionally fall through to the
@@ -945,6 +941,8 @@ export const ANTIGRAVITY_VERSION =
 	rotatorEnv("ANTIGRAVITY_VERSION") ||
 	process.env.PI_AI_ANTIGRAVITY_VERSION ||
 	"2.11.0";
+export const DEFAULT_ANTIGRAVITY_USER_AGENT =
+  `antigravity/ide/${ANTIGRAVITY_VERSION} (aidev_client; os_type=darwin; arch=arm64)`;
 export const QUOTA_USER_AGENT =
 	rotatorEnv("QUOTA_USER_AGENT") ||
 	DEFAULT_ANTIGRAVITY_USER_AGENT;

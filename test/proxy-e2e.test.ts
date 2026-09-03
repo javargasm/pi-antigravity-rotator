@@ -15,12 +15,14 @@ import {
 import { ANTIGRAVITY_ENDPOINTS, type AccountRuntime } from "../src/types.js";
 import type { AccountRotator } from "../src/rotator.js";
 import { fetchProviderQuota } from "../src/providers/google-antigravity/quota.js";
+import { dynamicCatalog } from "../src/providers/google-antigravity/dynamic-catalog.js";
 
 const endpointOverrides = ANTIGRAVITY_ENDPOINTS as unknown as string[];
 const originalEndpoints = [...endpointOverrides];
 
 afterEach(() => {
 	endpointOverrides.splice(0, endpointOverrides.length, ...originalEndpoints);
+	dynamicCatalog.reset();
 });
 
 type Capture = { url: string; headers: IncomingMessage["headers"]; body: string };
@@ -806,10 +808,16 @@ describe("native Code Assist passthrough", () => {
 			}],
 		};
 		let forwardedProject: unknown;
+		let fetchCount = 0;
 		const originalFetch = globalThis.fetch;
 		globalThis.fetch = (async (_input, init) => {
+			fetchCount++;
 			forwardedProject = JSON.parse(String(init?.body)).project;
-			return new Response(JSON.stringify({ models: {} }), {
+			return new Response(JSON.stringify({
+				models: {
+					"gemini-quota-discovered": { quotaInfo: { remainingFraction: 0.5 } },
+				},
+			}), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
@@ -822,6 +830,8 @@ describe("native Code Assist passthrough", () => {
 				reportQuotaPollFlag: () => {},
 			});
 			assert.equal(forwardedProject, "legacy-quota-project");
+			assert.equal(fetchCount, 1);
+			assert.ok(dynamicCatalog.getModel("gemini-quota-discovered"));
 		} finally {
 			globalThis.fetch = originalFetch;
 		}

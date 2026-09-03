@@ -247,48 +247,6 @@ describe("gemini-3.7-flash-tiered thinkingLevel mapping", () => {
 	});
 });
 
-describe("gemini-3.8-flash variants thinkingConfig mapping", () => {
-	afterEach(() => {
-		setModelSpecsOverride(null);
-	});
-
-	it("keeps gemini-3.8-flash-high on adaptive thinking with no thinkingLevel", () => {
-		const body = openAIToAntigravityBody({
-			model: "gemini-3.8-flash-high",
-			messages: [{ role: "user", content: "ping" }],
-			reasoning_effort: "high",
-		}) as AntigravityBodyWithRequest;
-		const tc = body.request.generationConfig?.thinkingConfig;
-		assert.equal(tc?.thinkingBudget, undefined);
-		assert.equal(tc?.thinkingLevel, undefined);
-		assert.equal(tc?.includeThoughts, true);
-	});
-
-	it("keeps gemini-3.8-flash-medium on fixed thinkingBudget 4000", () => {
-		const body = openAIToAntigravityBody({
-			model: "gemini-3.8-flash-medium",
-			messages: [{ role: "user", content: "ping" }],
-			reasoning_effort: "medium",
-		}) as AntigravityBodyWithRequest;
-		const tc = body.request.generationConfig?.thinkingConfig;
-		assert.equal(tc?.thinkingBudget, 4000);
-		assert.equal(tc?.thinkingLevel, undefined);
-		assert.equal(tc?.includeThoughts, true);
-	});
-
-	it("keeps gemini-3.8-flash-low on fixed thinkingBudget 1000", () => {
-		const body = openAIToAntigravityBody({
-			model: "gemini-3.8-flash-low",
-			messages: [{ role: "user", content: "ping" }],
-			reasoning_effort: "low",
-		}) as AntigravityBodyWithRequest;
-		const tc = body.request.generationConfig?.thinkingConfig;
-		assert.equal(tc?.thinkingBudget, 1000);
-		assert.equal(tc?.thinkingLevel, undefined);
-		assert.equal(tc?.includeThoughts, true);
-	});
-});
-
 describe("mapTieredReasoningEffortToThinkingLevel", () => {
 	it("maps only the exact canonical id and only low/medium/high", () => {
 		assert.equal(
@@ -302,10 +260,6 @@ describe("mapTieredReasoningEffortToThinkingLevel", () => {
 		assert.equal(
 			mapTieredReasoningEffortToThinkingLevel("high", "gemini-3.7-flash-tiered"),
 			"HIGH",
-		);
-		assert.equal(
-			mapTieredReasoningEffortToThinkingLevel("high", "gemini-3.7-flash-tiered-high"),
-			undefined,
 		);
 		assert.equal(
 			mapTieredReasoningEffortToThinkingLevel("high", "gemini-3.7-flash-tiered-high"),

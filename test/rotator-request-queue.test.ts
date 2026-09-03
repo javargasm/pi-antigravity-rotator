@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, it } from "node:test";
+import { after, afterEach, before, describe, it } from "node:test";
 
 const testDir = mkdtempSync(join(tmpdir(), "rotator-request-queue-"));
 process.env.TUXEVIL_ROTATOR_DIR = testDir;
@@ -17,6 +17,7 @@ let AccountRotator: typeof import("../src/rotator.js").AccountRotator;
 let getDefaultConfig: typeof import("../src/config-defaults.js").getDefaultConfig;
 let applyConfigDefaults: typeof import("../src/config-defaults.js").applyConfigDefaults;
 let closeDb: typeof import("../src/db-store.js").closeDb;
+let dynamicCatalog: typeof import("../src/providers/google-antigravity/dynamic-catalog.js").dynamicCatalog;
 type AccountConfig = import("../src/types.js").AccountConfig;
 type AccountRuntime = import("../src/types.js").AccountRuntime;
 type Config = import("../src/types.js").Config;
@@ -31,11 +32,16 @@ before(async () => {
   const db = await import("../src/db-store.js");
   closeDb = db.closeDb;
   await db.initDb();
+  ({ dynamicCatalog } = await import("../src/providers/google-antigravity/dynamic-catalog.js"));
 });
 
 after(async () => {
   await closeDb();
   rmSync(testDir, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  dynamicCatalog.reset();
 });
 
 function makeRotatorFromAccounts(
@@ -116,6 +122,36 @@ function releaseAll(
 }
 
 describe("Antigravity request queue", () => {
+  it("routes a dynamically discovered model only to an account that advertised it", async () => {
+    const { rotator, accounts } = makeRotator(["project-a", "project-b"]);
+    dynamicCatalog.reset();
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-account-a-only": { quotaInfo: { remainingFraction: 1 } },
+        "gemini-3.8-flash-high": { quotaInfo: { remainingFraction: 1 } },
+      },
+    }, accounts[0].config.email);
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { "gemini-account-b-only": { quotaInfo: { remainingFraction: 1 } } },
+    }, accounts[1].config.email);
+
+    const selected = (rotator as any).pickBestModelAccount(
+      "gemini-account-b-only",
+      Date.now(),
+      -1,
+    );
+    assert.equal(selected, accounts[1]);
+
+    accounts[0].inFlightByModel.gemini = 5;
+    accounts[0].inFlightRequests = 5;
+    const staticSelection = (rotator as any).pickBestModelAccount(
+      "gemini-3.8-flash-high",
+      Date.now(),
+      -1,
+    );
+    assert.equal(staticSelection, accounts[1], "static fallback must not depend on discovery");
+  });
+
   it("defaults to five total concurrent requests per account and project/model", () => {
     const config = getDefaultConfig();
     assert.equal(config.maxConcurrentRequestsPerAccount, 5);

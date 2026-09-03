@@ -2105,26 +2105,19 @@ export interface CompatModelEntry {
 
 export function getEffectiveAntigravityModels(): CompatModelEntry[] {
   const dynamic = dynamicCatalog.getAllModels();
-  const seen = new Set<string>();
-  const result: CompatModelEntry[] = [];
-  if (dynamic && dynamic.length > 0) {
-    for (const m of dynamic) {
-      seen.add(m.id.toLowerCase());
-      result.push({
-        id: m.id,
-        family: m.family,
-        ctx: m.ctx,
-        quotaPool: m.quotaPool,
-        multimodal: m.multimodal,
-        tools: m.tools,
-      });
-    }
-  }
-  for (const m of MODEL_CATALOG) {
-    if (!seen.has(m.id.toLowerCase())) {
-      seen.add(m.id.toLowerCase());
-      result.push({ ...m });
-    }
+  const seen = new Set(MODEL_CATALOG.map((model) => model.id.toLowerCase()));
+  const result: CompatModelEntry[] = MODEL_CATALOG.map((model) => ({ ...model }));
+  for (const m of dynamic) {
+    if (seen.has(m.id.toLowerCase())) continue;
+    seen.add(m.id.toLowerCase());
+    result.push({
+      id: m.id,
+      family: m.family,
+      ctx: m.ctx,
+      quotaPool: m.quotaPool,
+      multimodal: m.multimodal,
+      tools: m.tools,
+    });
   }
   return result;
 }
@@ -2132,9 +2125,8 @@ export function getEffectiveAntigravityModels(): CompatModelEntry[] {
 /**
  * Build the OpenAI-compatible `/v1/models` catalog for the proxy.
  *
- * When an active rotator is supplied, dynamically-available models (Ollama
- * fetched at startup, Codex base + discovered models) are included. Without
- * a rotator, only the static MODEL_CATALOG is returned.
+ * The static Antigravity baseline and dynamically-discovered Antigravity models
+ * are always included. An active rotator also contributes its other providers.
  */
 export function buildOpenAIModelCatalog(
   rotator?: AccountRotator,

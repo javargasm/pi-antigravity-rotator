@@ -73,8 +73,8 @@ const FALLBACK_CONTEXT_WINDOW = 128_000;
  * Resolve the upstream-published context window for an Antigravity model id.
  *
  * Lookup order:
- *   1. Dynamic catalog entry from live Antigravity endpoint.
- *   2. Exact id match in static table (lowercased).
+ *   1. Exact id match in static table (lowercased).
+ *   2. Dynamic catalog entry from live Antigravity endpoint.
  *   3. Substring match across the table (longest key wins via the order here).
  *   4. Family defaults: claude -> 1M, gemini -> 1M, gpt-oss -> 131_072.
  *   5. Defensive fallback: 128_000.
@@ -87,7 +87,6 @@ export function getAntigravityContextWindow(model: string): number {
   if (typeof exact === "number") return exact;
   const dynamicCtx = dynamicCatalog.getContextWindow(lower);
   if (typeof dynamicCtx === "number") return dynamicCtx;
-  if (typeof exact === "number") return exact;
   // Substring fallback: pick the longest registered key that appears in lower.
   let best: { key: string; value: number } | null = null;
   for (const [key, value] of Object.entries(ANTIGRAVITY_CONTEXT_WINDOWS)) {

@@ -34,9 +34,7 @@ export function extractQuotas(
     let modelInfo = data.models[config.key];
 
     if (!modelInfo) {
-      const dynamicAltKeys = dynamicCatalog.getQuotaAltKeys(config.key);
-      const allAltKeys = [...config.altKeys, ...dynamicAltKeys];
-      for (const altKey of allAltKeys) {
+      for (const altKey of config.altKeys) {
         modelInfo = data.models[altKey];
         if (modelInfo) break;
       }
@@ -132,6 +130,15 @@ export async function fetchProviderQuota(
     }
 
     const data = (await response.json()) as GoogleQuotaResponse;
+    const newModels = dynamicCatalog.updateFromEndpointResponse(
+      data,
+      account.config.email,
+    );
+    if (newModels > 0) {
+      ctx.log(
+        `${account.config.email}: discovered ${newModels} Antigravity model(s) from quota response`,
+      );
+    }
     const oldQuota = account.quota || [];
     const fresh = extractQuotas(data, oldQuota);
     // Drop the previous Antigravity entries so the new ones fully replace

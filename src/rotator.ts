@@ -17,11 +17,9 @@ import {
   type TokenBucket,
   type TokenUsageData,
   type TokenUsageTiered,
-  type GoogleQuotaResponse,
   MODEL_TIER_ACCESS,
   getModelPricing,
   QUOTA_USER_AGENT,
-  QUOTA_API_URL,
   REQUEST_GOOG_API_CLIENT,
   REQUEST_CLIENT_METADATA,
   ANTIGRAVITY_ENDPOINTS,
@@ -31,6 +29,7 @@ import {
   DEFAULT_QUOTA_POLL_INTERVAL_MS,
   MAX_QUOTA_POLL_INTERVAL_MS,
   MIN_QUOTA_POLL_INTERVAL_MS,
+  isStaticAntigravityModel,
   resolveQuotaModelKey,
   resolveDisplayModelKey,
 } from "./types.js";
@@ -371,50 +370,6 @@ export class AccountRotator {
       if (names.length > 0) this.setOllamaModels(names);
     } catch {
       // Catalog refresh is non-fatal
-    }
-  }
-
-  /** Fetch the dynamic Antigravity catalog once at startup so models are discovered before the first request. */
-  primeAntigravityCatalog(): Promise<void> {
-    return this.refreshAntigravityCatalogOnce();
-  }
-
-  private async refreshAntigravityCatalogOnce(): Promise<void> {
-    const googleAccount = this.accounts.find(
-      (a) =>
-        hasCredential(a.config, DEFAULT_PROVIDER) &&
-        !a.disabled &&
-        !a.flagged,
-    );
-    if (!googleAccount) return;
-
-    try {
-      await this.ensureValidTokenForProvider(googleAccount, DEFAULT_PROVIDER);
-      if (!googleAccount.accessToken) return;
-
-      const projectId = getProviderProjectId(googleAccount.config, DEFAULT_PROVIDER);
-      const response = await fetchWithRetry(QUOTA_API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${googleAccount.accessToken}`,
-          "User-Agent": QUOTA_USER_AGENT,
-        },
-        body: JSON.stringify({ project: projectId }),
-        timeoutMs: 8000,
-        dispatcher: getAccountProxyDispatcher(googleAccount, DEFAULT_PROVIDER),
-      });
-
-      if (!response.ok) return;
-      const data = (await response.json()) as GoogleQuotaResponse;
-      const newModels = dynamicCatalog.updateFromEndpointResponse(data);
-      if (newModels > 0) {
-        this.log(
-          `[rotator] Dynamic Antigravity catalog updated: ${newModels} new model(s) discovered (total: ${dynamicCatalog.getAllModels().length}, default: ${dynamicCatalog.getDefaultAgentModelId() ?? "n/a"})`,
-        );
-      }
-    } catch {
-      // Dynamic catalog refresh is non-fatal
     }
   }
 
@@ -949,9 +904,13 @@ export class AccountRotator {
 
   private async pollAllQuotasOnce(): Promise<void> {
     void this.refreshOllamaCatalogOnce().catch(() => {});
-    void this.refreshAntigravityCatalogOnce().catch(() => {});
 
     const available = this.accounts.filter((a) => !a.disabled && !a.flagged);
+    dynamicCatalog.retainAccounts(
+      available
+        .filter((account) => hasCredential(account.config, DEFAULT_PROVIDER))
+        .map((account) => account.config.email),
+    );
     let quotaPublished = false;
     for (const account of available) {
       if (await this.pollAccountQuota(account)) {
@@ -1048,10 +1007,13 @@ export class AccountRotator {
 
   // Get quota % for a specific model on an account. Returns -1 if no data.
   private getModelQuota(account: AccountRuntime, modelKey: string): number {
-    const q = account.quota.find((q) => q.modelKey === modelKey) ??
-      (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
+    const quotaKey = isStaticAntigravityModel(modelKey)
+      ? modelKey
+      : dynamicCatalog.resolveQuotaPool(modelKey) ?? modelKey;
+    const q = account.quota.find((q) => q.modelKey === quotaKey) ??
+      (quotaKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
         ? account.quota.find((candidate) => candidate.modelKey === CODEX_QUOTA_MODEL_KEY)
-        : modelKey.startsWith(`${OPENCODE_ZEN_PROVIDER_ID}:`)
+        : quotaKey.startsWith(`${OPENCODE_ZEN_PROVIDER_ID}:`)
           ? account.quota.find((candidate) => candidate.providerId === OPENCODE_ZEN_PROVIDER_ID)
           : undefined);
     if (!q) return -1;
@@ -1059,7 +1021,7 @@ export class AccountRotator {
     // quota is fully exhausted (0%), the account cannot accept any requests
     // regardless of how much session quota remains. Treat it as 0 so the
     // account is skipped at all call sites that check `quota === 0`.
-    if (modelKey === "session") {
+    if (quotaKey === "session") {
       const weekly = account.quota.find((w) => w.modelKey === "weekly");
       if (weekly && weekly.percentRemaining === 0) return 0;
     }
@@ -1071,10 +1033,13 @@ export class AccountRotator {
     account: AccountRuntime,
     modelKey: string,
   ): "fresh" | "5h" | "7d" {
-    const q = account.quota.find((q) => q.modelKey === modelKey) ??
-      (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
+    const quotaKey = isStaticAntigravityModel(modelKey)
+      ? modelKey
+      : dynamicCatalog.resolveQuotaPool(modelKey) ?? modelKey;
+    const q = account.quota.find((q) => q.modelKey === quotaKey) ??
+      (quotaKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
         ? account.quota.find((candidate) => candidate.modelKey === CODEX_QUOTA_MODEL_KEY)
-        : modelKey.startsWith(`${OPENCODE_ZEN_PROVIDER_ID}:`)
+        : quotaKey.startsWith(`${OPENCODE_ZEN_PROVIDER_ID}:`)
           ? account.quota.find((candidate) => candidate.providerId === OPENCODE_ZEN_PROVIDER_ID)
           : undefined);
     return q?.timerType ?? "fresh";
@@ -2936,17 +2901,7 @@ export class AccountRotator {
     let totalUsd = 0;
     const byModel: TokenUsageData["savings"]["byModel"] = {};
     for (const [model, totals] of Object.entries(modelTotals)) {
-      let pricing = MODEL_PRICING[model];
-      if (!pricing) {
-        const lower = model.toLowerCase();
-        if (lower.includes("opus")) pricing = MODEL_PRICING["claude-opus-4-6-thinking"];
-        else if (lower.includes("sonnet")) pricing = MODEL_PRICING["claude-sonnet-4-6"];
-        else if (lower.includes("3.8-flash")) pricing = MODEL_PRICING["gemini-3.8-flash-high"];
-        else if (lower.includes("3.7-flash")) pricing = MODEL_PRICING["gemini-3.7-flash-tiered"];
-        else if (lower.includes("3.6-flash")) pricing = MODEL_PRICING["gemini-3.6-flash-high"];
-        else if (lower.includes("flash")) pricing = MODEL_PRICING["gemini-3-flash"];
-        else if (lower.includes("pro")) pricing = MODEL_PRICING["gemini-3.1-pro"];
-      }
+      const pricing = getModelPricing(model);
       if (!pricing) continue;
       const inputUsd = (totals.input / 1_000_000) * pricing.inputPer1M;
       const outputUsd = (totals.output / 1_000_000) * pricing.outputPer1M;
@@ -3586,6 +3541,13 @@ export class AccountRotator {
     account: AccountRuntime,
     modelKey: string,
   ): boolean {
+    if (
+      !isStaticAntigravityModel(modelKey) &&
+      dynamicCatalog.getModel(modelKey) &&
+      !dynamicCatalog.hasModelForAccount(account.config.email, modelKey)
+    ) {
+      return false;
+    }
     const providerId = getProviderIdForPoolKey(modelKey);
     return hasCredential(account.config, providerId) &&
       !account.invalidProviders?.[providerId] &&
@@ -3602,6 +3564,10 @@ export class AccountRotator {
   }
 
   private resolvePoolKeyForModel(model: string): string | null {
+    if (
+      !isStaticAntigravityModel(model) &&
+      dynamicCatalog.getModel(model)
+    ) return model.toLowerCase();
     const context = {
       ollamaModels: this.ollamaModels,
       codexModels: this.codexModels,

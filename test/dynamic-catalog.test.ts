@@ -2,7 +2,10 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { dynamicCatalog } from "../src/providers/google-antigravity/dynamic-catalog.js";
 import { getAntigravityContextWindow } from "../src/providers/google-antigravity/catalog.js";
-import { isTieredEffortModel } from "../src/providers/google-antigravity/translators.js";
+import {
+  isTieredEffortModel,
+  openAIToAntigravityBody,
+} from "../src/providers/google-antigravity/translators.js";
 import { getModelSpec } from "../src/compat/model-specs.js";
 import { extractQuotas } from "../src/providers/google-antigravity/quota.js";
 import { getModelPricing, applyModelAlias } from "../src/types.js";
@@ -13,14 +16,9 @@ describe("DynamicModelRegistry", () => {
     dynamicCatalog.reset();
   });
 
-  it("seeds baseline models on initialization", () => {
-    const models = dynamicCatalog.getAllModels();
-    assert.ok(models.length >= 15);
-    const flash38 = dynamicCatalog.getModel("gemini-3.8-flash-high");
-    assert.ok(flash38);
-    assert.equal(flash38.ctx, 1048576);
-    assert.equal(flash38.quotaPool, "gemini");
-    assert.equal(flash38.isTiered, false);
+  it("keeps the static baseline outside the dynamic registry", () => {
+    assert.deepEqual(dynamicCatalog.getAllModels(), []);
+    assert.equal(dynamicCatalog.getModel("gemini-3.8-flash-high"), undefined);
   });
 
   it("dynamically ingests new models from fetchAvailableModels response", () => {
@@ -84,6 +82,50 @@ describe("DynamicModelRegistry", () => {
     const opus5 = dynamicCatalog.getModel("claude-opus-5-thinking");
     assert.ok(opus5);
     assert.equal(opus5.quotaPool, "claude");
+  });
+
+  it("keeps a reconciled union of models advertised by active accounts", () => {
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { "gemini-account-a": { quotaInfo: { remainingFraction: 1 } } },
+    }, "account-a@example.com");
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { "gemini-account-b": { quotaInfo: { remainingFraction: 1 } } },
+    }, "account-b@example.com");
+
+    assert.ok(dynamicCatalog.getModel("gemini-account-a"));
+    assert.ok(dynamicCatalog.getModel("gemini-account-b"));
+
+    dynamicCatalog.updateFromEndpointResponse({ models: {} }, "account-a@example.com");
+    assert.equal(dynamicCatalog.getModel("gemini-account-a"), undefined);
+    assert.ok(dynamicCatalog.getModel("gemini-account-b"));
+
+    dynamicCatalog.retainAccounts(["account-a@example.com"]);
+    assert.equal(dynamicCatalog.getModel("gemini-account-b"), undefined);
+    assert.deepEqual(dynamicCatalog.getAllModels(), []);
+  });
+
+  it("preserves Gemini family defaults for quota-only dynamic metadata", () => {
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-5.0-flash": { quotaInfo: { remainingFraction: 0.75 } },
+      },
+    }, "account@example.com");
+
+    assert.deepEqual(getModelSpec("gemini-5.0-flash"), {
+      maxOutputTokens: 65536,
+      thinkingBudget: 24576,
+      isThinking: true,
+      contextWindow: 1_000_000,
+    });
+
+    const body = openAIToAntigravityBody({
+      model: "gemini-5.0-flash",
+      messages: [{ role: "user", content: "ping" }],
+    }) as { request: { generationConfig?: Record<string, unknown> } };
+    assert.deepEqual(body.request.generationConfig, {
+      maxOutputTokens: 32768,
+      thinkingConfig: { includeThoughts: true, thinkingBudget: 24576 },
+    });
   });
 
   it("exposes dynamic model specs through getModelSpec", () => {
@@ -166,10 +208,6 @@ describe("DynamicModelRegistry", () => {
     assert.ok(opusPrice);
     assert.equal(opusPrice.inputPer1M, 5.0);
     assert.equal(opusPrice.outputPer1M, 25.0);
-  });
-
-  it("aliases gemini-3.8-flash to gemini-3.8-flash-high to match upstream", () => {
-    assert.equal(applyModelAlias("gemini-3.8-flash"), "gemini-3.8-flash-high");
   });
 
   it("routes gemini-3.8-flash variants directly to upstream models", () => {

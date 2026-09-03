@@ -1,3 +1,5 @@
+import { dynamicCatalog } from "../providers/google-antigravity/dynamic-catalog.js";
+
 export interface ModelSpec {
 	maxOutputTokens: number;
 	thinkingBudget: number; // -1 = adaptive (model decides), >=0 = fixed
@@ -59,8 +61,6 @@ export function getModelFamily(model: string): "claude" | "gemini" | "unknown" {
 	if (l.includes("gemini")) return "gemini";
 	return "unknown";
 }
-
-import { dynamicCatalog } from "../providers/google-antigravity/dynamic-catalog.js";
 
 export function getModelSpec(model: string): ModelSpec {
 	const specs = getActiveModelSpecs();

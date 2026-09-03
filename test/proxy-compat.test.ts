@@ -9,7 +9,12 @@ import {
 	withRotation,
 	type RequestBody,
 } from "../src/proxy.js";
-import { ANTIGRAVITY_ENDPOINTS, DEFAULT_ANTIGRAVITY_USER_AGENT, type AccountRuntime } from "../src/types.js";
+import {
+	ANTIGRAVITY_ENDPOINTS,
+	ANTIGRAVITY_VERSION,
+	DEFAULT_ANTIGRAVITY_USER_AGENT,
+	type AccountRuntime,
+} from "../src/types.js";
 import type { AccountRotator } from "../src/rotator.js";
 
 type Capture = {
@@ -23,6 +28,13 @@ const originalEndpoints = [...endpointOverrides];
 
 afterEach(() => {
 	endpointOverrides.splice(0, endpointOverrides.length, ...originalEndpoints);
+});
+
+it("builds the modern quota User-Agent from the configured Antigravity version", () => {
+	assert.equal(
+		DEFAULT_ANTIGRAVITY_USER_AGENT,
+		`antigravity/ide/${ANTIGRAVITY_VERSION} (aidev_client; os_type=darwin; arch=arm64)`,
+	);
 });
 
 async function listenServer(
@@ -200,7 +212,7 @@ describe("proxy compat integration", () => {
 			assert.match(capturesDaily[0].body, /"contents":\[\{"role":"user","parts":\[\{"text":"ping"\}\]\}\]/);
 			assert.match(capturesDaily[0].body, /"userAgent":"antigravity"/);
 			assert.equal(capturesDaily[0].headers.authorization, "Bearer access-token");
-			assert.equal(capturesDaily[0].headers["user-agent"], "antigravity/2.11.0 darwin/arm64");
+			assert.equal(capturesDaily[0].headers["user-agent"], DEFAULT_ANTIGRAVITY_USER_AGENT);
 			assert.equal(capturesDaily[0].headers["x-goog-api-client"], "google-cloud-sdk vscode_cloudshelleditor/0.1");
 			assert.equal(capturesDaily[0].headers["client-metadata"], "{\"ideType\":\"ANTIGRAVITY\",\"platform\":\"MACOS\",\"pluginType\":\"GEMINI\"}");
 		} finally {
