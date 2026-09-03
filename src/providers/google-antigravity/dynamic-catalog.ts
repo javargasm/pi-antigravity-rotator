@@ -442,6 +442,29 @@ export class DynamicModelRegistry {
       this.discoveredModels.get(id.trim().toLowerCase())?.id;
   }
 
+  getDiscoveredQuotaPools(): Record<string, string> {
+    const pools = Object.create(null) as Record<string, string>;
+    for (const { id, quotaPool } of this.discoveredModels.values()) {
+      pools[id] = quotaPool;
+    }
+    return pools;
+  }
+
+  restoreDiscoveredQuotaPools(value: unknown): void {
+    if (!isRecord(value)) return;
+    for (const [rawId, rawPool] of Object.entries(value)) {
+      const id = rawId.trim();
+      const quotaPool = typeof rawPool === "string"
+        ? rawPool.trim().toLowerCase()
+        : "";
+      if (
+        !isSafeModelId(id) ||
+        (quotaPool !== "gemini" && quotaPool !== "claude")
+      ) continue;
+      this.discoveredModels.set(id.toLowerCase(), { id, quotaPool });
+    }
+  }
+
   getModelSpec(id: string): ModelSpec | undefined {
     const entry = this.getModel(id);
     if (!entry) return undefined;

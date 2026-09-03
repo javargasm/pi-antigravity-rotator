@@ -456,6 +456,8 @@ export interface PersistedSafetyState {
 }
 
 export interface PersistedState {
+  // Historical dynamic model IDs mapped to their shared quota pools.
+  dynamicModelQuotaPools?: Record<string, string>;
   // Per-model active account index
   modelAccounts: Record<string, number>;
   // Per-model request count on the active account

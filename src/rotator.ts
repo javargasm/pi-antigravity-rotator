@@ -493,6 +493,7 @@ export class AccountRotator {
     }
 
     try {
+      dynamicCatalog.restoreDiscoveredQuotaPools(state.dynamicModelQuotaPools);
       // Load per-model account assignments
       if (state.modelAccounts) {
         for (const [model, idx] of Object.entries(state.modelAccounts)) {
@@ -667,6 +668,7 @@ export class AccountRotator {
     }
 
     const state: PersistedState = {
+      dynamicModelQuotaPools: dynamicCatalog.getDiscoveredQuotaPools(),
       modelAccounts,
       modelRequestCounts,
       modelStickyAccounts,

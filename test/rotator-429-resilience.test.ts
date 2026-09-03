@@ -391,6 +391,15 @@ describe("429 RESOURCE_EXHAUSTED resilience and in-flight lifecycle", () => {
       assert.equal(secondAccount.cooldownsByModel[rawModel], undefined);
       secondAccount.accessToken = "reloaded-access-token";
       secondAccount.tokenExpires = rawDeadline;
+      assert.equal(dynamicCatalog.resolveQuotaPool(rawModel), "gemini");
+      assert.equal(
+        (secondRotator as any).isAvailableForModel(secondAccount, rawModel, now),
+        false,
+      );
+      assert.equal(
+        await (secondRotator as any).tryGetActiveAccount(rawModel),
+        null,
+      );
       await secondRotator.pollAccountQuota(secondAccount);
       assert.equal(
         (secondRotator as any).isAvailableForModel(secondAccount, rawModel, now),
