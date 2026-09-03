@@ -163,6 +163,24 @@ describe("DynamicModelRegistry", () => {
     assert.ok(dynamicCatalog.getModel("gemini-known-good"));
   });
 
+  it("rejects prototype-sensitive model IDs without replacing a known-good snapshot", () => {
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-known-good": { quotaInfo: { remainingFraction: 1 } },
+      },
+    }, "account-a");
+    const unsafe = JSON.parse(
+      '{"models":{"__proto__":{"quotaInfo":{"remainingFraction":1}}}}',
+    ) as GoogleQuotaResponse;
+
+    assert.equal(
+      dynamicCatalog.updateFromEndpointResponse(unsafe, "account-a"),
+      0,
+    );
+    assert.ok(dynamicCatalog.getModel("gemini-known-good"));
+    assert.equal(dynamicCatalog.wasDiscovered("__proto__"), false);
+  });
+
   it("skips malformed entries and non-finite metadata without losing valid models", () => {
     dynamicCatalog.updateFromEndpointResponse({
       models: {
@@ -287,6 +305,51 @@ describe("DynamicModelRegistry", () => {
         thinkingBudget: 6789,
         isThinking: true,
         contextWindow: 222222,
+      });
+    } finally {
+      setModelSpecsOverride(null);
+    }
+  });
+
+  it("uses runtime constraints for bundled IDs unless an operator overrides them", () => {
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-3.8-flash-high": {
+          maxOutputTokens: 2048,
+          supportsThinking: false,
+          quotaInfo: { remainingFraction: 1 },
+        },
+      },
+    });
+
+    assert.deepEqual(getModelSpec("gemini-3.8-flash-high"), {
+      maxOutputTokens: 2048,
+      thinkingBudget: -1,
+      isThinking: false,
+      contextWindow: 1_000_000,
+    });
+    const runtimeBody = openAIToAntigravityBody({
+      model: "gemini-3.8-flash-high",
+      messages: [{ role: "user", content: "ping" }],
+      max_tokens: 10_000,
+    }) as { request: { generationConfig?: Record<string, unknown> } };
+    assert.equal(runtimeBody.request.generationConfig?.maxOutputTokens, 2048);
+    assert.equal(runtimeBody.request.generationConfig?.thinkingConfig, undefined);
+
+    setModelSpecsOverride({
+      "gemini-3.8": {
+        maxOutputTokens: 4096,
+        thinkingBudget: 1000,
+        isThinking: true,
+        contextWindow: 500_000,
+      },
+    });
+    try {
+      assert.deepEqual(getModelSpec("gemini-3.8-flash-high"), {
+        maxOutputTokens: 4096,
+        thinkingBudget: 1000,
+        isThinking: true,
+        contextWindow: 500_000,
       });
     } finally {
       setModelSpecsOverride(null);

@@ -228,6 +228,80 @@ describe("429 RESOURCE_EXHAUSTED resilience and in-flight lifecycle", () => {
     }
   });
 
+  it("folds persisted raw dynamic safety keys into shared quota pools", async () => {
+    const now = Date.now();
+    const canonicalDeadline = now + 20 * 60 * 1000;
+    const rawDeadline = now + 2 * 60 * 60 * 1000;
+    const rawModel = "gemini-4.0-flash-preview";
+    const email = "persisted-dynamic-state@example.com";
+    const projectId = "persisted-dynamic-project";
+
+    await setCachedState({
+      modelAccounts: {},
+      safety: {
+        day: new Date(now).toISOString().slice(0, 10),
+        projectRequests: {},
+        modelBreakers: {
+          gemini: canonicalDeadline,
+          [rawModel]: rawDeadline,
+        },
+        projectModelBreakers: {
+          [`${projectId}::gemini`]: canonicalDeadline,
+          [`${projectId}::${rawModel}`]: rawDeadline,
+        },
+        provider429Events: [
+          { ts: now - 2000, projectId, modelKey: rawModel, account: email },
+          { ts: now - 1000, projectId, modelKey: "gemini", account: email },
+        ],
+      },
+      accounts: {
+        [email]: {
+          totalRequests: 0,
+          cooldownsByModel: {
+            gemini: canonicalDeadline,
+            [rawModel]: rawDeadline,
+          },
+          quotaExhaustedAt: now,
+          disabled: false,
+          flagged: false,
+        },
+      },
+    });
+
+    try {
+      const rotator = new AccountRotator({
+        proxyPort: 51224,
+        rotateOnQuotaDrop: 20,
+        quotaPollIntervalMs: 300000,
+        requestsPerRotation: 5,
+        accounts: [{ email, projectId, refreshToken: "persisted-refresh" }],
+      }) as any;
+      rotator.stopQuotaPolling();
+      const restored = rotator.accounts[0] as AccountRuntime;
+
+      assert.equal(restored.cooldownsByModel.gemini, rawDeadline);
+      assert.equal(restored.cooldownsByModel[rawModel], undefined);
+      assert.equal(rotator.modelBreakers.gemini, rawDeadline);
+      assert.equal(rotator.modelBreakers[rawModel], undefined);
+      assert.equal(
+        rotator.projectModelBreakers[`${projectId}::gemini`],
+        rawDeadline,
+      );
+      assert.equal(
+        rotator.projectModelBreakers[`${projectId}::${rawModel}`],
+        undefined,
+      );
+      assert.equal(rotator.provider429Events.length, 2);
+      assert.ok(
+        rotator.provider429Events.every(
+          (event: { modelKey: string }) => event.modelKey === "gemini",
+        ),
+      );
+    } finally {
+      await setCachedState({ modelAccounts: {}, accounts: {} });
+    }
+  });
+
   it("rotateModel and activateModelAccount do not leak in-flight counters during background polling", async () => {
     const acc1 = makeAccount("acc1@example.com", "shared-project", "claude", 100);
     const acc2 = makeAccount("acc2@example.com", "shared-project", "claude", 100);

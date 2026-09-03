@@ -129,6 +129,14 @@ export async function fetchProviderQuota(
     credentialGeneration,
   );
   if (accountEpoch === null) return;
+  const isCurrentGeneration = (): boolean =>
+    accountId === getAccountIdentity(account) &&
+    credentialGeneration === getCredentialGeneration(account, DEFAULT_PROVIDER) &&
+    dynamicCatalog.isAccountGenerationActive(
+      accountId,
+      credentialGeneration,
+      accountEpoch,
+    );
 
   try {
     const response = await fetchWithRetry(QUOTA_API_URL, {
@@ -144,10 +152,12 @@ export async function fetchProviderQuota(
       timeoutMs: 8000,
       dispatcher: getAccountProxyDispatcher(account, "google-antigravity"),
     });
+    if (!isCurrentGeneration()) return;
 
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
         const errorText = await response.text();
+        if (!isCurrentGeneration()) return;
         ctx.log(
           `${account.config.email}: quota API returned ${response.status}, flagging account`,
         );
@@ -161,19 +171,10 @@ export async function fetchProviderQuota(
       return;
     }
 
-    const data = parseGoogleQuotaResponse(await response.json());
+    const rawData = await response.json();
+    if (!isCurrentGeneration()) return;
+    const data = parseGoogleQuotaResponse(rawData);
     if (!data) return;
-    if (
-      accountId !== getAccountIdentity(account) ||
-      credentialGeneration !== getCredentialGeneration(account, DEFAULT_PROVIDER) ||
-      !dynamicCatalog.isAccountGenerationActive(
-        accountId,
-        credentialGeneration,
-        accountEpoch,
-      )
-    ) {
-      return;
-    }
     const newModels = dynamicCatalog.updateFromEndpointResponse(
       data,
       accountId,

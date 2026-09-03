@@ -13,7 +13,11 @@ import {
   type RequestBody,
 } from "../src/proxy.js";
 import { ANTIGRAVITY_ENDPOINTS, type AccountRuntime } from "../src/types.js";
-import { getAccountIdentity, type AccountRotator } from "../src/rotator.js";
+import {
+	getAccountIdentity,
+	getCredentialGeneration,
+	type AccountRotator,
+} from "../src/rotator.js";
 import { fetchProviderQuota } from "../src/providers/google-antigravity/quota.js";
 import { dynamicCatalog } from "../src/providers/google-antigravity/dynamic-catalog.js";
 
@@ -934,6 +938,52 @@ describe("native Code Assist passthrough", () => {
 			assert.ok(dynamicCatalog.getModel("gemini-valid-after-bad-entry"));
 			assert.equal(account.quota[0]?.percentRemaining, 60);
 		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("ignores a stale quota 401 after replacement credentials arrive during body read", async () => {
+		const account = makeAccount("stale-quota-error@example.com", "shared-project");
+		const accountId = getAccountIdentity(account);
+		const generation = getCredentialGeneration(account, "google-antigravity");
+		dynamicCatalog.retainAccounts([{ id: accountId, generation }]);
+
+		let announceBodyRead!: () => void;
+		const bodyRead = new Promise<void>((resolve) => {
+			announceBodyRead = resolve;
+		});
+		let releaseBodyRead!: () => void;
+		const bodyGate = new Promise<void>((resolve) => {
+			releaseBodyRead = resolve;
+		});
+		const response = new Response("stale credentials", { status: 401 });
+		response.text = async () => {
+			announceBodyRead();
+			await bodyGate;
+			return "stale credentials";
+		};
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => response) as typeof fetch;
+		const effects: string[] = [];
+
+		try {
+			const poll = fetchProviderQuota(account, {
+				log: () => effects.push("log"),
+				reportQuotaPollFlag: () => effects.push("report"),
+				markFlagged: () => effects.push("flag"),
+			});
+			await bodyRead;
+			account.config.refreshToken = "replacement-refresh-token";
+			dynamicCatalog.retainAccounts([{
+				id: getAccountIdentity(account),
+				generation: getCredentialGeneration(account, "google-antigravity"),
+			}]);
+			releaseBodyRead();
+			await poll;
+
+			assert.deepEqual(effects, []);
+		} finally {
+			releaseBodyRead();
 			globalThis.fetch = originalFetch;
 		}
 	});

@@ -84,22 +84,24 @@ export function getStaticModelSpec(model: string): ModelSpec | undefined {
 	return best?.spec;
 }
 
+export function getModelSpecOverride(model: string): ModelSpec | undefined {
+	if (!modelSpecsOverride) return undefined;
+	const lower = model.toLowerCase();
+	if (modelSpecsOverride[lower]) return modelSpecsOverride[lower];
+	for (const [key, spec] of Object.entries(modelSpecsOverride)) {
+		if (lower.includes(key)) return spec;
+	}
+	return undefined;
+}
+
 export function getModelSpec(model: string): ModelSpec {
 	const lower = model.toLowerCase();
-	if (modelSpecsOverride) {
-		if (modelSpecsOverride[lower]) return modelSpecsOverride[lower];
-		for (const [key, spec] of Object.entries(modelSpecsOverride)) {
-			if (lower.includes(key)) return spec;
-		}
-	} else if (DEFAULT_MODEL_SPECS[lower]) {
-		return DEFAULT_MODEL_SPECS[lower];
-	}
+	const override = getModelSpecOverride(lower);
+	if (override) return override;
 	const dynamicSpec = dynamicCatalog.getModelSpec(lower);
 	if (dynamicSpec) return dynamicSpec;
-	if (!modelSpecsOverride) {
-		const staticSpec = getStaticModelSpec(lower);
-		if (staticSpec) return staticSpec;
-	}
+	const staticSpec = getStaticModelSpec(lower);
+	if (staticSpec) return staticSpec;
 	const family = getModelFamily(model);
 	if (family === "claude") return { maxOutputTokens: CLAUDE_MAX_OUTPUT_TOKENS, thinkingBudget: CLAUDE_DEFAULT_THINKING_BUDGET, isThinking: true, contextWindow: 1_000_000 };
 	if (family === "gemini") return { maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS, thinkingBudget: FALLBACK_THINKING_BUDGET, isThinking: true, contextWindow: 1_000_000 };

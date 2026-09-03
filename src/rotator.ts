@@ -549,6 +549,7 @@ export class AccountRotator {
             saved.allowFreshWindowStartsOverride ?? false;
         }
       }
+      this.migratePersistedQuotaStateKeys();
       // Cap generic stale cooldowns to 30 min max from now. Antigravity's
       // explicit Claude/Gemini reset deadlines must survive restarts intact.
       const maxCooldown = 30 * 60 * 1000;
@@ -571,6 +572,41 @@ export class AccountRotator {
       this.log("Could not load state, starting fresh");
     }
     this.loadTokenUsage();
+  }
+
+  private migratePersistedQuotaStateKeys(): void {
+    const foldDeadlines = (deadlines: Record<string, number>) => {
+      const folded: Record<string, number> = {};
+      for (const [key, deadline] of Object.entries(deadlines)) {
+        const canonical = this.resolveQuotaStateKey(key);
+        folded[canonical] = Math.max(folded[canonical] ?? 0, deadline);
+      }
+      return folded;
+    };
+
+    this.modelBreakers = foldDeadlines(this.modelBreakers);
+    const projectBreakers: Record<string, number> = {};
+    for (const [key, deadline] of Object.entries(this.projectModelBreakers)) {
+      const separator = key.lastIndexOf("::");
+      const canonical = separator < 0
+        ? key
+        : projectModelKey(
+            key.slice(0, separator),
+            this.resolveQuotaStateKey(key.slice(separator + 2)),
+          );
+      projectBreakers[canonical] = Math.max(
+        projectBreakers[canonical] ?? 0,
+        deadline,
+      );
+    }
+    this.projectModelBreakers = projectBreakers;
+    this.provider429Events = this.provider429Events.map((event) => ({
+      ...event,
+      modelKey: this.resolveQuotaStateKey(event.modelKey),
+    }));
+    for (const account of this.accounts) {
+      account.cooldownsByModel = foldDeadlines(account.cooldownsByModel);
+    }
   }
 
   private loadTokenUsage(): void {

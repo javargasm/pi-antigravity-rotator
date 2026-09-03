@@ -35,6 +35,7 @@ import {
   getActiveModelSpecs,
   getModelFamily,
   getModelSpec,
+  getModelSpecOverride,
   isThinkingModel,
 } from "./compat/model-specs.js";
 import type { ModelSpec } from "./compat/model-specs.js";
@@ -2152,8 +2153,11 @@ export function getEffectiveAntigravityModels(): CompatModelEntry[] {
   const seen = new Set(MODEL_CATALOG.map((model) => model.id.toLowerCase()));
   const result: CompatModelEntry[] = MODEL_CATALOG.map((model) => {
     const spec = getModelSpec(model.id);
+    const contextSpec =
+      getModelSpecOverride(model.id) ?? dynamicCatalog.getModelSpec(model.id);
     return {
       ...model,
+      ctx: contextSpec?.contextWindow ?? model.ctx,
       maxOutputTokens: spec.maxOutputTokens,
       thinkingBudget: spec.thinkingBudget,
       minThinkingBudget: spec.minThinkingBudget,
@@ -2163,17 +2167,18 @@ export function getEffectiveAntigravityModels(): CompatModelEntry[] {
   for (const m of dynamic) {
     if (seen.has(m.id.toLowerCase())) continue;
     seen.add(m.id.toLowerCase());
+    const spec = getModelSpec(m.id);
     result.push({
       id: m.id,
       family: m.family,
-      ctx: m.ctx,
+      ctx: spec.contextWindow ?? m.ctx,
       quotaPool: m.quotaPool,
       multimodal: m.multimodal,
       tools: m.tools,
-      maxOutputTokens: m.maxOutputTokens,
-      thinkingBudget: m.thinkingBudget,
-      minThinkingBudget: m.minThinkingBudget,
-      isThinking: m.isThinking,
+      maxOutputTokens: spec.maxOutputTokens,
+      thinkingBudget: spec.thinkingBudget,
+      minThinkingBudget: spec.minThinkingBudget,
+      isThinking: spec.isThinking,
     });
   }
   return result;

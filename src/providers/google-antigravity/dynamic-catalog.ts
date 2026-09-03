@@ -40,19 +40,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isSafeModelId(value: string): boolean {
+  const lower = value.toLowerCase();
+  return value.length <= 256 &&
+    /^[a-z0-9][a-z0-9._:/-]*$/i.test(value) &&
+    lower !== "__proto__" &&
+    lower !== "prototype" &&
+    lower !== "constructor";
+}
+
 /** Validate and sanitize the untrusted runtime catalog response. */
 export function parseGoogleQuotaResponse(
   value: unknown,
 ): GoogleQuotaResponse | null {
   if (!isRecord(value) || !isRecord(value.models)) return null;
 
-  const models: GoogleQuotaResponse["models"] = {};
+  const models = Object.create(null) as GoogleQuotaResponse["models"];
   let rawEntryCount = 0;
   let validEntryCount = 0;
   for (const [rawId, rawInfo] of Object.entries(value.models)) {
     rawEntryCount++;
     const id = rawId.trim();
-    if (!id || !isRecord(rawInfo)) continue;
+    if (!isSafeModelId(id) || !isRecord(rawInfo)) continue;
     validEntryCount++;
 
     const info: GoogleModelInfo = {};
@@ -115,18 +124,18 @@ export function parseGoogleQuotaResponse(
   const parsed: GoogleQuotaResponse = { models };
   if (
     typeof value.defaultAgentModelId === "string" &&
-    value.defaultAgentModelId.trim()
+    isSafeModelId(value.defaultAgentModelId.trim())
   ) {
     parsed.defaultAgentModelId = value.defaultAgentModelId.trim();
   }
   if (isRecord(value.tieredModelIds)) {
-    const tieredModelIds: Record<string, string[]> = {};
+    const tieredModelIds = Object.create(null) as Record<string, string[]>;
     for (const [tier, rawIds] of Object.entries(value.tieredModelIds)) {
       if (!Array.isArray(rawIds)) continue;
       const ids = rawIds
         .filter((id): id is string => typeof id === "string")
         .map((id) => id.trim())
-        .filter(Boolean);
+        .filter(isSafeModelId);
       if (ids.length > 0) tieredModelIds[tier] = ids;
     }
     if (Object.keys(tieredModelIds).length > 0) {
