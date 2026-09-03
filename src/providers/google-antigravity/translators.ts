@@ -841,20 +841,35 @@ export function convertResponsesToChatRequest(
  * reasoning_effort. Matched case-insensitively against the exact ID only;
  * virtual siblings (e.g. `gemini-3.7-flash-tiered-high`) are excluded.
  */
+import { dynamicCatalog } from "./dynamic-catalog.js";
+
 export const TIERED_EFFORT_MODEL_ID = "gemini-3.7-flash-tiered";
+export const TIERED_EFFORT_MODEL_IDS = new Set([
+  "gemini-3.7-flash-tiered",
+]);
+
+export function isTieredEffortModel(modelId: string): boolean {
+  const l = modelId.toLowerCase().trim();
+  if (l.includes("3.6")) return false;
+  if (TIERED_EFFORT_MODEL_IDS.has(l)) return true;
+  // Exclude virtual siblings like gemini-X-tiered-high
+  if (l.includes("-tiered-")) return false;
+  if (l.endsWith("-tiered")) return true;
+  return dynamicCatalog.isTiered(l);
+}
 
 /**
  * Map an OpenAI Chat `reasoning_effort` to a Gemini `thinkingLevel` for
- * `gemini-3.7-flash-tiered` only. Accepts exactly low/medium/high
- * (case-insensitive); anything else returns undefined so the caller falls
- * back to the existing adaptive/fixed-budget semantics and never emits an
- * invalid upstream enum.
+ * tiered models (`gemini-3.7-flash-tiered`) only.
+ * Accepts exactly low/medium/high (case-insensitive); anything else returns
+ * undefined so the caller falls back to the existing adaptive/fixed-budget
+ * semantics and never emits an invalid upstream enum.
  */
 export function mapTieredReasoningEffortToThinkingLevel(
   effort: string | undefined,
   modelId: string,
 ): "LOW" | "MEDIUM" | "HIGH" | undefined {
-  if (modelId.toLowerCase() !== TIERED_EFFORT_MODEL_ID) return undefined;
+  if (!isTieredEffortModel(modelId)) return undefined;
   if (!isNonEmptyString(effort)) return undefined;
   switch (effort.toLowerCase()) {
     case "low":

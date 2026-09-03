@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- **Live Antigravity model discovery**: Successful quota polls now reconcile model IDs, context windows, output limits, thinking metadata, and account availability into `/v1/models` without a second discovery request ([#29](https://github.com/tuxevil/tuxevil-rotator/pull/29) by [@javargasm](https://github.com/javargasm)).
+
+### Fixed
+- **Dynamic catalog safety**: Discovery now excludes retired `gemini-3.5-*` IDs, keys snapshots by full account identity, honors case-insensitive operator `modelSpecs` substring overrides, and keeps removed dynamic models from falling through to the generic Gemini pool ([#29](https://github.com/tuxevil/tuxevil-rotator/pull/29) by [@javargasm](https://github.com/javargasm)).
+
 ## [3.4.0] - 2026-09-03
 
 ### Added

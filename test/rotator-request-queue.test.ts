@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, it } from "node:test";
+import { after, afterEach, before, describe, it } from "node:test";
 
 const testDir = mkdtempSync(join(tmpdir(), "rotator-request-queue-"));
 process.env.TUXEVIL_ROTATOR_DIR = testDir;
@@ -14,9 +14,11 @@ process.env.ANTIGRAVITY_CLIENT_ID = "test-client-id";
 process.env.ANTIGRAVITY_CLIENT_SECRET = "test-client-secret";
 
 let AccountRotator: typeof import("../src/rotator.js").AccountRotator;
+let getAccountIdentity: typeof import("../src/rotator.js").getAccountIdentity;
 let getDefaultConfig: typeof import("../src/config-defaults.js").getDefaultConfig;
 let applyConfigDefaults: typeof import("../src/config-defaults.js").applyConfigDefaults;
 let closeDb: typeof import("../src/db-store.js").closeDb;
+let dynamicCatalog: typeof import("../src/providers/google-antigravity/dynamic-catalog.js").dynamicCatalog;
 type AccountConfig = import("../src/types.js").AccountConfig;
 type AccountRuntime = import("../src/types.js").AccountRuntime;
 type Config = import("../src/types.js").Config;
@@ -26,16 +28,21 @@ const CLAUDE_MODEL = "claude-opus-4-6-thinking";
 const UNKNOWN_MODEL = "custom-antigravity-model";
 
 before(async () => {
-  ({ AccountRotator } = await import("../src/rotator.js"));
+  ({ AccountRotator, getAccountIdentity } = await import("../src/rotator.js"));
   ({ getDefaultConfig, applyConfigDefaults } = await import("../src/config-defaults.js"));
   const db = await import("../src/db-store.js");
   closeDb = db.closeDb;
   await db.initDb();
+  ({ dynamicCatalog } = await import("../src/providers/google-antigravity/dynamic-catalog.js"));
 });
 
 after(async () => {
   await closeDb();
   rmSync(testDir, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  dynamicCatalog.reset();
 });
 
 function makeRotatorFromAccounts(
@@ -54,9 +61,11 @@ function makeRotatorFromAccounts(
   });
   rotator.stopQuotaPolling();
 
-  const runtimes = accounts.map(({ email }) => {
-    const account = rotator.getAccountByEmail(email)!;
-    account.accessToken = `access-${email}`;
+  const runtimes = (
+    rotator as unknown as { accounts: AccountRuntime[] }
+  ).accounts;
+  for (const account of runtimes) {
+    account.accessToken = `access-${account.config.email}`;
     account.tokenExpires = Date.now() + 60_000;
     account.quota = ["gemini", "claude"].map((modelKey) => ({
       modelKey,
@@ -66,8 +75,7 @@ function makeRotatorFromAccounts(
       timerType: "fresh",
       providerId: "google-antigravity",
     }));
-    return account;
-  });
+  }
   return { rotator, accounts: runtimes };
 }
 
@@ -116,6 +124,105 @@ function releaseAll(
 }
 
 describe("Antigravity request queue", () => {
+  it("routes a dynamically discovered model only to an account that advertised it", async () => {
+    const { rotator, accounts } = makeRotator(["project-a", "project-b"]);
+    dynamicCatalog.reset();
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-account-a-only": { quotaInfo: { remainingFraction: 1 } },
+        "gemini-3.8-flash-high": { quotaInfo: { remainingFraction: 1 } },
+      },
+    }, getAccountIdentity(accounts[0]));
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { "gemini-account-b-only": { quotaInfo: { remainingFraction: 1 } } },
+    }, getAccountIdentity(accounts[1]));
+
+    const selected = (rotator as any).pickBestModelAccount(
+      "gemini-account-b-only",
+      Date.now(),
+      -1,
+    );
+    assert.equal(selected, accounts[1]);
+
+    accounts[0].inFlightByModel.gemini = 5;
+    accounts[0].inFlightRequests = 5;
+    const staticSelection = (rotator as any).pickBestModelAccount(
+      "gemini-3.8-flash-high",
+      Date.now(),
+      -1,
+    );
+    assert.equal(staticSelection, accounts[1], "static fallback must not depend on discovery");
+  });
+
+  it("isolates dynamic routing for same-email accounts with different projects", () => {
+    const { rotator, accounts } = makeRotatorFromAccounts([
+      {
+        email: "shared@example.com",
+        credentials: [{
+          provider: "google-antigravity",
+          refreshToken: "refresh-a",
+          projectId: "project-a",
+        }],
+      },
+      {
+        email: "shared@example.com",
+        credentials: [{
+          provider: "google-antigravity",
+          refreshToken: "refresh-b",
+          projectId: "project-b",
+        }],
+      },
+    ]);
+    const firstId = getAccountIdentity(accounts[0]);
+    const secondId = getAccountIdentity(accounts[1]);
+    assert.notEqual(firstId, secondId);
+
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { "gemini-project-a-only": { quotaInfo: { remainingFraction: 1 } } },
+    }, firstId);
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { "gemini-project-b-only": { quotaInfo: { remainingFraction: 1 } } },
+    }, secondId);
+
+    assert.equal(
+      (rotator as any).pickBestModelAccount("gemini-project-a-only", Date.now(), -1),
+      accounts[0],
+    );
+    assert.equal(
+      (rotator as any).pickBestModelAccount("gemini-project-b-only", Date.now(), -1),
+      accounts[1],
+    );
+  });
+
+  it("does not route a removed dynamic model through the generic Gemini pool", () => {
+    const { rotator, accounts } = makeRotator(["project-a", "project-b"]);
+    const accountId = getAccountIdentity(accounts[0]);
+    const removedModel = "gemini-ephemeral-preview";
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { [removedModel]: { quotaInfo: { remainingFraction: 1 } } },
+    }, accountId);
+
+    assert.equal(
+      (rotator as any).pickBestModelAccount(removedModel, Date.now(), -1),
+      accounts[0],
+    );
+
+    dynamicCatalog.updateFromEndpointResponse({ models: {} }, accountId);
+    assert.equal(dynamicCatalog.getModel(removedModel), undefined);
+    assert.equal(
+      (rotator as any).pickBestModelAccount(removedModel, Date.now(), -1),
+      null,
+    );
+    assert.ok(
+      (rotator as any).pickBestModelAccount(
+        "gemini-never-discovered-preview",
+        Date.now(),
+        -1,
+      ),
+      "never-discovered IDs must keep the existing Gemini passthrough behavior",
+    );
+  });
+
   it("defaults to five total concurrent requests per account and project/model", () => {
     const config = getDefaultConfig();
     assert.equal(config.maxConcurrentRequestsPerAccount, 5);

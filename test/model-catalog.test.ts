@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { serveGeminiModels, serveOpenAIModels } from "../src/compat.js";
 import { getModelSpec } from "../src/compat/model-specs.js";
+import { dynamicCatalog } from "../src/providers/google-antigravity/dynamic-catalog.js";
 
 function captureJson(render: (res: never) => void): unknown {
 	let raw = "";
@@ -149,10 +150,20 @@ describe("model discovery", () => {
 	});
 
 	it("does not advertise retired gemini-3.5-flash ids", () => {
-		const payload = captureJson(serveOpenAIModels) as {
-			data: Array<{ id: string }>;
-		};
-		assert.ok(!payload.data.some((model) => model.id.startsWith("gemini-3.5-flash")));
+		dynamicCatalog.updateFromEndpointResponse({
+			models: {
+				"Gemini-3.5-Flash-High": { quotaInfo: { remainingFraction: 1 } },
+			},
+		});
+		try {
+			const payload = captureJson(serveOpenAIModels) as {
+				data: Array<{ id: string }>;
+			};
+			assert.ok(!payload.data.some((model) => model.id.toLowerCase().startsWith("gemini-3.5-")));
+			assert.deepEqual(dynamicCatalog.getAllModels(), []);
+		} finally {
+			dynamicCatalog.reset();
+		}
 	});
 
 	it("ships the exact default spec for gemini-3.7-flash-tiered", () => {

@@ -1280,7 +1280,22 @@ export async function withRotation<T>(
       // success
       const result = await onSuccess(response, context);
       const shouldRotate = rotator.recordRequest(account, model);
-      logRequestEnd(response.status, `endpoint=${endpoint}`);
+      const inTokens =
+        result && typeof result === "object" && "inputTokens" in result
+          ? (result as Record<string, unknown>).inputTokens
+          : 0;
+      const outTokens =
+        result && typeof result === "object" && "outputTokens" in result
+          ? (result as Record<string, unknown>).outputTokens
+          : 0;
+      const ttfbMs =
+        result && typeof result === "object" && "firstByteMs" in result
+          ? (result as Record<string, unknown>).firstByteMs
+          : undefined;
+      const ttfbInfo = ttfbMs !== undefined ? ` ttfbMs=${ttfbMs}` : "";
+      const tokensInfo =
+        inTokens || outTokens ? ` inTokens=${inTokens} outTokens=${outTokens}` : "";
+      logRequestEnd(response.status, `endpoint=${endpoint}${ttfbInfo}${tokensInfo}`);
       if (shouldRotate) {
         await rotator.rotateToNext(model, account);
       }
@@ -1750,7 +1765,7 @@ async function handleProxyRequest(
         const ttfbMs = usage?.firstByteMs ?? totalMs;
         const outcomeStatus = usage?.streamError ? 502 : response.status;
         rotator.recordLatency(body.displayModel || body.model, ttfbMs, totalMs);
-        logRequestEnd(outcomeStatus, `ttfbMs=${ttfbMs} endpoint=${endpoint}`);
+        logRequestEnd(outcomeStatus, `ttfbMs=${ttfbMs} inTokens=${usage?.inputTokens ?? 0} outTokens=${usage?.outputTokens ?? 0} endpoint=${endpoint}`);
         rotator.recordRequestLog({
           model: displayModelKey,
           account: label,

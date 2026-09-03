@@ -1,5 +1,5 @@
 import randomBytes from "node:crypto";
-import { MODEL_PRICING, type SpendLog, type DailySpend } from "./types.js";
+import { getModelPricing, type SpendLog, type DailySpend } from "./types.js";
 import { isDbConfigured, queryDb } from "./db-store.js";
 import { rotatorEnv } from "./env.js";
 
@@ -59,7 +59,7 @@ export function logSpend(
     return;
   }
 
-  const pricing = MODEL_PRICING[log.model] || { inputPer1M: 0, outputPer1M: 0 };
+  const pricing = getModelPricing(log.model) ?? { inputPer1M: 0, outputPer1M: 0 };
   const promptTokens = Math.max(0, log.promptTokens || 0);
   const completionTokens = Math.max(0, log.completionTokens || 0);
   const promptCostUsd = (promptTokens / 1_000_000) * (pricing.inputPer1M || 0);
@@ -253,25 +253,7 @@ export async function flushSpendLogs(): Promise<void> {
 }
 
 export function calculateCost(model: string, promptTokens: number, completionTokens: number): number {
-  let pricing = MODEL_PRICING[model];
-  if (!pricing) {
-    const lower = model.toLowerCase();
-    if (lower.includes("opus")) {
-      pricing = MODEL_PRICING["claude-opus-4-6-thinking"];
-    } else if (lower.includes("sonnet")) {
-      pricing = MODEL_PRICING["claude-sonnet-4-6"];
-    } else if (lower.includes("3.8-flash")) {
-      pricing = MODEL_PRICING["gemini-3.8-flash-high"];
-    } else if (lower.includes("3.7-flash")) {
-      pricing = MODEL_PRICING["gemini-3.7-flash-tiered"];
-    } else if (lower.includes("3.6-flash")) {
-      pricing = MODEL_PRICING["gemini-3.6-flash-high"];
-    } else if (lower.includes("flash")) {
-      pricing = MODEL_PRICING["gemini-3-flash"];
-    } else if (lower.includes("pro")) {
-      pricing = MODEL_PRICING["gemini-3.1-pro"];
-    }
-  }
+  const pricing = getModelPricing(model);
   if (!pricing) return 0;
   const inputCost = (promptTokens / 1_000_000) * pricing.inputPer1M;
   const outputCost = (completionTokens / 1_000_000) * pricing.outputPer1M;

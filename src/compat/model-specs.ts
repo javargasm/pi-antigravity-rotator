@@ -1,3 +1,5 @@
+import { dynamicCatalog } from "../providers/google-antigravity/dynamic-catalog.js";
+
 export interface ModelSpec {
 	maxOutputTokens: number;
 	thinkingBudget: number; // -1 = adaptive (model decides), >=0 = fixed
@@ -41,7 +43,11 @@ let modelSpecsOverride: Record<string, ModelSpec> | null = null;
  * Pass `null` to restore defaults. Called once at startup from index.ts.
  */
 export function setModelSpecsOverride(specs: Record<string, ModelSpec> | null): void {
-	modelSpecsOverride = specs && Object.keys(specs).length > 0 ? specs : null;
+	modelSpecsOverride = specs && Object.keys(specs).length > 0
+		? Object.fromEntries(
+			Object.entries(specs).map(([key, spec]) => [key.toLowerCase(), spec]),
+		)
+		: null;
 }
 
 export function getActiveModelSpecs(): Record<string, ModelSpec> {
@@ -61,11 +67,21 @@ export function getModelFamily(model: string): "claude" | "gemini" | "unknown" {
 }
 
 export function getModelSpec(model: string): ModelSpec {
-	const specs = getActiveModelSpecs();
 	const lower = model.toLowerCase();
-	if (specs[lower]) return specs[lower];
-	for (const [key, spec] of Object.entries(specs)) {
-		if (lower.includes(key)) return spec;
+	if (modelSpecsOverride) {
+		if (modelSpecsOverride[lower]) return modelSpecsOverride[lower];
+		for (const [key, spec] of Object.entries(modelSpecsOverride)) {
+			if (lower.includes(key)) return spec;
+		}
+	} else if (DEFAULT_MODEL_SPECS[lower]) {
+		return DEFAULT_MODEL_SPECS[lower];
+	}
+	const dynamicSpec = dynamicCatalog.getModelSpec(lower);
+	if (dynamicSpec) return dynamicSpec;
+	if (!modelSpecsOverride) {
+		for (const [key, spec] of Object.entries(DEFAULT_MODEL_SPECS)) {
+			if (lower.includes(key)) return spec;
+		}
 	}
 	const family = getModelFamily(model);
 	if (family === "claude") return { maxOutputTokens: CLAUDE_MAX_OUTPUT_TOKENS, thinkingBudget: CLAUDE_DEFAULT_THINKING_BUDGET, isThinking: true, contextWindow: 1_000_000 };

@@ -12,10 +12,13 @@ import {
   QUOTA_MODEL_KEYS,
 } from "../../types.js";
 import { fetchWithRetry } from "../../fetch-with-retry.js";
+import { getAccountIdentity } from "../../account-identity.js";
 import type { QuotaFetchContext } from "../adapter.js";
 import { DEFAULT_PROVIDER, getProviderProjectId } from "../credential-helpers.js";
 import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
 import { sortQuotaPools } from "../registry.js";
+
+import { dynamicCatalog, DynamicModelRegistry } from "./dynamic-catalog.js";
 
 /**
  * Extract per-model quotas from a Google quota response, preserving the
@@ -35,6 +38,15 @@ export function extractQuotas(
       for (const altKey of config.altKeys) {
         modelInfo = data.models[altKey];
         if (modelInfo) break;
+      }
+    }
+
+    if (!modelInfo) {
+      for (const [modelKey, info] of Object.entries(data.models)) {
+        if (DynamicModelRegistry.inferFamilyAndPool(modelKey).quotaPool === config.key) {
+          modelInfo = info;
+          break;
+        }
       }
     }
 
@@ -119,6 +131,15 @@ export async function fetchProviderQuota(
     }
 
     const data = (await response.json()) as GoogleQuotaResponse;
+    const newModels = dynamicCatalog.updateFromEndpointResponse(
+      data,
+      getAccountIdentity(account),
+    );
+    if (newModels > 0) {
+      ctx.log(
+        `${account.config.email}: discovered ${newModels} Antigravity model(s) from quota response`,
+      );
+    }
     const oldQuota = account.quota || [];
     const fresh = extractQuotas(data, oldQuota);
     // Drop the previous Antigravity entries so the new ones fully replace

@@ -28,6 +28,7 @@ import {
   sanitizeGeminiSchema,
   sanitizeClaudeViaGeminiSchema,
 } from "./compat/schema-sanitizer.js";
+import { dynamicCatalog } from "./providers/google-antigravity/dynamic-catalog.js";
 import {
   DEFAULT_MODEL_SPECS,
   setModelSpecsOverride,
@@ -515,6 +516,10 @@ function recordCompatOutcome(
     inputTokens: completion?.inputTokens ?? 0,
     outputTokens: completion?.outputTokens ?? 0,
   });
+  rotator.recordProxyEvent(
+    `[${context.requestId}] COMPAT END account=${context.label} model=${context.displayModelKey} status=${statusCode} ttfbMs=${ttfbMs} totalMs=${totalMs} inTokens=${completion?.inputTokens ?? 0} outTokens=${completion?.outputTokens ?? 0}`,
+    "info",
+  );
   logSpend({
     requestId: context.requestId,
     apiKeyHash: options?.apiKeyHash || null,
@@ -2089,23 +2094,44 @@ export interface OpenAIModelCatalogEntry {
   meta: Record<string, unknown>;
 }
 
+export interface CompatModelEntry {
+  id: string;
+  family: string;
+  ctx: number;
+  quotaPool: string;
+  multimodal: boolean;
+  tools: boolean;
+}
+
+export function getEffectiveAntigravityModels(): CompatModelEntry[] {
+  const dynamic = dynamicCatalog.getAllModels();
+  const seen = new Set(MODEL_CATALOG.map((model) => model.id.toLowerCase()));
+  const result: CompatModelEntry[] = MODEL_CATALOG.map((model) => ({ ...model }));
+  for (const m of dynamic) {
+    if (seen.has(m.id.toLowerCase())) continue;
+    seen.add(m.id.toLowerCase());
+    result.push({
+      id: m.id,
+      family: m.family,
+      ctx: m.ctx,
+      quotaPool: m.quotaPool,
+      multimodal: m.multimodal,
+      tools: m.tools,
+    });
+  }
+  return result;
+}
+
 /**
- * Build the full OpenAI-compatible model catalog (static Antigravity catalog
- * + active-provider models for Ollama, OpenAI Codex and OpenCode Zen).
+ * Build the OpenAI-compatible `/v1/models` catalog for the proxy.
  *
- * This is the single source of truth for "what models can the rotator route
- * today" and is consumed by:
- *   - the public /v1/models endpoint (OpenAI compat)
- *   - the admin /api/models endpoint (dashboard virtual key editor)
- *
- * Pass the live AccountRotator so dynamic provider catalogs (Ollama tags
- * fetched at startup, Codex base + discovered models) are included. Without
- * a rotator, only the static MODEL_CATALOG is returned.
+ * The static Antigravity baseline and dynamically-discovered Antigravity models
+ * are always included. An active rotator also contributes its other providers.
  */
 export function buildOpenAIModelCatalog(
   rotator?: AccountRotator,
 ): OpenAIModelCatalogEntry[] {
-  const catalog: OpenAIModelCatalogEntry[] = MODEL_CATALOG.map(
+  const catalog: OpenAIModelCatalogEntry[] = getEffectiveAntigravityModels().map(
     ({ id, ctx, family, quotaPool, multimodal, tools }) => ({
       id,
       object: "model",
@@ -2195,7 +2221,7 @@ export function serveOpenAIModels(
 
 export function serveGeminiModels(res: ServerResponse): void {
   writeJson(res, 200, {
-    models: MODEL_CATALOG.map(
+    models: getEffectiveAntigravityModels().map(
       ({ id, ctx, family, quotaPool, multimodal, tools }) => ({
         name: `models/${id}`,
         baseModelId: family,

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   type AccountConfig,
   type AccountRuntime,
@@ -9,7 +8,6 @@ import {
   type ModelQuota,
   type ModelRotationState,
   type PersistedState,
-  type ProviderCredential,
   type RoutingAccountDiagnostic,
   type RoutingModelDiagnostics,
   type RoutingRejectionReason,
@@ -17,8 +15,8 @@ import {
   type TokenBucket,
   type TokenUsageData,
   type TokenUsageTiered,
-  MODEL_PRICING,
   MODEL_TIER_ACCESS,
+  getModelPricing,
   QUOTA_USER_AGENT,
   REQUEST_GOOG_API_CLIENT,
   REQUEST_CLIENT_METADATA,
@@ -29,9 +27,11 @@ import {
   DEFAULT_QUOTA_POLL_INTERVAL_MS,
   MAX_QUOTA_POLL_INTERVAL_MS,
   MIN_QUOTA_POLL_INTERVAL_MS,
+  isStaticAntigravityModel,
   resolveQuotaModelKey,
   resolveDisplayModelKey,
 } from "./types.js";
+import { dynamicCatalog } from "./providers/google-antigravity/dynamic-catalog.js";
 import {
   reportFlagEvent,
   FLAG_PATTERNS,
@@ -88,59 +88,15 @@ import {
   parseRetryAfterMs,
   RESOURCE_EXHAUSTED_FALLBACK_MS,
 } from "./rate-limit-parser.js";
+import {
+  getAccountIdentity,
+  getProviderCredentialDetails,
+} from "./account-identity.js";
 
-function credentialFingerprint(secret?: string): string {
-  if (!secret) return "";
-  // SHA-256 is intentional: this is a non-secret deduplication fingerprint, not a
-  // password hash. It must be deterministic and fast (bcrypt/argon2 would be wrong here).
-  // codeql[js/insufficient-password-hash]
-  return createHash("sha256").update(secret).digest("hex").slice(0, 12);
-}
-
-export function getProviderCredentialDetails(
-  norm: AccountConfig,
-  cred?: ProviderCredential,
-): {
-  provider: string;
-  projectId: string;
-  providerAccountId: string;
-  secret: string;
-  fingerprint: string;
-} {
-  const provider = cred?.provider ?? DEFAULT_PROVIDER;
-  const projectId = getProviderProjectId(norm, provider);
-  let providerAccountId = cred?.providerAccountId || "";
-  let secret = cred?.refreshToken || cred?.apiKey || "";
-
-  if (provider === "google-antigravity") {
-    secret ||= norm.refreshToken || norm.apiKey || "";
-  } else if (provider === "openai-codex") {
-    providerAccountId ||= norm.codexAccountId || "";
-    secret ||= norm.codexRefreshToken || "";
-  }
-
-  const fingerprint = !projectId && !providerAccountId && secret ? credentialFingerprint(secret) : "";
-  return { provider, projectId, providerAccountId, secret, fingerprint };
-}
-
-export function getAccountIdentity(account: AccountConfig | AccountRuntime): string {
-  const config = "config" in account ? account.config : account;
-  const norm = normalizeAccountConfig(config);
-  const email = norm.email.toLowerCase().trim();
-  const creds = (norm.credentials ?? [])
-    .slice()
-    .sort((a, b) => a.provider.localeCompare(b.provider))
-    .map((c) => {
-      const details = getProviderCredentialDetails(norm, c);
-      return `${details.provider}:${details.projectId}:${details.providerAccountId}:${details.fingerprint}`;
-    })
-    .join("|");
-  if (!creds) {
-    const details = getProviderCredentialDetails(norm, { provider: DEFAULT_PROVIDER });
-    return `${email}#${details.provider}:${details.projectId}:${details.providerAccountId}:${details.fingerprint}`;
-  }
-  return `${email}#${creds}`;
-}
+export {
+  getAccountIdentity,
+  getProviderCredentialDetails,
+} from "./account-identity.js";
 
 export function areAccountIdentitiesCompatible(
   incomingConfig: AccountConfig,
@@ -904,6 +860,11 @@ export class AccountRotator {
     void this.refreshOllamaCatalogOnce().catch(() => {});
 
     const available = this.accounts.filter((a) => !a.disabled && !a.flagged);
+    dynamicCatalog.retainAccounts(
+      available
+        .filter((account) => hasCredential(account.config, DEFAULT_PROVIDER))
+        .map(getAccountIdentity),
+    );
     let quotaPublished = false;
     for (const account of available) {
       if (await this.pollAccountQuota(account)) {
@@ -1000,10 +961,13 @@ export class AccountRotator {
 
   // Get quota % for a specific model on an account. Returns -1 if no data.
   private getModelQuota(account: AccountRuntime, modelKey: string): number {
-    const q = account.quota.find((q) => q.modelKey === modelKey) ??
-      (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
+    const quotaKey = isStaticAntigravityModel(modelKey)
+      ? modelKey
+      : dynamicCatalog.resolveQuotaPool(modelKey) ?? modelKey;
+    const q = account.quota.find((q) => q.modelKey === quotaKey) ??
+      (quotaKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
         ? account.quota.find((candidate) => candidate.modelKey === CODEX_QUOTA_MODEL_KEY)
-        : modelKey.startsWith(`${OPENCODE_ZEN_PROVIDER_ID}:`)
+        : quotaKey.startsWith(`${OPENCODE_ZEN_PROVIDER_ID}:`)
           ? account.quota.find((candidate) => candidate.providerId === OPENCODE_ZEN_PROVIDER_ID)
           : undefined);
     if (!q) return -1;
@@ -1011,7 +975,7 @@ export class AccountRotator {
     // quota is fully exhausted (0%), the account cannot accept any requests
     // regardless of how much session quota remains. Treat it as 0 so the
     // account is skipped at all call sites that check `quota === 0`.
-    if (modelKey === "session") {
+    if (quotaKey === "session") {
       const weekly = account.quota.find((w) => w.modelKey === "weekly");
       if (weekly && weekly.percentRemaining === 0) return 0;
     }
@@ -1023,10 +987,13 @@ export class AccountRotator {
     account: AccountRuntime,
     modelKey: string,
   ): "fresh" | "5h" | "7d" {
-    const q = account.quota.find((q) => q.modelKey === modelKey) ??
-      (modelKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
+    const quotaKey = isStaticAntigravityModel(modelKey)
+      ? modelKey
+      : dynamicCatalog.resolveQuotaPool(modelKey) ?? modelKey;
+    const q = account.quota.find((q) => q.modelKey === quotaKey) ??
+      (quotaKey.startsWith(`${CODEX_QUOTA_MODEL_KEY}:`)
         ? account.quota.find((candidate) => candidate.modelKey === CODEX_QUOTA_MODEL_KEY)
-        : modelKey.startsWith(`${OPENCODE_ZEN_PROVIDER_ID}:`)
+        : quotaKey.startsWith(`${OPENCODE_ZEN_PROVIDER_ID}:`)
           ? account.quota.find((candidate) => candidate.providerId === OPENCODE_ZEN_PROVIDER_ID)
           : undefined);
     return q?.timerType ?? "fresh";
@@ -2888,17 +2855,7 @@ export class AccountRotator {
     let totalUsd = 0;
     const byModel: TokenUsageData["savings"]["byModel"] = {};
     for (const [model, totals] of Object.entries(modelTotals)) {
-      let pricing = MODEL_PRICING[model];
-      if (!pricing) {
-        const lower = model.toLowerCase();
-        if (lower.includes("opus")) pricing = MODEL_PRICING["claude-opus-4-6-thinking"];
-        else if (lower.includes("sonnet")) pricing = MODEL_PRICING["claude-sonnet-4-6"];
-        else if (lower.includes("3.8-flash")) pricing = MODEL_PRICING["gemini-3.8-flash-high"];
-        else if (lower.includes("3.7-flash")) pricing = MODEL_PRICING["gemini-3.7-flash-tiered"];
-        else if (lower.includes("3.6-flash")) pricing = MODEL_PRICING["gemini-3.6-flash-high"];
-        else if (lower.includes("flash")) pricing = MODEL_PRICING["gemini-3-flash"];
-        else if (lower.includes("pro")) pricing = MODEL_PRICING["gemini-3.1-pro"];
-      }
+      const pricing = getModelPricing(model);
       if (!pricing) continue;
       const inputUsd = (totals.input / 1_000_000) * pricing.inputPer1M;
       const outputUsd = (totals.output / 1_000_000) * pricing.outputPer1M;
@@ -3538,6 +3495,13 @@ export class AccountRotator {
     account: AccountRuntime,
     modelKey: string,
   ): boolean {
+    if (
+      !isStaticAntigravityModel(modelKey) &&
+      dynamicCatalog.wasDiscovered(modelKey) &&
+      !dynamicCatalog.hasModelForAccount(getAccountIdentity(account), modelKey)
+    ) {
+      return false;
+    }
     const providerId = getProviderIdForPoolKey(modelKey);
     return hasCredential(account.config, providerId) &&
       !account.invalidProviders?.[providerId] &&
@@ -3554,6 +3518,10 @@ export class AccountRotator {
   }
 
   private resolvePoolKeyForModel(model: string): string | null {
+    if (
+      !isStaticAntigravityModel(model) &&
+      dynamicCatalog.wasDiscovered(model)
+    ) return model.toLowerCase();
     const context = {
       ollamaModels: this.ollamaModels,
       codexModels: this.codexModels,

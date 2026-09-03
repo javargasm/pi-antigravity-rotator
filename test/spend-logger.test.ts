@@ -79,6 +79,36 @@ test("logSpend enqueues log without throwing and keeps queue empty when DB is no
   assert.equal(getSpendQueueSizeForTests(), 0);
 });
 
+test("logSpend uses dynamic family pricing in detailed cost metadata", () => {
+  const origDb = process.env.DATABASE_URL;
+  try {
+    process.env.DATABASE_URL = "postgres://localhost:5432/test";
+    resetSpendLoggerForTests();
+    logSpend({
+      model: "gemini-5.0-flash-future",
+      callType: "chat_completion",
+      status: "success",
+      promptTokens: 1_000_000,
+      completionTokens: 1_000_000,
+      startTime: new Date().toISOString(),
+      endTime: new Date().toISOString(),
+      durationMs: 100,
+    });
+
+    assert.deepEqual(getSpendQueueItemsForTests()[0].metadata?.costBreakdown, {
+      promptCostUsd: 0.75,
+      completionCostUsd: 3.75,
+      totalCostUsd: 4.5,
+      inputRatePer1M: 0.75,
+      outputRatePer1M: 3.75,
+    });
+  } finally {
+    if (origDb === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = origDb;
+    resetSpendLoggerForTests();
+  }
+});
+
 test("flushSpendLogs cleans queue when DB is not configured", async () => {
   await flushSpendLogs();
   assert.equal(getSpendQueueSizeForTests(), 0);
