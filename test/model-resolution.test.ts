@@ -234,6 +234,27 @@ describe("model resolution", () => {
 		})), [{ modelKey: "gemini", percentRemaining: 0 }]);
 	});
 
+	it("ignores malformed canonical quota and uses a valid family sibling", () => {
+		const quotas = extractQuotas({
+			models: {
+				gemini: {
+					quotaInfo: {
+						remainingFraction: 2,
+						resetTime: "2099-01-01T00:00:00Z",
+					},
+				},
+				"gemini-valid-sibling": {
+					quotaInfo: { remainingFraction: 0.9 },
+				},
+			},
+		}, []);
+
+		assert.deepEqual(quotas.map(({ modelKey, percentRemaining }) => ({
+			modelKey,
+			percentRemaining,
+		})), [{ modelKey: "gemini", percentRemaining: 90 }]);
+	});
+
 	it("uses provider-aware versioned Gemini pricing fallbacks", () => {
 		assert.equal(getModelPricing("google/gemini-3.8-flash-preview")?.inputPer1M, 0.75);
 		assert.equal(getModelPricing("google/gemini-3.7-flash-preview")?.inputPer1M, 0.75);

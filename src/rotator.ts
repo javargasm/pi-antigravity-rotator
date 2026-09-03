@@ -550,8 +550,8 @@ export class AccountRotator {
         }
       }
       this.migratePersistedQuotaStateKeys();
-      // Cap generic stale cooldowns to 30 min max from now. Antigravity's
-      // explicit Claude/Gemini reset deadlines must survive restarts intact.
+      // Cap explicit generic/non-Google cooldowns to 30 min. An unresolved key
+      // may be a dynamic Google model, so preserve it until catalog hydration.
       const maxCooldown = 30 * 60 * 1000;
       const now = Date.now();
       for (const account of this.accounts) {
@@ -561,6 +561,8 @@ export class AccountRotator {
           if (
             model !== "claude" &&
             model !== "gemini" &&
+            (model === "__default__" ||
+              getProviderIdForPoolKey(model) !== DEFAULT_PROVIDER) &&
             cooldown > now + maxCooldown
           ) {
             account.cooldownsByModel[model] = now + maxCooldown;
@@ -849,6 +851,9 @@ export class AccountRotator {
         try {
           await this.ensureValidTokenForProvider(account, pid);
           await getProviderAdapter(pid).fetchQuota(account, quotaCtx);
+          if (pid === DEFAULT_PROVIDER) {
+            this.migratePersistedQuotaStateKeys();
+          }
           quotaPublished = true;
         } catch {
           // One invalid provider credential must not suppress sibling pools.

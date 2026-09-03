@@ -942,6 +942,44 @@ describe("native Code Assist passthrough", () => {
 		}
 	});
 
+	it("preserves the last Google quota snapshot when a successful poll has no usable rows", async () => {
+		const account = makeAccount("malformed-quota@example.com", "project-safe");
+		account.quota = [{
+			modelKey: "gemini",
+			displayName: "Gemini",
+			percentRemaining: 80,
+			resetTime: null,
+			timerType: "fresh",
+			providerId: "google-antigravity",
+		}];
+		const originalQuota = structuredClone(account.quota);
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => new Response(JSON.stringify({
+			models: {
+				gemini: {
+					quotaInfo: {
+						remainingFraction: 2,
+						resetTime: "2099-01-01T00:00:00Z",
+					},
+				},
+			},
+		}), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		})) as typeof fetch;
+
+		try {
+			await fetchProviderQuota(account, {
+				log: () => {},
+				markFlagged: () => {},
+				reportQuotaPollFlag: () => {},
+			});
+			assert.deepEqual(account.quota, originalQuota);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	it("ignores a stale quota 401 after replacement credentials arrive during body read", async () => {
 		const account = makeAccount("stale-quota-error@example.com", "shared-project");
 		const accountId = getAccountIdentity(account);
