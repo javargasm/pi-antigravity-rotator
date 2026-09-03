@@ -9,13 +9,13 @@ Connect Roo Code (VS Code extension) to tuxevil-rotator using the OpenAI Compati
 3. In the **API Provider** dropdown, select **"OpenAI Compatible"**
 4. Set **Base URL**: `http://localhost:51200/v1`
 5. Set **API Key**: `tuxevil` (or your `rk-...` Virtual Key)
-6. Set **Model ID**: e.g. `gemini-3.6-flash-high`
+6. Set **Model ID**: e.g. `gemini-3.8-flash-high`
 
 ## Available Models
 
 ```
+gemini-3.8-flash-high     gemini-3.8-flash-medium    gemini-3.8-flash-low
 gemini-3.6-flash-high     gemini-3.6-flash-medium    gemini-3.6-flash-low
-gemini-3.5-flash-high     gemini-3.5-flash-medium    gemini-3.5-flash-low
 gemini-3.1-pro-high       gemini-3.1-pro-low
 claude-sonnet-4-6         claude-opus-4-6-thinking
 gpt-oss-120b-medium
@@ -30,7 +30,7 @@ Configure the **Model Configuration** section to match actual capabilities:
 | Setting | Recommended |
 |---------|-------------|
 | Max Output Tokens | `65536` |
-| Context Window | `200000` |
+| Context Window | `1000000` |
 | Image Support | `true` |
 | Computer Use | `false` |
 

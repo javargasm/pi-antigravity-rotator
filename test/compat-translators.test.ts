@@ -23,7 +23,7 @@ type AntigravityBodyWithRequest = ReturnType<typeof openAIToAntigravityBody> & {
 describe("translators component", () => {
 	it("normalizes OpenAI Responses prompt into input", () => {
 		const normalized = normalizeOpenAIResponsesRequest({
-			model: "gemini-3.5-flash",
+			model: "gemini-3.8-flash-high",
 			prompt: "ping",
 		}) as { input: unknown };
 		assert.equal(normalized.input, "ping");
@@ -70,12 +70,29 @@ describe("translators component", () => {
 
 	it("normalizes loose non-array messages into OpenAI chat messages", () => {
 		const normalized = normalizeOpenAIChatCompletionRequest({
-			model: "gemini-3.5-flash-high",
+			model: "gemini-3.8-flash-high",
 			messages: { role: "user", content: [{ type: "input_text", text: "hola" }] },
 		}) as { messages: unknown[] };
 		assert.deepEqual(normalized.messages, [
 			{ role: "user", content: [{ type: "text", text: "hola" }] },
 		]);
+	});
+});
+
+describe("gemini-3.8-flash native reasoning levels", () => {
+	it("keeps low/medium/high model ids unchanged and thinking adaptive", () => {
+		for (const variant of ["low", "medium", "high"]) {
+			const id = `gemini-3.8-flash-${variant}`;
+			const body = openAIToAntigravityBody({
+				model: id,
+				messages: [{ role: "user", content: "ping" }],
+				reasoning_effort: "high",
+			}) as AntigravityBodyWithRequest;
+			assert.equal(body.model, id);
+			assert.deepEqual(body.request.generationConfig?.thinkingConfig, {
+				includeThoughts: true,
+			});
+		}
 	});
 });
 
@@ -169,7 +186,7 @@ describe("gemini-3.7-flash-tiered thinkingLevel mapping", () => {
 
 	it("does not change other models' effort handling", () => {
 		const body = openAIToAntigravityBody({
-			model: "gemini-3.5-flash",
+			model: "gemini-3.6-flash-high",
 			messages: [{ role: "user", content: "ping" }],
 			reasoning_effort: "high",
 		}) as AntigravityBodyWithRequest;

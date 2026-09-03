@@ -17,8 +17,8 @@ Edit `~/.openclaw/openclaw.json`:
         "api": "openai",
         "models": [
           {
-            "id": "gemini-3.6-flash-high",
-            "name": "Gemini 3.6 Flash High",
+            "id": "gemini-3.8-flash-high",
+            "name": "Gemini 3.8 Flash High",
             "reasoning": true,
             "input": ["text", "image"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
@@ -50,7 +50,7 @@ Edit `~/.openclaw/openclaw.json`:
   "agents": {
     "defaults": {
       "model": {
-        "primary": "antigravity/gemini-3.6-flash-high"
+        "primary": "antigravity/gemini-3.8-flash-high"
       }
     }
   }
@@ -106,7 +106,7 @@ You can also store keys in the auth profiles file at `~/.openclaw/agents/main/ag
 
 ```bash
 openclaw models list                          # List configured models
-openclaw models set antigravity/gemini-3.6-flash-high  # Switch default model
+openclaw models set antigravity/gemini-3.8-flash-high  # Switch default model
 openclaw status                               # Check gateway status
 ```
 

@@ -10,13 +10,14 @@ curl http://localhost:51200/v1/models
 
 | Model | Family | `owned_by` | Notes |
 |-------|--------|------------|-------|
+| `gemini-3.8-flash-high` | Gemini 3.8 Flash | `google-antigravity` | High reasoning level |
+| `gemini-3.8-flash-medium` | Gemini 3.8 Flash | `google-antigravity` | Medium reasoning level |
+| `gemini-3.8-flash-low` | Gemini 3.8 Flash | `google-antigravity` | Low reasoning level |
+| `gemini-3.7-flash-tiered` | Gemini 3.7 Flash | `google-antigravity` | Adaptive reasoning level |
 | `gemini-3.6-flash-high` | Gemini 3.6 Flash | `google-antigravity` | High thinking budget |
 | `gemini-3.6-flash-medium` | Gemini 3.6 Flash | `google-antigravity` | Medium thinking budget |
 | `gemini-3.6-flash-low` | Gemini 3.6 Flash | `google-antigravity` | Low thinking budget |
 | `gemini-3.6-flash-tiered` | Gemini 3.6 Flash | `google-antigravity` | Auto-selects tier based on quota |
-| `gemini-3.5-flash-high` | Gemini 3.5 Flash | `google-antigravity` | |
-| `gemini-3.5-flash-medium` | Gemini 3.5 Flash | `google-antigravity` | |
-| `gemini-3.5-flash-low` | Gemini 3.5 Flash | `google-antigravity` | |
 | `gemini-3.1-pro-high` | Gemini 3.1 Pro | `google-antigravity` | |
 | `gemini-3.1-pro-low` | Gemini 3.1 Pro | `google-antigravity` | |
 | `claude-sonnet-4-6` | Claude | `google-antigravity` | Via Antigravity |
@@ -28,7 +29,7 @@ curl http://localhost:51200/v1/models
 | `deepseek-v4-flash-free`, `nemotron-3.5-lightning-free`, `nemotron-3-ultra-free`, `mimo-v2.5-free`, `hy3-free` | OpenCode Zen | `opencode-zen` | Free-tier models via OpenCode Zen API (`https://opencode.ai/zen/v1`) |
 | `gpt-oss:20b`, `gpt-oss:120b`, `gemma4:31b`, `kimi-k3`, `minimax-m3`, `deepseek-v4-pro`, ... | Ollama Cloud | `ollama` | Catalog fetched at startup from `https://ollama.com/api/tags` |
 
-Short aliases (e.g. `gemini-3.6-flash`, `gemini-3.1-pro`, `claude-sonnet`) are also accepted and resolve to sensible defaults.
+Short aliases (e.g. `gemini-3.6-flash`, `gemini-3.1-pro`, `claude-sonnet`) are also accepted and resolve to sensible defaults. Gemini 3.8 uses the exact `-low`, `-medium`, or `-high` Antigravity model ID.
 
 ---
 
@@ -40,7 +41,7 @@ Short aliases (e.g. `gemini-3.6-flash`, `gemini-3.1-pro`, `claude-sonnet`) are a
 curl http://localhost:51200/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "gemini-3.6-flash-high",
+    "model": "gemini-3.8-flash-high",
     "messages": [{"role": "user", "content": "Say pong"}],
     "stream": false
   }'
@@ -69,7 +70,7 @@ and never crosses pool boundaries.
 curl http://localhost:51200/v1/responses \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "gemini-3.6-flash-high",
+    "model": "gemini-3.8-flash-high",
     "input": [{"role": "user", "content": [{"type": "input_text", "text": "Say pong"}]}],
     "stream": false
   }'

@@ -8,7 +8,7 @@ Connect Cursor IDE to tuxevil-rotator to use Google Antigravity models directly 
 2. Search for **"OpenAI"** or navigate to **Models > OpenAI API Key**
 3. Set **Override OpenAI Base URL**: `http://localhost:51200/v1`
 4. Set **OpenAI API Key**: `tuxevil` (or a Virtual Key `rk-...` if you have PostgreSQL configured)
-5. In the model selector, choose or type a model name (e.g. `gemini-3.6-flash-high`)
+5. In the model selector, choose or type a model name (e.g. `gemini-3.8-flash-high`)
 
 ## Alternative: Environment Variables
 
@@ -22,8 +22,8 @@ export OPENAI_API_KEY=tuxevil
 ## Available Models
 
 ```
+gemini-3.8-flash-high     gemini-3.8-flash-medium    gemini-3.8-flash-low
 gemini-3.6-flash-high     gemini-3.6-flash-medium    gemini-3.6-flash-low
-gemini-3.5-flash-high     gemini-3.5-flash-medium    gemini-3.5-flash-low
 gemini-3.1-pro-high       gemini-3.1-pro-low
 claude-sonnet-4-6         claude-opus-4-6-thinking
 gpt-oss-120b-medium

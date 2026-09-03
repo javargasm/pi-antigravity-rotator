@@ -40,7 +40,7 @@ async function main() {
             headers: {
                 "Authorization": `Bearer ${tokenData.access_token}`,
                 "Content-Type": "application/json",
-                "User-Agent": "antigravity/1.107.0 darwin/arm64"
+                "User-Agent": "antigravity/2.11.0 darwin/arm64"
             },
             body: JSON.stringify(body)
         });

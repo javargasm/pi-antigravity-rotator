@@ -295,20 +295,20 @@ describe("dashboard", () => {
     // Gemini Pool (Blue spectrum)
     const gemini31High = getModelColor("gemini-3.1-pro-high");
     const gemini31Low = getModelColor("gemini-3.1-pro-low");
-    const gemini35High = getModelColor("gemini-3.5-flash-high");
-    const gemini35Low = getModelColor("gemini-3.5-flash-low");
+    const gemini38High = getModelColor("gemini-3.8-flash-high");
+    const gemini38Low = getModelColor("gemini-3.8-flash-low");
     const gemini36High = getModelColor("gemini-3.6-flash-high");
     const gemini36Low = getModelColor("gemini-3.6-flash-low");
     const gemini3Flash = getModelColor("gemini-3-flash");
 
     // Same family must share same color
     assert.equal(gemini31High, gemini31Low);
-    assert.equal(gemini35High, gemini35Low);
+    assert.equal(gemini38High, gemini38Low);
     assert.equal(gemini36High, gemini36Low);
 
     // Different families must have distinct colors
-    assert.notEqual(gemini31High, gemini35High);
-    assert.notEqual(gemini35High, gemini36High);
+    assert.notEqual(gemini31High, gemini38High);
+    assert.notEqual(gemini38High, gemini36High);
     assert.notEqual(gemini36High, gemini3Flash);
 
     // Ollama Pool (Green spectrum)
@@ -481,6 +481,62 @@ describe("dashboard", () => {
       },
     ]);
     assert.equal(savings.byModel["gemini-3.7-flash-tiered"].totalUsd, 4.5);
+  });
+
+  it("prices every native gemini-3.8-flash level with its own rates", () => {
+    const js = readDashboardJs();
+    const sandbox: Record<string, unknown> = {
+      window: { location: { search: "" } } as Record<string, unknown>,
+      URLSearchParams: globalThis.URLSearchParams,
+      EventSource: function () {},
+      fetch: () => Promise.resolve(),
+      setInterval: () => {},
+      clearInterval: () => {},
+      setTimeout: () => {},
+      clearTimeout: () => {},
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: {
+        getElementById: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener: () => {},
+      },
+    };
+    const script = new Script(
+      js +
+        "\nthis.getModelPricingClient = getModelPricingClient;" +
+        "\nthis.calcSavingsFromBuckets = calcSavingsFromBuckets;",
+    );
+    script.runInNewContext(sandbox);
+
+    const getModelPricingClient = sandbox.getModelPricingClient as (
+      model: string,
+    ) => { input: number; output: number } | null;
+    const calcSavingsFromBuckets = sandbox.calcSavingsFromBuckets as (
+      buckets: Array<Record<string, unknown>>,
+    ) => { byModel: Record<string, { totalUsd: number }> };
+
+    for (const variant of ["low", "medium", "high"]) {
+      const model = `gemini-3.8-flash-${variant}`;
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(getModelPricingClient(model))),
+        { input: 0.75, output: 3.75 },
+      );
+    }
+    assert.equal(
+      getModelPricingClient("google/gemini-3.8-flash-high")?.output,
+      3.75,
+    );
+
+    const savings = calcSavingsFromBuckets([{
+      byModel: {
+        "gemini-3.8-flash-high": {
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+        },
+      },
+    }]);
+    assert.equal(savings.byModel["gemini-3.8-flash-high"].totalUsd, 4.5);
   });
 
   it("does not offer kickstart controls for Codex quota pools", () => {

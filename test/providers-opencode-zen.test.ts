@@ -46,7 +46,7 @@ describe("OpenCode Zen Provider Adapter", () => {
 
     assert.equal(isOpenCodeZenModel("custom-model-free"), true);
     assert.equal(isOpenCodeZenModel("gpt-4o"), false);
-    assert.equal(isOpenCodeZenModel("gemini-3.5-flash"), false);
+    assert.equal(isOpenCodeZenModel("gemini-3.8-flash-high"), false);
   });
 
   it("validates credentials correctly", async () => {

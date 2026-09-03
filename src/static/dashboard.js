@@ -1079,16 +1079,15 @@ var TOKEN_MODEL_COLORS = {
   "gemini-3.1-pro-low": "#1d4ed8",
   "gemini-3-pro-high": "#1d4ed8",
   "gemini-3-pro-low": "#1d4ed8",
-  "gemini-3.5-flash": "#2563eb", // Gemini 3.5 Flash (Azul rey medio)
-  "gemini-3.5-flash-high": "#2563eb",
-  "gemini-3.5-flash-medium": "#2563eb",
-  "gemini-3.5-flash-low": "#2563eb",
-  "gemini-3-flash-agent": "#2563eb",
   "gemini-3.6-flash": "#38bdf8", // Gemini 3.6 Flash (Azul cielo brillante)
   "gemini-3.6-flash-high": "#38bdf8",
   "gemini-3.6-flash-medium": "#38bdf8",
   "gemini-3.6-flash-low": "#38bdf8",
   "gemini-3.6-flash-tiered": "#38bdf8",
+  "gemini-3.8-flash-high": "#0284c7", // Gemini 3.8 Flash (Azul cielo profundo)
+  "gemini-3.8-flash-medium": "#0284c7",
+  "gemini-3.8-flash-low": "#0284c7",
+  "gemini-3-flash-agent": "#93c5fd",
   "gemini-3-flash": "#93c5fd", // Gemini 3 Flash (Azul pastel claro)
 
   // Codex Pool (Amarillos) — de más caro a más barato
@@ -1132,7 +1131,7 @@ function getModelColor(model) {
 
   // Gemini pool (Azules)
   if (lower.indexOf("3.1-pro") !== -1 || lower.indexOf("3-pro") !== -1) return "#1d4ed8";
-  if (lower.indexOf("3.5-flash") !== -1) return "#2563eb";
+  if (lower.indexOf("3.8-flash") !== -1) return "#0284c7";
   if (lower.indexOf("3.6-flash") !== -1) return "#38bdf8";
   if (lower.indexOf("gemini") !== -1 || lower.indexOf("3-flash") !== -1) return "#93c5fd";
 
@@ -1171,10 +1170,6 @@ var MODEL_PRICING_CLIENT = {
   "gemini-3.1-pro-low": { input: 2.0, output: 12.0 },
   "gemini-3.1-pro-high": { input: 2.0, output: 12.0 },
   "gemini-3-flash": { input: 0.5, output: 3.0 },
-  "gemini-3.5-flash": { input: 1.5, output: 9.0 },
-  "gemini-3.5-flash-low": { input: 1.5, output: 9.0 },
-  "gemini-3.5-flash-medium": { input: 1.5, output: 9.0 },
-  "gemini-3.5-flash-high": { input: 1.5, output: 9.0 },
   "gemini-3.6-flash": { input: 1.5, output: 7.5 },
   "gemini-3.6-flash-high": { input: 1.5, output: 7.5 },
   "gemini-3.6-flash-medium": { input: 1.5, output: 7.5 },
@@ -1184,6 +1179,11 @@ var MODEL_PRICING_CLIENT = {
   // Introductory rates through 2026-12-31; from 2027-01-01 these double to
   // input 1.50 / output 7.50 per 1M tokens — update this entry then.
   "gemini-3.7-flash-tiered": { input: 0.75, output: 3.75 },
+  // Gemini 3.8 Flash introductory rates through 2026-12-31; these also
+  // double to input 1.50 / output 7.50 on 2027-01-01.
+  "gemini-3.8-flash-low": { input: 0.75, output: 3.75 },
+  "gemini-3.8-flash-medium": { input: 0.75, output: 3.75 },
+  "gemini-3.8-flash-high": { input: 0.75, output: 3.75 },
   "gpt-oss-120b-medium": { input: 2.0, output: 10.0 },
   // OpenAI Codex GPT-5.6 models — mirrors MODEL_PRICING in types.ts.
   "gpt-5.6-sol": { input: 5.0, output: 30.0 },
@@ -1223,9 +1223,9 @@ function getModelPricingClient(m) {
   var lower = (m || "").toLowerCase();
   if (lower.indexOf("opus") !== -1) return MODEL_PRICING_CLIENT["claude-opus-4-6-thinking"];
   if (lower.indexOf("sonnet") !== -1) return MODEL_PRICING_CLIENT["claude-sonnet-4-6"];
+  if (lower.indexOf("3.8-flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.8-flash-high"];
   if (lower.indexOf("3.7-flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.7-flash-tiered"];
   if (lower.indexOf("3.6-flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.6-flash-high"];
-  if (lower.indexOf("3.5-flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.5-flash-high"];
   if (lower.indexOf("flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3-flash"];
   if (lower.indexOf("pro") !== -1) return MODEL_PRICING_CLIENT["gemini-3.1-pro"];
   return null;
@@ -1953,7 +1953,7 @@ function renderForecastPanel(data) {
   function resolveQuotaPoolKey(displayKey) {
     var lower = String(displayKey).toLowerCase();
     if (lower.indexOf("gemini-3.6-flash") !== -1) return "gemini-3.6-flash";
-    if (lower.indexOf("gemini-3.5-flash") !== -1 || lower === "gemini-3-flash") return "gemini-3.5-flash";
+    if (lower === "gemini-3-flash" || lower === "gemini-3-flash-agent") return "gemini-3-flash";
     if (lower.indexOf("gemini-3.1-pro") !== -1 || lower.indexOf("gemini-pro") !== -1) return "gemini-3.1-pro";
     if (lower.indexOf("claude") !== -1 || lower.indexOf("gpt-oss") !== -1) return "claude-opus-4-6-thinking";
     return displayKey;
@@ -1996,7 +1996,7 @@ function renderForecastPanel(data) {
     var displayName = m;
     if (m === "claude-opus-4-6-thinking") displayName = "claude";
     if (m === "gemini-3.1-pro") displayName = "gemini-3.1-pro";
-    if (m === "gemini-3.5-flash") displayName = "gemini-3.5-flash";
+    if (m === "gemini-3-flash") displayName = "gemini-3-flash";
 
     var minResetRemaining = null;
     q.entries.forEach(function (entry) {

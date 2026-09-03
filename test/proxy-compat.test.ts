@@ -200,7 +200,7 @@ describe("proxy compat integration", () => {
 			assert.match(capturesDaily[0].body, /"contents":\[\{"role":"user","parts":\[\{"text":"ping"\}\]\}\]/);
 			assert.match(capturesDaily[0].body, /"userAgent":"antigravity"/);
 			assert.equal(capturesDaily[0].headers.authorization, "Bearer access-token");
-			assert.equal(capturesDaily[0].headers["user-agent"], "antigravity/1.107.0 darwin/arm64");
+			assert.equal(capturesDaily[0].headers["user-agent"], "antigravity/2.11.0 darwin/arm64");
 			assert.equal(capturesDaily[0].headers["x-goog-api-client"], "google-cloud-sdk vscode_cloudshelleditor/0.1");
 			assert.equal(capturesDaily[0].headers["client-metadata"], "{\"ideType\":\"ANTIGRAVITY\",\"platform\":\"MACOS\",\"pluginType\":\"GEMINI\"}");
 		} finally {

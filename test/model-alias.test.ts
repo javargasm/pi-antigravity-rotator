@@ -12,18 +12,6 @@ describe("applyModelAlias", () => {
 		assert.equal(applyModelAlias("some-unknown-model"), "some-unknown-model");
 	});
 
-	it("translates gemini-3.5-flash-high to gemini-3-flash-agent (default)", () => {
-		assert.equal(applyModelAlias("gemini-3.5-flash-high"), "gemini-3-flash-agent");
-	});
-
-	it("translates gemini-3.5-flash to gemini-3-flash-agent (default)", () => {
-		assert.equal(applyModelAlias("gemini-3.5-flash"), "gemini-3-flash-agent");
-	});
-
-	it("translates gemini-3.5-flash-medium to gemini-3-flash-agent (default)", () => {
-		assert.equal(applyModelAlias("gemini-3.5-flash-medium"), "gemini-3-flash-agent");
-	});
-
 	it("translates gemini-3.1-pro-high to gemini-pro-agent (default)", () => {
 		assert.equal(applyModelAlias("gemini-3.1-pro-high"), "gemini-pro-agent");
 	});
@@ -41,14 +29,14 @@ describe("applyModelAlias", () => {
 			"my-model": "upstream-model",
 		});
 		assert.equal(applyModelAlias("my-model"), "upstream-model");
-		// Default gemini alias is no longer active
-		assert.equal(applyModelAlias("gemini-3.5-flash-high"), "gemini-3.5-flash-high");
+		// Default Gemini alias is no longer active.
+		assert.equal(applyModelAlias("gemini-3.1-pro-high"), "gemini-3.1-pro-high");
 	});
 
 	it("passing null restores the default alias table", () => {
 		setModelAliasesOverride({ "my-model": "upstream-model" });
 		setModelAliasesOverride(null);
-		assert.equal(applyModelAlias("gemini-3.5-flash-high"), "gemini-3-flash-agent");
+		assert.equal(applyModelAlias("gemini-3.1-pro-high"), "gemini-pro-agent");
 	});
 
 	it("returns gemini-3.7-flash-tiered unchanged (no alias configured)", () => {
@@ -61,6 +49,13 @@ describe("applyModelAlias", () => {
 	it("creates no aliases for virtual gemini-3.7-flash low/medium/high", () => {
 		for (const variant of ["low", "medium", "high"]) {
 			const id = `gemini-3.7-flash-${variant}`;
+			assert.equal(applyModelAlias(id), id);
+		}
+	});
+
+	it("passes native gemini-3.8-flash model ids through unchanged", () => {
+		for (const variant of ["low", "medium", "high"]) {
+			const id = `gemini-3.8-flash-${variant}`;
 			assert.equal(applyModelAlias(id), id);
 		}
 	});

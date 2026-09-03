@@ -19,7 +19,7 @@ import { logger } from "../src/logger.js";
 describe("compat adapters", () => {
 	it("normalizes OpenAI Responses prompt into input", () => {
 		const normalized = normalizeOpenAIResponsesRequest({
-			model: "gemini-3.5-flash",
+			model: "gemini-3.8-flash-high",
 			prompt: "ping",
 		}) as { input: unknown };
 		assert.equal(normalized.input, "ping");
@@ -76,7 +76,7 @@ describe("compat adapters", () => {
 
 	it("normalizes OpenAI Responses-style input into chat messages", () => {
 		const normalized = normalizeOpenAIChatCompletionRequest({
-			model: "gemini-3.5-flash",
+			model: "gemini-3.8-flash-high",
 			input: [{ role: "user", content: [{ type: "input_text", text: "ping" }] }],
 		});
 		const result = validateOpenAIChatCompletionRequest(normalized);
@@ -98,7 +98,7 @@ describe("compat adapters", () => {
 
 	it("normalizes loose non-array messages into OpenAI chat messages", () => {
 		const normalized = normalizeOpenAIChatCompletionRequest({
-			model: "gemini-3.5-flash-high",
+			model: "gemini-3.8-flash-high",
 			messages: { role: "user", content: [{ type: "input_text", text: "hola" }] },
 		});
 		const result = validateOpenAIChatCompletionRequest(normalized);

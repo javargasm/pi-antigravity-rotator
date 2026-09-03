@@ -271,8 +271,11 @@ document.addEventListener("click", function(e) {
 var availableKeys = [];
 var selectedKeyValues = [];
 var availableModels = [
+  { value: "gemini-3.8-flash-high", label: "gemini-3.8-flash-high" },
+  { value: "gemini-3.8-flash-medium", label: "gemini-3.8-flash-medium" },
+  { value: "gemini-3.8-flash-low", label: "gemini-3.8-flash-low" },
+  { value: "gemini-3.7-flash-tiered", label: "gemini-3.7-flash-tiered" },
   { value: "gemini-3.6-flash", label: "gemini-3.6-flash" },
-  { value: "gemini-3.5-flash", label: "gemini-3.5-flash" },
   { value: "gemini-3.1-pro", label: "gemini-3.1-pro" },
   { value: "claude-sonnet-4-6", label: "claude-sonnet-4-6" },
   { value: "claude-opus-4-6-thinking", label: "claude-opus-4-6-thinking" },

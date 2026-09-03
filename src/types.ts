@@ -146,8 +146,8 @@ export interface Config {
   // matched case-insensitively. When set, replaces the bundled defaults entirely.
   modelSpecs?: Record<string, ModelSpecConfig>;
   // Override model-id aliases used to translate the operator-facing name
-  // (e.g. "gemini-3.5-flash-high") to the upstream Antigravity name
-  // (e.g. "gemini-3-flash-agent"). When set, replaces the bundled defaults.
+  // (e.g. "gemini-3.1-pro-high") to the upstream Antigravity name
+  // (e.g. "gemini-pro-agent"). When set, replaces the bundled defaults.
   modelAliases?: Record<string, string>;
 }
 
@@ -161,9 +161,6 @@ export const MAX_QUOTA_POLL_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // updating. Operators can override via Config.modelAliases in accounts.json.
 const DEFAULT_MODEL_ALIASES: Record<string, string> = {
   "gemini-3.1-pro-high": "gemini-pro-agent",
-  "gemini-3.5-flash": "gemini-3-flash-agent",
-  "gemini-3.5-flash-high": "gemini-3-flash-agent",
-  "gemini-3.5-flash-medium": "gemini-3-flash-agent",
   "gpt-oss-120b": "gpt-oss-120b-medium",
 };
 let modelAliasesOverride: Record<string, string> | null = null;
@@ -266,10 +263,6 @@ export const QUOTA_MODEL_KEYS: Record<
       "gemini-3.1-pro-high",
       "gemini-3-pro-high",
       "gemini-3-pro-low",
-      "gemini-3.5-flash",
-      "gemini-3.5-flash-low",
-      "gemini-3.5-flash-medium",
-      "gemini-3.5-flash-high",
       "gemini-3-flash-agent",
       "gemini-3-flash",
       "gemini-3.6-flash",
@@ -278,6 +271,9 @@ export const QUOTA_MODEL_KEYS: Record<
       "gemini-3.6-flash-low",
       "gemini-3.6-flash-tiered",
       "gemini-3.7-flash-tiered",
+      "gemini-3.8-flash-low",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-high",
     ],
     display: "Gemini",
   },
@@ -319,7 +315,7 @@ export function resolveQuotaModelKey(requestModel: string): string | null {
 export function resolveDisplayModelKey(requestModel: string): string {
   const lower = requestModel.toLowerCase();
   // Explicit agent and gpt-oss overrides
-  if (lower.includes("gemini-3-flash-agent")) return "gemini-3.5-flash-high";
+  if (lower.includes("gemini-3-flash-agent")) return "gemini-3-flash";
   if (lower.includes("gpt-oss-120b")) return "gpt-oss-120b-medium";
 
   // Claude — distinguish sonnet vs opus
@@ -333,6 +329,16 @@ export function resolveDisplayModelKey(requestModel: string): string {
     if (lower.includes("-low")) return "gemini-3.1-pro-low";
     if (lower.includes("-high")) return "gemini-3.1-pro-high";
     return "gemini-3.1-pro"; // unspecified variant
+  }
+  // Gemini 3.8 Flash — Antigravity exposes separate reasoning-level ids.
+  if (
+    lower.includes("gemini") &&
+    lower.includes("3.8") &&
+    lower.includes("flash")
+  ) {
+    if (lower.includes("-low")) return "gemini-3.8-flash-low";
+    if (lower.includes("-medium")) return "gemini-3.8-flash-medium";
+    if (lower.includes("-high")) return "gemini-3.8-flash-high";
   }
   // Gemini 3.6 Flash — distinguish variants
   if (
@@ -356,17 +362,6 @@ export function resolveDisplayModelKey(requestModel: string): string {
     lower.includes("-tiered")
   ) {
     return "gemini-3.7-flash-tiered";
-  }
-  // Gemini 3.5 Flash — distinguish medium vs high
-  if (
-    lower.includes("gemini") &&
-    lower.includes("3.5") &&
-    lower.includes("flash")
-  ) {
-    if (lower.includes("-low") || lower.includes("-medium"))
-      return "gemini-3.5-flash-medium";
-    if (lower.includes("-high")) return "gemini-3.5-flash-high";
-    return "gemini-3.5-flash"; // unspecified variant
   }
   // Flash
   if (lower.includes("gemini") && lower.includes("flash"))
@@ -712,30 +707,6 @@ export const MODEL_PRICING: Record<
   "gemini-3.1-pro-low": { inputPer1M: 2.0, outputPer1M: 12.0 },
   "gemini-3.1-pro-high": { inputPer1M: 2.0, outputPer1M: 12.0 },
   "gemini-3-flash": { inputPer1M: 0.5, outputPer1M: 3.0 },
-  "gemini-3.5-flash": {
-    inputPer1M: 1.5,
-    outputPer1M: 9.0,
-    cachingPer1M: 0.15,
-    cachingStoragePer1MPerHour: 1.0,
-  },
-  "gemini-3.5-flash-low": {
-    inputPer1M: 1.5,
-    outputPer1M: 9.0,
-    cachingPer1M: 0.15,
-    cachingStoragePer1MPerHour: 1.0,
-  },
-  "gemini-3.5-flash-medium": {
-    inputPer1M: 1.5,
-    outputPer1M: 9.0,
-    cachingPer1M: 0.15,
-    cachingStoragePer1MPerHour: 1.0,
-  },
-  "gemini-3.5-flash-high": {
-    inputPer1M: 1.5,
-    outputPer1M: 9.0,
-    cachingPer1M: 0.15,
-    cachingStoragePer1MPerHour: 1.0,
-  },
   "gemini-3.6-flash": {
     inputPer1M: 1.5,
     outputPer1M: 7.5,
@@ -773,6 +744,27 @@ export const MODEL_PRICING: Record<
   // storage 1.00 (USD per 1M tokens / per 1M tokens/hour) — update this
   // static entry when the introductory period ends.
   "gemini-3.7-flash-tiered": {
+    inputPer1M: 0.75,
+    outputPer1M: 3.75,
+    cachingPer1M: 0.075,
+    cachingStoragePer1MPerHour: 0.5,
+  },
+  // Gemini 3.8 Flash — introductory public Gemini API pricing verified
+  // 2026-09-02. These rates double on 2027-01-01. Antigravity exposes
+  // separate low/medium/high model ids.
+  "gemini-3.8-flash-low": {
+    inputPer1M: 0.75,
+    outputPer1M: 3.75,
+    cachingPer1M: 0.075,
+    cachingStoragePer1MPerHour: 0.5,
+  },
+  "gemini-3.8-flash-medium": {
+    inputPer1M: 0.75,
+    outputPer1M: 3.75,
+    cachingPer1M: 0.075,
+    cachingStoragePer1MPerHour: 0.5,
+  },
+  "gemini-3.8-flash-high": {
     inputPer1M: 0.75,
     outputPer1M: 3.75,
     cachingPer1M: 0.075,
@@ -913,7 +905,7 @@ export const TAGS_CACHE_TTL_MS = 5 * 60 * 1000;
 export const ANTIGRAVITY_VERSION =
 	rotatorEnv("ANTIGRAVITY_VERSION") ||
 	process.env.PI_AI_ANTIGRAVITY_VERSION ||
-	"1.107.0";
+	"2.11.0";
 export const QUOTA_USER_AGENT =
 	rotatorEnv("QUOTA_USER_AGENT") ||
 	`antigravity/${ANTIGRAVITY_VERSION} darwin/arm64`;

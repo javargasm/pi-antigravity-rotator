@@ -19,10 +19,15 @@ describe("model resolution", () => {
 		assert.equal(resolveQuotaModelKey("gemini-3-flash"), "gemini");
 		assert.equal(resolveQuotaModelKey("google/gemini-flash-latest"), "gemini");
 		assert.equal(resolveQuotaModelKey("gemini-3-flash-agent"), "gemini");
-		assert.equal(resolveQuotaModelKey("gemini-3.5-flash-medium"), "gemini");
 		for (const variant of ["high", "medium", "low", "tiered"]) {
 			assert.equal(
 				resolveQuotaModelKey(`gemini-3.6-flash-${variant}`),
+				"gemini",
+			);
+		}
+		for (const variant of ["high", "medium", "low"]) {
+			assert.equal(
+				resolveQuotaModelKey(`gemini-3.8-flash-${variant}`),
 				"gemini",
 			);
 		}
@@ -48,9 +53,10 @@ describe("model resolution", () => {
 		assert.equal(resolveDisplayModelKey("gemini-3.1-pro-high"), "gemini-3.1-pro-high");
 		assert.equal(resolveDisplayModelKey("claude-sonnet-4-6"), "claude-sonnet-4-6");
 		assert.equal(resolveDisplayModelKey("claude-opus-4-6-thinking"), "claude-opus-4-6-thinking");
-		assert.equal(resolveDisplayModelKey("gemini-3-flash-agent"), "gemini-3.5-flash-high");
-		assert.equal(resolveDisplayModelKey("gemini-3.5-flash-medium"), "gemini-3.5-flash-medium");
-		assert.equal(resolveDisplayModelKey("gemini-3.5-flash-low"), "gemini-3.5-flash-medium");
+		assert.equal(resolveDisplayModelKey("gemini-3-flash-agent"), "gemini-3-flash");
+		assert.equal(resolveDisplayModelKey("gemini-3.8-flash-high"), "gemini-3.8-flash-high");
+		assert.equal(resolveDisplayModelKey("gemini-3.8-flash-medium"), "gemini-3.8-flash-medium");
+		assert.equal(resolveDisplayModelKey("gemini-3.8-flash-low"), "gemini-3.8-flash-low");
 		assert.equal(resolveDisplayModelKey("gemini-3.6-flash-high"), "gemini-3.6-flash-high");
 		assert.equal(resolveDisplayModelKey("gemini-3.6-flash-medium"), "gemini-3.6-flash-medium");
 		assert.equal(resolveDisplayModelKey("gemini-3.6-flash-low"), "gemini-3.6-flash-low");
@@ -67,6 +73,9 @@ describe("model resolution", () => {
 		assert.ok(MODEL_PRICING["gemini-3.6-flash-medium"]);
 		assert.ok(MODEL_PRICING["gemini-3.6-flash-low"]);
 		assert.ok(MODEL_PRICING["gemini-3.6-flash-tiered"]);
+		assert.ok(MODEL_PRICING["gemini-3.8-flash-high"]);
+		assert.ok(MODEL_PRICING["gemini-3.8-flash-medium"]);
+		assert.ok(MODEL_PRICING["gemini-3.8-flash-low"]);
 		assert.ok(MODEL_PRICING["claude-opus-4-6-thinking"]);
 		assert.ok(MODEL_PRICING["claude-sonnet-4-6"]);
 		assert.ok(MODEL_PRICING["gpt-oss-120b-medium"]);
@@ -99,15 +108,6 @@ describe("model resolution", () => {
 		});
 	});
 
-	it("has updated pricing for Gemini 3.5 Flash", () => {
-		const p = MODEL_PRICING["gemini-3.5-flash"];
-		assert.ok(p);
-		assert.equal(p.inputPer1M, 1.50);
-		assert.equal(p.outputPer1M, 9.00);
-		assert.equal(p.cachingPer1M, 0.15);
-		assert.equal(p.cachingStoragePer1MPerHour, 1.00);
-	});
-
 	it("uses the official Gemini 3.6 Flash pricing", () => {
 		const p = MODEL_PRICING["gemini-3.6-flash-high"];
 		assert.ok(p);
@@ -124,6 +124,17 @@ describe("model resolution", () => {
 			cachingPer1M: 0.075,
 			cachingStoragePer1MPerHour: 0.5,
 		});
+	});
+
+	it("uses the official Gemini 3.8 Flash introductory pricing", () => {
+		for (const variant of ["low", "medium", "high"]) {
+			assert.deepEqual(MODEL_PRICING[`gemini-3.8-flash-${variant}`], {
+				inputPer1M: 0.75,
+				outputPer1M: 3.75,
+				cachingPer1M: 0.075,
+				cachingStoragePer1MPerHour: 0.5,
+			});
+		}
 	});
 
 	it("keeps quota model keys unique", () => {
@@ -162,6 +173,28 @@ describe("model resolution", () => {
 		const altKeys = QUOTA_MODEL_KEYS.gemini.altKeys;
 		const matches = altKeys.filter((k) => k === "gemini-3.7-flash-tiered");
 		assert.equal(matches.length, 1);
+	});
+
+	it("includes each native gemini-3.8-flash id exactly once in quota altKeys", () => {
+		const altKeys = QUOTA_MODEL_KEYS.gemini.altKeys;
+		for (const variant of ["low", "medium", "high"]) {
+			const id = `gemini-3.8-flash-${variant}`;
+			assert.equal(altKeys.filter((key) => key === id).length, 1);
+		}
+	});
+
+	it("extracts gemini pool quota via a gemini-3.8-flash alt key", () => {
+		const quotas = extractQuotas({
+			models: {
+				"gemini-3.8-flash-high": {
+					quotaInfo: { remainingFraction: 0.73 },
+				},
+			},
+		}, []);
+		assert.deepEqual(quotas.map((quota) => ({
+			key: quota.modelKey,
+			percent: quota.percentRemaining,
+		})), [{ key: "gemini", percent: 73 }]);
 	});
 
 	it("extracts gemini pool quota via the gemini-3.7-flash-tiered alt key", () => {
