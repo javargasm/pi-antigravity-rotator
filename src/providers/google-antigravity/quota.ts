@@ -12,6 +12,7 @@ import {
   QUOTA_MODEL_KEYS,
 } from "../../types.js";
 import { fetchWithRetry } from "../../fetch-with-retry.js";
+import { getAccountIdentity } from "../../account-identity.js";
 import type { QuotaFetchContext } from "../adapter.js";
 import { DEFAULT_PROVIDER, getProviderProjectId } from "../credential-helpers.js";
 import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
@@ -132,7 +133,7 @@ export async function fetchProviderQuota(
     const data = (await response.json()) as GoogleQuotaResponse;
     const newModels = dynamicCatalog.updateFromEndpointResponse(
       data,
-      account.config.email,
+      getAccountIdentity(account),
     );
     if (newModels > 0) {
       ctx.log(

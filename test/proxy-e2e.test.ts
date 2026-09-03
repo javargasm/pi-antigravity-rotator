@@ -13,7 +13,7 @@ import {
   type RequestBody,
 } from "../src/proxy.js";
 import { ANTIGRAVITY_ENDPOINTS, type AccountRuntime } from "../src/types.js";
-import type { AccountRotator } from "../src/rotator.js";
+import { getAccountIdentity, type AccountRotator } from "../src/rotator.js";
 import { fetchProviderQuota } from "../src/providers/google-antigravity/quota.js";
 import { dynamicCatalog } from "../src/providers/google-antigravity/dynamic-catalog.js";
 
@@ -832,6 +832,50 @@ describe("native Code Assist passthrough", () => {
 			assert.equal(forwardedProject, "legacy-quota-project");
 			assert.equal(fetchCount, 1);
 			assert.ok(dynamicCatalog.getModel("gemini-quota-discovered"));
+			assert.equal(
+				dynamicCatalog.hasModelForAccount(
+					getAccountIdentity(account),
+					"gemini-quota-discovered",
+				),
+				true,
+			);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("isolates quota-discovered models for same-email accounts with different projects", async () => {
+		const first = makeAccount("shared@example.com", "project-a");
+		const second = makeAccount("shared@example.com", "project-b");
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (_input, init) => {
+			const project = JSON.parse(String(init?.body)).project as string;
+			return new Response(JSON.stringify({
+				models: {
+					[`gemini-${project}-only`]: { quotaInfo: { remainingFraction: 1 } },
+				},
+			}), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as typeof fetch;
+
+		try {
+			const ctx = {
+				log: () => {},
+				markFlagged: () => {},
+				reportQuotaPollFlag: () => {},
+			};
+			await fetchProviderQuota(first, ctx);
+			await fetchProviderQuota(second, ctx);
+
+			const firstId = getAccountIdentity(first);
+			const secondId = getAccountIdentity(second);
+			assert.notEqual(firstId, secondId);
+			assert.equal(dynamicCatalog.hasModelForAccount(firstId, "gemini-project-a-only"), true);
+			assert.equal(dynamicCatalog.hasModelForAccount(firstId, "gemini-project-b-only"), false);
+			assert.equal(dynamicCatalog.hasModelForAccount(secondId, "gemini-project-b-only"), true);
+			assert.equal(dynamicCatalog.hasModelForAccount(secondId, "gemini-project-a-only"), false);
 		} finally {
 			globalThis.fetch = originalFetch;
 		}

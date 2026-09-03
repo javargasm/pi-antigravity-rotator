@@ -20,7 +20,7 @@ export interface DynamicModelEntry {
 const DEFAULT_ACCOUNT_KEY = "__default__";
 
 function accountKey(value: string): string {
-  return value.trim().toLowerCase();
+  return value.trim();
 }
 
 function familyDefaults(
@@ -73,6 +73,7 @@ export class DynamicModelRegistry {
   private static instance: DynamicModelRegistry | null = null;
   private accountModels = new Map<string, Map<string, DynamicModelEntry>>();
   private defaultAgentModelIds = new Map<string, string>();
+  private discoveredModelIds = new Set<string>();
 
   static getInstance(): DynamicModelRegistry {
     DynamicModelRegistry.instance ??= new DynamicModelRegistry();
@@ -83,6 +84,7 @@ export class DynamicModelRegistry {
   reset(): void {
     this.accountModels.clear();
     this.defaultAgentModelIds.clear();
+    this.discoveredModelIds.clear();
   }
 
   /** Derive the model family and quota pool from a model ID string. */
@@ -114,7 +116,7 @@ export class DynamicModelRegistry {
     const knownBefore = new Set(this.getAllModels().map((model) => model.id.toLowerCase()));
     const next = new Map<string, DynamicModelEntry>();
     const tieredIds = new Set(
-      Object.values(data.tieredModelIds ?? {}).flat().map((id) => id.toLowerCase()),
+      Object.values(data.tieredModelIds ?? {}).flat().map((id) => id.trim().toLowerCase()),
     );
     let newModelsCount = 0;
 
@@ -126,10 +128,17 @@ export class DynamicModelRegistry {
     }
 
     for (const [rawId, info] of Object.entries(data.models)) {
-      if (!rawId || rawId.startsWith("chat_") || rawId.startsWith("tab_")) continue;
+      const normalizedId = rawId.trim();
+      const lowerId = normalizedId.toLowerCase();
+      if (
+        !lowerId ||
+        lowerId.startsWith("chat_") ||
+        lowerId.startsWith("tab_") ||
+        lowerId.startsWith("gemini-3.5-")
+      ) continue;
 
-      const lowerId = rawId.toLowerCase();
-      const { family, quotaPool } = DynamicModelRegistry.inferFamilyAndPool(rawId);
+      this.discoveredModelIds.add(lowerId);
+      const { family, quotaPool } = DynamicModelRegistry.inferFamilyAndPool(normalizedId);
       const defaults = previous?.get(lowerId) ?? familyDefaults(family);
       const isTiered = lowerId.includes("-tiered") || tieredIds.has(lowerId);
       const hasThinkingBudget = typeof info.thinkingBudget === "number";
@@ -147,7 +156,7 @@ export class DynamicModelRegistry {
         typeof info.supportsImages === "boolean" || typeof info.supportsVideo === "boolean";
 
       next.set(lowerId, {
-        id: rawId,
+        id: normalizedId,
         family,
         ctx: typeof info.maxTokens === "number" && info.maxTokens > 0
           ? info.maxTokens
@@ -164,7 +173,7 @@ export class DynamicModelRegistry {
         thinkingBudget,
         isThinking,
         isTiered,
-        displayName: info.displayName ?? previous?.get(lowerId)?.displayName ?? rawId,
+        displayName: info.displayName ?? previous?.get(lowerId)?.displayName ?? normalizedId,
       });
       if (!knownBefore.has(lowerId)) newModelsCount++;
     }
@@ -204,7 +213,11 @@ export class DynamicModelRegistry {
   hasModelForAccount(accountId: string, id: string): boolean {
     return this.accountModels
       .get(accountKey(accountId))
-      ?.has(id.toLowerCase()) ?? false;
+      ?.has(id.trim().toLowerCase()) ?? false;
+  }
+
+  wasDiscovered(id: string): boolean {
+    return this.discoveredModelIds.has(id.trim().toLowerCase());
   }
 
   getModelSpec(id: string): ModelSpec | undefined {

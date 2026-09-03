@@ -6,7 +6,7 @@ import {
   isTieredEffortModel,
   openAIToAntigravityBody,
 } from "../src/providers/google-antigravity/translators.js";
-import { getModelSpec } from "../src/compat/model-specs.js";
+import { getModelSpec, setModelSpecsOverride } from "../src/compat/model-specs.js";
 import { extractQuotas } from "../src/providers/google-antigravity/quota.js";
 import { getModelPricing, applyModelAlias } from "../src/types.js";
 import type { GoogleQuotaResponse } from "../src/types.js";
@@ -147,6 +147,38 @@ describe("DynamicModelRegistry", () => {
       isThinking: true,
       contextWindow: 5000000,
     });
+  });
+
+  it("prefers case-insensitive operator substring specs over dynamic metadata", () => {
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-5.0-ultra": {
+          maxTokens: 5000000,
+          maxOutputTokens: 100000,
+          supportsThinking: true,
+          thinkingBudget: 50000,
+        },
+      },
+    });
+    setModelSpecsOverride({
+      GeMiNi: {
+        maxOutputTokens: 12345,
+        thinkingBudget: 6789,
+        isThinking: true,
+        contextWindow: 222222,
+      },
+    });
+
+    try {
+      assert.deepEqual(getModelSpec("GEMINI-5.0-ULTRA"), {
+        maxOutputTokens: 12345,
+        thinkingBudget: 6789,
+        isThinking: true,
+        contextWindow: 222222,
+      });
+    } finally {
+      setModelSpecsOverride(null);
+    }
   });
 
   it("exposes dynamic context windows through getAntigravityContextWindow", () => {
