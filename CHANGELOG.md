@@ -2,12 +2,14 @@
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-09-03
+
 ### Added
-- **Gemini 3.8 Flash support**: Added the native Antigravity IDs `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, and `gemini-3.8-flash-low` across model discovery, routing, context limits, pricing, dashboards, telemetry, and integration documentation. All three IDs were discovered across nine configured accounts and verified with live generation.
+- **Gemini 3.8 Flash support**: Added the native Antigravity IDs `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, and `gemini-3.8-flash-low` across model discovery, routing, context limits, pricing, dashboards, telemetry, and integration documentation. All three IDs were discovered across nine configured accounts and verified with live generation ([#28](https://github.com/tuxevil/tuxevil-rotator/pull/28) by [@CyR1en](https://github.com/CyR1en)).
 
 ### Changed
-- **Antigravity client version**: Updated the default Antigravity user agent from `1.107.0` to `2.11.0`; the newer user agent is required for Gemini 3.8 Flash discovery and generation.
-- **Gemini 3.5 Flash catalog removal**: Removed Gemini 3.5 Flash from the user-facing supported-model catalog and defaults to match Antigravity 2.11. Backend discovery may still return legacy 3.5 quota entries.
+- **Antigravity client version**: Updated the default Antigravity user agent from `1.107.0` to `2.11.0`; the newer user agent is required for Gemini 3.8 Flash discovery and generation ([#28](https://github.com/tuxevil/tuxevil-rotator/pull/28) by [@CyR1en](https://github.com/CyR1en)).
+- **Gemini 3.5 Flash catalog removal**: Removed Gemini 3.5 Flash from the user-facing supported-model catalog and defaults to match Antigravity 2.11. Backend discovery may still return legacy 3.5 quota entries ([#28](https://github.com/tuxevil/tuxevil-rotator/pull/28) by [@CyR1en](https://github.com/CyR1en)).
 
 ## [3.3.2] - 2026-08-28
 
