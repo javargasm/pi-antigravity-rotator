@@ -1,7 +1,13 @@
 // Dynamic Google Antigravity model availability discovered during quota polling.
 
-import type { ModelSpec } from "../../compat/model-specs.js";
-import type { GoogleQuotaResponse } from "../../types.js";
+import {
+  getStaticModelSpec,
+  type ModelSpec,
+} from "../../compat/model-specs.js";
+import {
+  QUOTA_MODEL_KEYS,
+  type GoogleQuotaResponse,
+} from "../../types.js";
 
 export interface DynamicModelEntry {
   id: string;
@@ -12,12 +18,123 @@ export interface DynamicModelEntry {
   tools: boolean;
   maxOutputTokens: number;
   thinkingBudget: number;
+  minThinkingBudget?: number;
   isThinking: boolean;
   isTiered: boolean;
   displayName?: string;
 }
 
 const DEFAULT_ACCOUNT_KEY = "__default__";
+const RESERVED_QUOTA_MODEL_IDS = new Set(
+  Object.values(QUOTA_MODEL_KEYS).map(({ key }) => key.toLowerCase()),
+);
+
+type GoogleModelInfo = GoogleQuotaResponse["models"][string];
+type ActiveAccount = string | { id: string; generation: string };
+interface ActiveAccountGeneration {
+  credentialGeneration: string | null;
+  epoch: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Validate and sanitize the untrusted runtime catalog response. */
+export function parseGoogleQuotaResponse(
+  value: unknown,
+): GoogleQuotaResponse | null {
+  if (!isRecord(value) || !isRecord(value.models)) return null;
+
+  const models: GoogleQuotaResponse["models"] = {};
+  let rawEntryCount = 0;
+  let validEntryCount = 0;
+  for (const [rawId, rawInfo] of Object.entries(value.models)) {
+    rawEntryCount++;
+    const id = rawId.trim();
+    if (!id || !isRecord(rawInfo)) continue;
+    validEntryCount++;
+
+    const info: GoogleModelInfo = {};
+    if (typeof rawInfo.displayName === "string" && rawInfo.displayName.trim()) {
+      info.displayName = rawInfo.displayName.trim();
+    }
+    for (const field of ["maxTokens", "maxOutputTokens"] as const) {
+      const candidate = rawInfo[field];
+      if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
+        info[field] = candidate;
+      }
+    }
+    if (
+      typeof rawInfo.thinkingBudget === "number" &&
+      Number.isFinite(rawInfo.thinkingBudget) &&
+      (rawInfo.thinkingBudget === -1 || rawInfo.thinkingBudget >= 0)
+    ) {
+      info.thinkingBudget = rawInfo.thinkingBudget;
+    }
+    if (
+      typeof rawInfo.minThinkingBudget === "number" &&
+      Number.isFinite(rawInfo.minThinkingBudget) &&
+      rawInfo.minThinkingBudget >= 0
+    ) {
+      info.minThinkingBudget = rawInfo.minThinkingBudget;
+    }
+    for (
+      const field of [
+        "supportsThinking",
+        "supportsImages",
+        "supportsVideo",
+      ] as const
+    ) {
+      if (typeof rawInfo[field] === "boolean") info[field] = rawInfo[field];
+    }
+    if (isRecord(rawInfo.quotaInfo)) {
+      const quotaInfo: NonNullable<GoogleModelInfo["quotaInfo"]> = {};
+      const remaining = rawInfo.quotaInfo.remainingFraction;
+      if (
+        typeof remaining === "number" &&
+        Number.isFinite(remaining) &&
+        remaining >= 0 &&
+        remaining <= 1
+      ) {
+        quotaInfo.remainingFraction = remaining;
+      }
+      const resetTime = rawInfo.quotaInfo.resetTime;
+      if (typeof resetTime === "string" && resetTime.trim()) {
+        quotaInfo.resetTime = resetTime;
+      }
+      if (Object.keys(quotaInfo).length > 0) info.quotaInfo = quotaInfo;
+    }
+    models[id] = info;
+  }
+
+  // An explicitly empty catalog is a valid snapshot. A non-empty catalog
+  // containing no usable entries is ambiguous, so retain the last good one.
+  if (rawEntryCount > 0 && validEntryCount === 0) return null;
+
+  const parsed: GoogleQuotaResponse = { models };
+  if (
+    typeof value.defaultAgentModelId === "string" &&
+    value.defaultAgentModelId.trim()
+  ) {
+    parsed.defaultAgentModelId = value.defaultAgentModelId.trim();
+  }
+  if (isRecord(value.tieredModelIds)) {
+    const tieredModelIds: Record<string, string[]> = {};
+    for (const [tier, rawIds] of Object.entries(value.tieredModelIds)) {
+      if (!Array.isArray(rawIds)) continue;
+      const ids = rawIds
+        .filter((id): id is string => typeof id === "string")
+        .map((id) => id.trim())
+        .filter(Boolean);
+      if (ids.length > 0) tieredModelIds[tier] = ids;
+    }
+    if (Object.keys(tieredModelIds).length > 0) {
+      parsed.tieredModelIds = tieredModelIds;
+    }
+  }
+  return parsed;
+}
 
 function accountKey(value: string): string {
   return value.trim();
@@ -73,7 +190,15 @@ export class DynamicModelRegistry {
   private static instance: DynamicModelRegistry | null = null;
   private accountModels = new Map<string, Map<string, DynamicModelEntry>>();
   private defaultAgentModelIds = new Map<string, string>();
-  private discoveredModelIds = new Set<string>();
+  private discoveredModels = new Map<
+    string,
+    Pick<DynamicModelEntry, "id" | "quotaPool">
+  >();
+  private activeAccountGenerations: Map<
+    string,
+    ActiveAccountGeneration
+  > | null = null;
+  private nextAccountEpoch = 0;
 
   static getInstance(): DynamicModelRegistry {
     DynamicModelRegistry.instance ??= new DynamicModelRegistry();
@@ -84,7 +209,9 @@ export class DynamicModelRegistry {
   reset(): void {
     this.accountModels.clear();
     this.defaultAgentModelIds.clear();
-    this.discoveredModelIds.clear();
+    this.discoveredModels.clear();
+    this.activeAccountGenerations = null;
+    this.nextAccountEpoch = 0;
   }
 
   /** Derive the model family and quota pool from a model ID string. */
@@ -106,12 +233,22 @@ export class DynamicModelRegistry {
 
   /** Replace one account's advertised models with its latest successful response. */
   updateFromEndpointResponse(
-    data: GoogleQuotaResponse,
+    value: unknown,
     accountId = DEFAULT_ACCOUNT_KEY,
+    credentialGeneration?: string,
+    accountEpoch?: number,
   ): number {
-    if (!data || typeof data !== "object" || !data.models) return 0;
+    const data = parseGoogleQuotaResponse(value);
+    if (!data) return 0;
 
     const key = accountKey(accountId);
+    if (
+      !this.isAccountGenerationActive(
+        key,
+        credentialGeneration,
+        accountEpoch,
+      )
+    ) return 0;
     const previous = this.accountModels.get(key);
     const knownBefore = new Set(this.getAllModels().map((model) => model.id.toLowerCase()));
     const next = new Map<string, DynamicModelEntry>();
@@ -132,14 +269,27 @@ export class DynamicModelRegistry {
       const lowerId = normalizedId.toLowerCase();
       if (
         !lowerId ||
+        RESERVED_QUOTA_MODEL_IDS.has(lowerId) ||
         lowerId.startsWith("chat_") ||
         lowerId.startsWith("tab_") ||
         lowerId.startsWith("gemini-3.5-")
       ) continue;
 
-      this.discoveredModelIds.add(lowerId);
       const { family, quotaPool } = DynamicModelRegistry.inferFamilyAndPool(normalizedId);
-      const defaults = previous?.get(lowerId) ?? familyDefaults(family);
+      const familySpec = familyDefaults(family);
+      const staticSpec = getStaticModelSpec(normalizedId);
+      const defaults = previous?.get(lowerId) ?? {
+        ...familySpec,
+        ...(staticSpec
+          ? {
+              ctx: staticSpec.contextWindow ?? familySpec.ctx,
+              maxOutputTokens: staticSpec.maxOutputTokens,
+              thinkingBudget: staticSpec.thinkingBudget,
+              minThinkingBudget: staticSpec.minThinkingBudget,
+              isThinking: staticSpec.isThinking,
+            }
+          : {}),
+      };
       const isTiered = lowerId.includes("-tiered") || tieredIds.has(lowerId);
       const hasThinkingBudget = typeof info.thinkingBudget === "number";
       const thinkingBudget = hasThinkingBudget
@@ -171,10 +321,15 @@ export class DynamicModelRegistry {
             ? info.maxOutputTokens
             : defaults.maxOutputTokens,
         thinkingBudget,
+        minThinkingBudget:
+          typeof info.minThinkingBudget === "number"
+            ? info.minThinkingBudget
+            : defaults.minThinkingBudget,
         isThinking,
         isTiered,
         displayName: info.displayName ?? previous?.get(lowerId)?.displayName ?? normalizedId,
       });
+      this.discoveredModels.set(lowerId, { id: normalizedId, quotaPool });
       if (!knownBefore.has(lowerId)) newModelsCount++;
     }
 
@@ -183,14 +338,67 @@ export class DynamicModelRegistry {
   }
 
   /** Expire catalogs belonging to accounts that are no longer active. */
-  retainAccounts(accountIds: Iterable<string>): void {
-    const active = new Set(Array.from(accountIds, accountKey));
+  retainAccounts(accounts: Iterable<ActiveAccount>): void {
+    const previous = this.activeAccountGenerations;
+    const active = new Map<string, ActiveAccountGeneration>();
+    for (const account of accounts) {
+      const key = accountKey(typeof account === "string" ? account : account.id);
+      const credentialGeneration = typeof account === "string"
+        ? null
+        : account.generation;
+      const prior = previous?.get(key);
+      active.set(
+        key,
+        prior?.credentialGeneration === credentialGeneration
+          ? prior
+          : { credentialGeneration, epoch: ++this.nextAccountEpoch },
+      );
+    }
     for (const key of this.accountModels.keys()) {
-      if (!active.has(key)) this.accountModels.delete(key);
+      const nextGeneration = active.get(key)?.credentialGeneration;
+      const previousGeneration = previous?.get(key)?.credentialGeneration;
+      if (
+        !active.has(key) ||
+        (previousGeneration !== undefined && previousGeneration !== nextGeneration)
+      ) {
+        this.accountModels.delete(key);
+      }
     }
     for (const key of this.defaultAgentModelIds.keys()) {
-      if (!active.has(key)) this.defaultAgentModelIds.delete(key);
+      if (!this.accountModels.has(key)) this.defaultAgentModelIds.delete(key);
     }
+    this.activeAccountGenerations = active;
+  }
+
+  captureAccountEpoch(
+    accountId: string,
+    credentialGeneration: string,
+  ): number | null | undefined {
+    if (!this.activeAccountGenerations) return undefined;
+    const active = this.activeAccountGenerations.get(accountKey(accountId));
+    if (
+      !active ||
+      (active.credentialGeneration !== null &&
+        active.credentialGeneration !== credentialGeneration)
+    ) {
+      return null;
+    }
+    return active.epoch;
+  }
+
+  isAccountGenerationActive(
+    accountId: string,
+    credentialGeneration?: string,
+    accountEpoch?: number,
+  ): boolean {
+    if (!this.activeAccountGenerations) return true;
+    const key = accountKey(accountId);
+    const active = this.activeAccountGenerations.get(key);
+    if (!active) return false;
+    if (accountEpoch !== undefined && active.epoch !== accountEpoch) return false;
+    return credentialGeneration === undefined ||
+      active.credentialGeneration === null ||
+      active.credentialGeneration === credentialGeneration;
   }
 
   getAllModels(): DynamicModelEntry[] {
@@ -217,7 +425,12 @@ export class DynamicModelRegistry {
   }
 
   wasDiscovered(id: string): boolean {
-    return this.discoveredModelIds.has(id.trim().toLowerCase());
+    return this.discoveredModels.has(id.trim().toLowerCase());
+  }
+
+  getObservedModelId(id: string): string | undefined {
+    return this.getModel(id)?.id ??
+      this.discoveredModels.get(id.trim().toLowerCase())?.id;
   }
 
   getModelSpec(id: string): ModelSpec | undefined {
@@ -226,6 +439,9 @@ export class DynamicModelRegistry {
     return {
       maxOutputTokens: entry.maxOutputTokens,
       thinkingBudget: entry.thinkingBudget,
+      ...(entry.minThinkingBudget !== undefined
+        ? { minThinkingBudget: entry.minThinkingBudget }
+        : {}),
       isThinking: entry.isThinking,
       contextWindow: entry.ctx,
     };
@@ -241,7 +457,9 @@ export class DynamicModelRegistry {
   }
 
   resolveQuotaPool(id: string): string | undefined {
-    return this.getModel(id)?.quotaPool;
+    const lowerId = id.trim().toLowerCase();
+    return this.getModel(lowerId)?.quotaPool ??
+      this.discoveredModels.get(lowerId)?.quotaPool;
   }
 
   getDefaultAgentModelId(): string | null {

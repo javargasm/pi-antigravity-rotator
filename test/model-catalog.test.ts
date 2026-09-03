@@ -166,6 +166,54 @@ describe("model discovery", () => {
 		}
 	});
 
+	it("publishes dynamic output and thinking metadata without using the context window as output", () => {
+		dynamicCatalog.updateFromEndpointResponse({
+			models: {
+				"gemini-4.0-flash-thinking": {
+					maxTokens: 2_000_000,
+					maxOutputTokens: 32_000,
+					supportsThinking: true,
+					thinkingBudget: 12_000,
+					minThinkingBudget: 2_000,
+					quotaInfo: { remainingFraction: 1 },
+				},
+			},
+		});
+		try {
+			const openAiPayload = captureJson(serveOpenAIModels) as {
+				data: Array<{ id: string; meta: Record<string, unknown> }>;
+			};
+			const openAiEntry = openAiPayload.data.find(
+				(model) => model.id === "gemini-4.0-flash-thinking",
+			);
+			assert.ok(openAiEntry);
+			assert.equal(openAiEntry.meta.max_output_tokens, 32_000);
+			assert.equal(openAiEntry.meta.thinking, true);
+			assert.equal(openAiEntry.meta.thinking_budget, 12_000);
+			assert.equal(openAiEntry.meta.min_thinking_budget, 2_000);
+
+			const geminiPayload = captureJson(serveGeminiModels) as {
+				models: Array<{
+					name: string;
+					inputTokenLimit: number;
+					outputTokenLimit: number;
+					capabilities: Record<string, unknown>;
+				}>;
+			};
+			const geminiEntry = geminiPayload.models.find(
+				(model) => model.name === "models/gemini-4.0-flash-thinking",
+			);
+			assert.ok(geminiEntry);
+			assert.equal(geminiEntry.inputTokenLimit, 2_000_000);
+			assert.equal(geminiEntry.outputTokenLimit, 32_000);
+			assert.equal(geminiEntry.capabilities.thinking, true);
+			assert.equal(geminiEntry.capabilities.thinkingBudget, 12_000);
+			assert.equal(geminiEntry.capabilities.minThinkingBudget, 2_000);
+		} finally {
+			dynamicCatalog.reset();
+		}
+	});
+
 	it("ships the exact default spec for gemini-3.7-flash-tiered", () => {
 		assert.deepEqual(getModelSpec("gemini-3.7-flash-tiered"), {
 			maxOutputTokens: 65536,

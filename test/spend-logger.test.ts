@@ -96,11 +96,11 @@ test("logSpend uses dynamic family pricing in detailed cost metadata", () => {
     });
 
     assert.deepEqual(getSpendQueueItemsForTests()[0].metadata?.costBreakdown, {
-      promptCostUsd: 0.75,
-      completionCostUsd: 3.75,
-      totalCostUsd: 4.5,
-      inputRatePer1M: 0.75,
-      outputRatePer1M: 3.75,
+      promptCostUsd: 0.5,
+      completionCostUsd: 3,
+      totalCostUsd: 3.5,
+      inputRatePer1M: 0.5,
+      outputRatePer1M: 3,
     });
   } finally {
     if (origDb === undefined) delete process.env.DATABASE_URL;

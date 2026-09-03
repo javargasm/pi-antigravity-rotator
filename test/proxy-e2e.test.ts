@@ -881,6 +881,63 @@ describe("native Code Assist passthrough", () => {
 		}
 	});
 
+	it("keeps quota polling usable when runtime catalog entries are malformed", async () => {
+		const account = makeAccount("malformed-catalog@example.com", "project-safe");
+		account.quota = [{
+			modelKey: "gemini",
+			displayName: "Gemini",
+			percentRemaining: 80,
+			resetTime: null,
+			timerType: "fresh",
+			providerId: "google-antigravity",
+		}];
+		const accountId = getAccountIdentity(account);
+		dynamicCatalog.updateFromEndpointResponse({
+			models: {
+				"gemini-known-good-before-malformed": {
+					quotaInfo: { remainingFraction: 0.8 },
+				},
+			},
+		}, accountId);
+
+		const responses: unknown[] = [
+			{ models: null },
+			{
+				models: {
+					"gemini-bad-null-entry": null,
+					"gemini-valid-after-bad-entry": {
+						maxTokens: null,
+						quotaInfo: { remainingFraction: 0.6 },
+					},
+				},
+				tieredModelIds: { bad: [null, 42, ""] },
+			},
+		];
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => new Response(
+			JSON.stringify(responses.shift()),
+			{ status: 200, headers: { "Content-Type": "application/json" } },
+		)) as typeof fetch;
+		const ctx = {
+			log: () => {},
+			markFlagged: () => {},
+			reportQuotaPollFlag: () => {},
+		};
+
+		try {
+			await fetchProviderQuota(account, ctx);
+			assert.ok(dynamicCatalog.getModel("gemini-known-good-before-malformed"));
+			assert.equal(account.quota[0]?.percentRemaining, 80);
+
+			await fetchProviderQuota(account, ctx);
+			assert.equal(dynamicCatalog.getModel("gemini-bad-null-entry"), undefined);
+			assert.ok(dynamicCatalog.getModel("gemini-valid-after-bad-entry"));
+			assert.equal(account.quota[0]?.percentRemaining, 60);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	it("rejects invalid payloads and unknown operations before upstream forwarding", async () => {
 		let upstreamCalls = 0;
 		const upstream = await listen((req, res) => {

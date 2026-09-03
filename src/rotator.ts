@@ -90,11 +90,13 @@ import {
 } from "./rate-limit-parser.js";
 import {
   getAccountIdentity,
+  getCredentialGeneration,
   getProviderCredentialDetails,
 } from "./account-identity.js";
 
 export {
   getAccountIdentity,
+  getCredentialGeneration,
   getProviderCredentialDetails,
 } from "./account-identity.js";
 
@@ -152,18 +154,6 @@ export function areAccountIdentitiesCompatible(
   }
 
   return true;
-}
-
-export function getCredentialGeneration(
-  account: AccountRuntime | AccountConfig,
-  providerId: string,
-): string {
-  const config = "config" in account ? account.config : account;
-  const norm = normalizeAccountConfig(config);
-  const cred = norm.credentials?.find((c) => c.provider === providerId);
-  const details = getProviderCredentialDetails(norm, cred ?? { provider: providerId });
-  if (!cred && !details.secret) return "none";
-  return `${providerId}:${details.projectId}:${details.providerAccountId}:${details.secret}`;
 }
 
 const rotatorLogger = logger.child("rotator");
@@ -359,7 +349,25 @@ export class AccountRotator {
     this.config = applyConfigDefaults(config);
     this.initAccounts();
     this.loadState();
+    this.reconcileDynamicCatalog();
     this.startQuotaPolling();
+  }
+
+  private reconcileDynamicCatalog(): void {
+    dynamicCatalog.retainAccounts(
+      this.accounts
+        .filter(
+          (account) =>
+            !account.disabled &&
+            !account.flagged &&
+            !account.invalidProviders?.[DEFAULT_PROVIDER] &&
+            hasCredential(account.config, DEFAULT_PROVIDER),
+        )
+        .map((account) => ({
+          id: getAccountIdentity(account),
+          generation: getCredentialGeneration(account, DEFAULT_PROVIDER),
+        })),
+    );
   }
 
   private initAccounts(): void {
@@ -860,11 +868,7 @@ export class AccountRotator {
     void this.refreshOllamaCatalogOnce().catch(() => {});
 
     const available = this.accounts.filter((a) => !a.disabled && !a.flagged);
-    dynamicCatalog.retainAccounts(
-      available
-        .filter((account) => hasCredential(account.config, DEFAULT_PROVIDER))
-        .map(getAccountIdentity),
-    );
+    this.reconcileDynamicCatalog();
     let quotaPublished = false;
     for (const account of available) {
       if (await this.pollAccountQuota(account)) {
@@ -1346,9 +1350,10 @@ export class AccountRotator {
     ignoreConcurrency = false,
   ): string | null {
     const projectId = this.getProjectIdForModel(account, modelKey);
-    if (this.isModelBreakerActive(modelKey, now))
+    const quotaStateKey = this.resolveQuotaStateKey(modelKey);
+    if (this.isModelBreakerActive(quotaStateKey, now))
       return "model circuit breaker active";
-    if (this.isProjectModelBreakerActive(projectId, modelKey, now))
+    if (this.isProjectModelBreakerActive(projectId, quotaStateKey, now))
       return "project circuit breaker active";
     if (
       projectId &&
@@ -1427,7 +1432,8 @@ export class AccountRotator {
     const defaultCooldown = account.cooldownsByModel["__default__"] ?? 0;
     if (defaultCooldown > now)
       return { reason: "cooldown", detail: "default cooldown active" };
-    const modelCooldown = account.cooldownsByModel[modelKey] ?? 0;
+    const modelCooldown =
+      account.cooldownsByModel[this.resolveQuotaStateKey(modelKey)] ?? 0;
     if (modelCooldown > now)
       return { reason: "cooldown", detail: "model cooldown active" };
     // Ollama Cloud (pool key "session") imposes no per-account
@@ -2426,7 +2432,7 @@ export class AccountRotator {
   ): void {
     const now = new Date();
     const minuteKey = now.toISOString().slice(0, 16); // "2026-04-28T12:05"
-    const modelKey = model ? resolveDisplayModelKey(model) : "unknown";
+    const modelKey = model ? this.resolveObservedModelKey(model) : "unknown";
 
     // Upsert minute bucket
     let bucket = this.tokenBuckets.minutes.find((b) => b.period === minuteKey);
@@ -2464,7 +2470,7 @@ export class AccountRotator {
     ttfbMs: number,
     totalMs: number,
   ): void {
-    const modelKey = model ? resolveDisplayModelKey(model) : "unknown";
+    const modelKey = model ? this.resolveObservedModelKey(model) : "unknown";
     let records = this.latencyRecords.get(modelKey);
     if (!records) {
       records = [];
@@ -3035,6 +3041,7 @@ export class AccountRotator {
     account.consecutiveErrors++;
     if (account.consecutiveErrors >= 5) {
       account.disabled = true;
+      this.reconcileDynamicCatalog();
       this.log(
         `${account.config.email}: DISABLED after ${account.consecutiveErrors} consecutive errors`,
         "error",
@@ -3058,6 +3065,7 @@ export class AccountRotator {
     account.consecutiveErrors = 0;
     account.lastError = null;
     account.cooldownsByModel = {};
+    this.reconcileDynamicCatalog();
     await this.saveState();
     this.log(`${email}: re-enabled`);
     this.requestWaiterDrain();
@@ -3069,6 +3077,7 @@ export class AccountRotator {
     if (!account) return false;
     account.disabled = true;
     account.lastError = "Disabled by operator";
+    this.reconcileDynamicCatalog();
     await this.saveState();
     this.log(`${email}: disabled by operator`, "warn");
     return true;
@@ -3082,6 +3091,7 @@ export class AccountRotator {
     if (!account) return false;
     account.flagged = true;
     account.lastError = reason;
+    this.reconcileDynamicCatalog();
     await this.saveState();
     this.log(`${email}: quarantined by operator`, "warn");
     return true;
@@ -3094,6 +3104,7 @@ export class AccountRotator {
     account.flagged = false;
     account.consecutiveErrors = 0;
     account.lastError = null;
+    this.reconcileDynamicCatalog();
     await this.saveState();
     this.log(`${email}: restored by operator`, "warn");
     this.requestWaiterDrain();
@@ -3111,6 +3122,7 @@ export class AccountRotator {
       (entry) => entry.email === email,
     );
     if (existing) Object.assign(existing, patch);
+    this.reconcileDynamicCatalog();
     await saveAccountsConfig(this.config);
     await this.saveState();
     this.log(`${email}: metadata updated by operator`, "warn");
@@ -3383,6 +3395,7 @@ export class AccountRotator {
     account.providerTokens ??= {};
     account.providerTokens[providerId] = { accessToken: null, tokenExpires: 0 };
     account.lastError = reason;
+    if (providerId === DEFAULT_PROVIDER) this.reconcileDynamicCatalog();
     this.log(`${account.config.email}: ${providerId} credential requires re-authentication`, "warn");
     this.scheduleStateSave();
   }
@@ -3417,7 +3430,8 @@ export class AccountRotator {
     const providerId = getProviderIdForPoolKey(modelKey);
     if (account.invalidProviders?.[providerId]) return false;
     if ((account.providerCooldowns?.[providerId] ?? 0) > now) return false;
-    const modelCooldown = account.cooldownsByModel[modelKey] ?? 0;
+    const modelCooldown =
+      account.cooldownsByModel[this.resolveQuotaStateKey(modelKey)] ?? 0;
     if (modelCooldown > now) return false;
     // Ollama Cloud (pool key "session") imposes no per-account concurrency
     // limit. Antigravity keeps it so long streams don't pile up on a
@@ -3442,6 +3456,7 @@ export class AccountRotator {
     account.lastError = reason;
     account.inFlightRequests = 0;
     account.inFlightByModel = {};
+    this.reconcileDynamicCatalog();
     this.requestWaiterDrain();
     this.log(`${account.config.email}: FLAGGED - ${reason}`, "error");
     const triggerProtectivePause = options.triggerProtectivePause ?? true;
@@ -3513,6 +3528,11 @@ export class AccountRotator {
     return this.resolveRequestPoolKey(model);
   }
 
+  /** Preserve the exact identity of models learned from the runtime catalog. */
+  resolveObservedModelKey(model: string): string {
+    return dynamicCatalog.getObservedModelId(model) ?? resolveDisplayModelKey(model);
+  }
+
   private resolveRequestPoolKey(model: string): string {
     return this.resolvePoolKeyForModel(model) ?? "__default__";
   }
@@ -3533,6 +3553,12 @@ export class AccountRotator {
     return resolveQuotaModelKey(model) ?? null;
   }
 
+  private resolveQuotaStateKey(modelKey: string): string {
+    return dynamicCatalog.resolveQuotaPool(modelKey) ??
+      resolveQuotaModelKey(modelKey) ??
+      modelKey;
+  }
+
   /** Map a candidate key (model name or pool key) to the account's pool key. */
   private resolvePoolKey(account: AccountRuntime, key: string): string {
     if (
@@ -3549,6 +3575,8 @@ export class AccountRotator {
   private resolveAccountPoolKey(account: AccountRuntime, key: string): string {
     const kickstartPool = QUOTA_POOL_FOR_KICKSTART_MODEL[key];
     if (kickstartPool) return this.resolvePoolKey(account, kickstartPool);
+    const dynamicPool = dynamicCatalog.resolveQuotaPool(key);
+    if (dynamicPool) return this.resolvePoolKey(account, dynamicPool);
     if (
       Object.values(QUOTA_POOL_FOR_KICKSTART_MODEL).includes(key) ||
       account.quota.some((quota) => quota.modelKey === key) ||
@@ -3587,8 +3615,9 @@ export class AccountRotator {
     const modelKey = model
       ? (this.resolvePoolKeyForModel(model) ?? resolveQuotaModelKey(model) ?? "__default__")
       : "__default__";
+    const quotaStateKey = this.resolveQuotaStateKey(modelKey);
     const dailyResetAt = nextUtcDayStartMs(now);
-    const modelBreaker = this.modelBreakers[modelKey] ?? 0;
+    const modelBreaker = this.modelBreakers[quotaStateKey] ?? 0;
     if (modelBreaker > now) retryTimes.push(modelBreaker);
     for (const account of this.accounts) {
       if (account.disabled || account.flagged) continue;
@@ -3604,14 +3633,14 @@ export class AccountRotator {
       if (this.isDailySafetyStopped(account, now))
         retryTimes.push(dailyResetAt);
       const cooldown = Math.max(
-        account.cooldownsByModel[modelKey] ?? 0,
+        account.cooldownsByModel[quotaStateKey] ?? 0,
         account.cooldownsByModel.__default__ ?? 0,
       );
       if (cooldown > now) retryTimes.push(cooldown);
       const projectId = this.getProjectIdForModel(account, modelKey);
       if (projectId) {
         const projectBreaker =
-          this.projectModelBreakers[projectModelKey(projectId, modelKey)] ?? 0;
+          this.projectModelBreakers[projectModelKey(projectId, quotaStateKey)] ?? 0;
         if (projectBreaker > now) retryTimes.push(projectBreaker);
       }
       if ((this.config.routingPolicy || "timer-first") === "hybrid") {
@@ -3882,6 +3911,7 @@ export class AccountRotator {
     const mergedAccounts = normalized.accounts.map(matchAndReuseAccount);
     this.config = { ...normalized, accounts: mergedAccounts.map((account) => account.config) };
     this.accounts = mergedAccounts;
+    this.reconcileDynamicCatalog();
     this.requestWaiterDrain();
     await saveAccountsConfig(this.config);
     await this.saveState();
@@ -3993,6 +4023,7 @@ export class AccountRotator {
       this.log(`${accountConfig.email}: account added via hosted login`);
     }
 
+    this.reconcileDynamicCatalog();
     await saveAccountsConfig(this.config);
     await this.saveState();
     this.requestWaiterDrain();
@@ -4013,6 +4044,7 @@ export class AccountRotator {
     this.accounts.splice(idx, 1);
     const configIdx = this.config.accounts.findIndex((a) => a.email === email);
     if (configIdx >= 0) this.config.accounts.splice(configIdx, 1);
+    this.reconcileDynamicCatalog();
 
     // Fix up modelState indices that may now be stale after the splice
     for (const [, mState] of this.modelState.entries()) {

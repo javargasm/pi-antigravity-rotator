@@ -12,13 +12,31 @@ import {
   QUOTA_MODEL_KEYS,
 } from "../../types.js";
 import { fetchWithRetry } from "../../fetch-with-retry.js";
-import { getAccountIdentity } from "../../account-identity.js";
+import {
+  getAccountIdentity,
+  getCredentialGeneration,
+} from "../../account-identity.js";
 import type { QuotaFetchContext } from "../adapter.js";
 import { DEFAULT_PROVIDER, getProviderProjectId } from "../credential-helpers.js";
 import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
 import { sortQuotaPools } from "../registry.js";
 
-import { dynamicCatalog, DynamicModelRegistry } from "./dynamic-catalog.js";
+import {
+  dynamicCatalog,
+  DynamicModelRegistry,
+  parseGoogleQuotaResponse,
+} from "./dynamic-catalog.js";
+
+type GoogleModelInfo = GoogleQuotaResponse["models"][string];
+
+function hasUsableQuotaInfo(
+  info: GoogleModelInfo | undefined,
+): info is GoogleModelInfo & { quotaInfo: NonNullable<GoogleModelInfo["quotaInfo"]> } {
+  if (!info?.quotaInfo) return false;
+  const remaining = info.quotaInfo.remainingFraction;
+  return remaining === undefined ||
+    (typeof remaining === "number" && Number.isFinite(remaining));
+}
 
 /**
  * Extract per-model quotas from a Google quota response, preserving the
@@ -32,18 +50,21 @@ export function extractQuotas(
   const now = Date.now();
 
   for (const [, config] of Object.entries(QUOTA_MODEL_KEYS)) {
-    let modelInfo = data.models[config.key];
-
-    if (!modelInfo) {
-      for (const altKey of config.altKeys) {
-        modelInfo = data.models[altKey];
-        if (modelInfo) break;
+    let modelInfo: GoogleModelInfo | undefined;
+    for (const candidate of [config.key, ...config.altKeys]) {
+      const info = data.models[candidate];
+      if (hasUsableQuotaInfo(info)) {
+        modelInfo = info;
+        break;
       }
     }
 
     if (!modelInfo) {
       for (const [modelKey, info] of Object.entries(data.models)) {
-        if (DynamicModelRegistry.inferFamilyAndPool(modelKey).quotaPool === config.key) {
+        if (
+          DynamicModelRegistry.inferFamilyAndPool(modelKey).quotaPool === config.key &&
+          hasUsableQuotaInfo(info)
+        ) {
           modelInfo = info;
           break;
         }
@@ -98,6 +119,16 @@ export async function fetchProviderQuota(
   ctx: QuotaFetchContext,
 ): Promise<void> {
   if (!account.accessToken) return;
+  const accountId = getAccountIdentity(account);
+  const credentialGeneration = getCredentialGeneration(
+    account,
+    DEFAULT_PROVIDER,
+  );
+  const accountEpoch = dynamicCatalog.captureAccountEpoch(
+    accountId,
+    credentialGeneration,
+  );
+  if (accountEpoch === null) return;
 
   try {
     const response = await fetchWithRetry(QUOTA_API_URL, {
@@ -130,10 +161,24 @@ export async function fetchProviderQuota(
       return;
     }
 
-    const data = (await response.json()) as GoogleQuotaResponse;
+    const data = parseGoogleQuotaResponse(await response.json());
+    if (!data) return;
+    if (
+      accountId !== getAccountIdentity(account) ||
+      credentialGeneration !== getCredentialGeneration(account, DEFAULT_PROVIDER) ||
+      !dynamicCatalog.isAccountGenerationActive(
+        accountId,
+        credentialGeneration,
+        accountEpoch,
+      )
+    ) {
+      return;
+    }
     const newModels = dynamicCatalog.updateFromEndpointResponse(
       data,
-      getAccountIdentity(account),
+      accountId,
+      credentialGeneration,
+      accountEpoch,
     );
     if (newModels > 0) {
       ctx.log(

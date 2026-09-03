@@ -3,6 +3,7 @@ import { dynamicCatalog } from "../providers/google-antigravity/dynamic-catalog.
 export interface ModelSpec {
 	maxOutputTokens: number;
 	thinkingBudget: number; // -1 = adaptive (model decides), >=0 = fixed
+	minThinkingBudget?: number;
 	isThinking: boolean;
 	/** Upstream-published context window (input tokens). Optional. */
 	contextWindow?: number;
@@ -32,6 +33,10 @@ export const DEFAULT_MODEL_SPECS: Record<string, ModelSpec> = {
 	"claude-sonnet-4-6-thinking":{ maxOutputTokens: 64000, thinkingBudget: 32768, isThinking: true, contextWindow: 1_000_000 },
 	"claude-opus-4-6-thinking":  { maxOutputTokens: 64000, thinkingBudget: 32768, isThinking: true, contextWindow: 1_000_000 },
 	"claude-opus-4-6":           { maxOutputTokens: 64000, thinkingBudget: 32768, isThinking: true, contextWindow: 1_000_000 },
+	"claude-sonnet-4-5":         { maxOutputTokens: 64000, thinkingBudget: 32768, isThinking: true, contextWindow: 200_000 },
+	"claude-sonnet-4-5-thinking":{ maxOutputTokens: 64000, thinkingBudget: 32768, isThinking: true, contextWindow: 200_000 },
+	"claude-opus-4-5":           { maxOutputTokens: 64000, thinkingBudget: 32768, isThinking: true, contextWindow: 200_000 },
+	"claude-opus-4-5-thinking":  { maxOutputTokens: 64000, thinkingBudget: 32768, isThinking: true, contextWindow: 200_000 },
 	"gpt-oss-120b-medium":       { maxOutputTokens: 32768, thinkingBudget: 8192,  isThinking: true, contextWindow: 131_072 },
 	"gpt-oss-120b":              { maxOutputTokens: 32768, thinkingBudget: 8192,  isThinking: true, contextWindow: 131_072 },
 };
@@ -66,6 +71,19 @@ export function getModelFamily(model: string): "claude" | "gemini" | "unknown" {
 	return "unknown";
 }
 
+/** Resolve bundled static metadata without consulting the dynamic registry. */
+export function getStaticModelSpec(model: string): ModelSpec | undefined {
+	const lower = model.toLowerCase();
+	if (DEFAULT_MODEL_SPECS[lower]) return DEFAULT_MODEL_SPECS[lower];
+	let best: { key: string; spec: ModelSpec } | undefined;
+	for (const [key, spec] of Object.entries(DEFAULT_MODEL_SPECS)) {
+		if (lower.includes(key) && (!best || key.length > best.key.length)) {
+			best = { key, spec };
+		}
+	}
+	return best?.spec;
+}
+
 export function getModelSpec(model: string): ModelSpec {
 	const lower = model.toLowerCase();
 	if (modelSpecsOverride) {
@@ -79,9 +97,8 @@ export function getModelSpec(model: string): ModelSpec {
 	const dynamicSpec = dynamicCatalog.getModelSpec(lower);
 	if (dynamicSpec) return dynamicSpec;
 	if (!modelSpecsOverride) {
-		for (const [key, spec] of Object.entries(DEFAULT_MODEL_SPECS)) {
-			if (lower.includes(key)) return spec;
-		}
+		const staticSpec = getStaticModelSpec(lower);
+		if (staticSpec) return staticSpec;
 	}
 	const family = getModelFamily(model);
 	if (family === "claude") return { maxOutputTokens: CLAUDE_MAX_OUTPUT_TOKENS, thinkingBudget: CLAUDE_DEFAULT_THINKING_BUDGET, isThinking: true, contextWindow: 1_000_000 };
@@ -90,12 +107,5 @@ export function getModelSpec(model: string): ModelSpec {
 }
 
 export function isThinkingModel(model: string): boolean {
-	const spec = getModelSpec(model);
-	if (spec.isThinking) return true;
-	const l = model.toLowerCase();
-	if (l.includes("gemini")) {
-		const m = l.match(/gemini-(\d+)/);
-		if (m && parseInt(m[1], 10) >= 3) return true;
-	}
-	return false;
+	return getModelSpec(model).isThinking;
 }

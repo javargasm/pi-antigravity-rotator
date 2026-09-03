@@ -5,9 +5,11 @@ import {
 	anthropicToAntigravityBody,
 	normalizeOpenAIChatCompletionRequest,
 	normalizeOpenAIResponsesRequest,
+	convertResponsesToChatRequest,
 	mapTieredReasoningEffortToThinkingLevel,
 } from "../src/providers/google-antigravity/translators.js";
 import { setModelSpecsOverride } from "../src/compat/model-specs.js";
+import { dynamicCatalog } from "../src/providers/google-antigravity/dynamic-catalog.js";
 
 type AntigravityBodyWithRequest = ReturnType<typeof openAIToAntigravityBody> & {
 	request: {
@@ -310,5 +312,106 @@ describe("mapTieredReasoningEffortToThinkingLevel", () => {
 			mapTieredReasoningEffortToThinkingLevel("high", "gemini-3.6-flash-high"),
 			undefined,
 		);
+	});
+});
+
+describe("dynamic thinking constraints", () => {
+	afterEach(() => {
+		dynamicCatalog.reset();
+	});
+
+	it("honors explicit supportsThinking=false across compatibility protocols", () => {
+		dynamicCatalog.updateFromEndpointResponse({
+			models: {
+				"gemini-4.0-fast": {
+					supportsThinking: false,
+					quotaInfo: { remainingFraction: 1 },
+				},
+			},
+		});
+
+		const requests = [
+			openAIToAntigravityBody({
+				model: "gemini-4.0-fast",
+				messages: [{ role: "user", content: "ping" }],
+				reasoning_effort: "high",
+			}),
+			openAIToAntigravityBody(convertResponsesToChatRequest({
+				model: "gemini-4.0-fast",
+				input: "ping",
+				reasoning: { effort: "high" },
+			}).chatRequest),
+			anthropicToAntigravityBody({
+				model: "gemini-4.0-fast",
+				messages: [{ role: "user", content: "ping" }],
+			}),
+		] as AntigravityBodyWithRequest[];
+
+		for (const request of requests) {
+			assert.equal(request.request.generationConfig?.thinkingConfig, undefined);
+		}
+	});
+
+	it("honors minThinkingBudget consistently across compatibility protocols", () => {
+		dynamicCatalog.updateFromEndpointResponse({
+			models: {
+				"gemini-4.0-min-budget": {
+					maxOutputTokens: 12_000,
+					supportsThinking: true,
+					thinkingBudget: 1_000,
+					minThinkingBudget: 4_000,
+					quotaInfo: { remainingFraction: 1 },
+				},
+			},
+		});
+
+		const requests = [
+			openAIToAntigravityBody({
+				model: "gemini-4.0-min-budget",
+				messages: [{ role: "user", content: "ping" }],
+				max_tokens: 3_000,
+			}),
+			openAIToAntigravityBody(convertResponsesToChatRequest({
+				model: "gemini-4.0-min-budget",
+				input: "ping",
+				max_output_tokens: 3_000,
+			}).chatRequest),
+			anthropicToAntigravityBody({
+				model: "gemini-4.0-min-budget",
+				messages: [{ role: "user", content: "ping" }],
+				max_tokens: 3_000,
+			}),
+		] as AntigravityBodyWithRequest[];
+
+		for (const request of requests) {
+			assert.equal(
+				request.request.generationConfig?.thinkingConfig?.thinkingBudget,
+				4_000,
+			);
+			assert.equal(request.request.generationConfig?.maxOutputTokens, 12_000);
+		}
+	});
+
+	it("never emits a fixed thinking budget that consumes all output tokens", () => {
+		dynamicCatalog.updateFromEndpointResponse({
+			models: {
+				"gemini-4.0-tight-output": {
+					maxOutputTokens: 4_096,
+					supportsThinking: true,
+					thinkingBudget: 5_000,
+					minThinkingBudget: 1_024,
+					quotaInfo: { remainingFraction: 1 },
+				},
+			},
+		});
+
+		const body = openAIToAntigravityBody({
+			model: "gemini-4.0-tight-output",
+			messages: [{ role: "user", content: "ping" }],
+		}) as AntigravityBodyWithRequest;
+		const generation = body.request.generationConfig!;
+		const budget = generation.thinkingConfig?.thinkingBudget as number;
+		assert.ok(Number.isFinite(budget) && budget > 0);
+		assert.ok(budget < generation.maxOutputTokens!);
 	});
 });

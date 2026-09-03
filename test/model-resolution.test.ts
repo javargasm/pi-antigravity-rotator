@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
 	MODEL_PRICING,
 	QUOTA_MODEL_KEYS,
+	getModelPricing,
 	resolveDisplayModelKey,
 	resolveQuotaModelKey,
 } from "../src/types.js";
@@ -212,6 +213,33 @@ describe("model resolution", () => {
 		assert.equal(gemini.percentRemaining, 42);
 		// No other pool key present in the stub response.
 		assert.equal(quotas.length, 1);
+	});
+
+	it("skips metadata-only family entries and uses the first quota-bearing sibling", () => {
+		const quotas = extractQuotas({
+			models: {
+				"gemini-future-metadata-only": { displayName: "metadata only" },
+				"gemini-future-exhausted": {
+					quotaInfo: { remainingFraction: 0 },
+				},
+				"gemini-future-available": {
+					quotaInfo: { remainingFraction: 0.9 },
+				},
+			},
+		}, []);
+
+		assert.deepEqual(quotas.map(({ modelKey, percentRemaining }) => ({
+			modelKey,
+			percentRemaining,
+		})), [{ modelKey: "gemini", percentRemaining: 0 }]);
+	});
+
+	it("uses provider-aware versioned Gemini pricing fallbacks", () => {
+		assert.equal(getModelPricing("google/gemini-3.8-flash-preview")?.inputPer1M, 0.75);
+		assert.equal(getModelPricing("google/gemini-3.7-flash-preview")?.inputPer1M, 0.75);
+		assert.equal(getModelPricing("google/gemini-3.6-flash-preview")?.inputPer1M, 1.5);
+		assert.equal(getModelPricing("google/gemini-4.0-flash-preview")?.inputPer1M, 0.5);
+		assert.equal(getModelPricing("acme-flash-preview"), undefined);
 	});
 
 	it("treats intact Google quota as fresh even when reset times are present", () => {

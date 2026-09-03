@@ -2141,12 +2141,25 @@ export interface CompatModelEntry {
   quotaPool: string;
   multimodal: boolean;
   tools: boolean;
+  maxOutputTokens: number;
+  thinkingBudget: number;
+  minThinkingBudget?: number;
+  isThinking: boolean;
 }
 
 export function getEffectiveAntigravityModels(): CompatModelEntry[] {
   const dynamic = dynamicCatalog.getAllModels();
   const seen = new Set(MODEL_CATALOG.map((model) => model.id.toLowerCase()));
-  const result: CompatModelEntry[] = MODEL_CATALOG.map((model) => ({ ...model }));
+  const result: CompatModelEntry[] = MODEL_CATALOG.map((model) => {
+    const spec = getModelSpec(model.id);
+    return {
+      ...model,
+      maxOutputTokens: spec.maxOutputTokens,
+      thinkingBudget: spec.thinkingBudget,
+      minThinkingBudget: spec.minThinkingBudget,
+      isThinking: spec.isThinking,
+    };
+  });
   for (const m of dynamic) {
     if (seen.has(m.id.toLowerCase())) continue;
     seen.add(m.id.toLowerCase());
@@ -2157,6 +2170,10 @@ export function getEffectiveAntigravityModels(): CompatModelEntry[] {
       quotaPool: m.quotaPool,
       multimodal: m.multimodal,
       tools: m.tools,
+      maxOutputTokens: m.maxOutputTokens,
+      thinkingBudget: m.thinkingBudget,
+      minThinkingBudget: m.minThinkingBudget,
+      isThinking: m.isThinking,
     });
   }
   return result;
@@ -2172,7 +2189,18 @@ export function buildOpenAIModelCatalog(
   rotator?: AccountRotator,
 ): OpenAIModelCatalogEntry[] {
   const catalog: OpenAIModelCatalogEntry[] = getEffectiveAntigravityModels().map(
-    ({ id, ctx, family, quotaPool, multimodal, tools }) => ({
+    ({
+      id,
+      ctx,
+      family,
+      quotaPool,
+      multimodal,
+      tools,
+      maxOutputTokens,
+      thinkingBudget,
+      minThinkingBudget,
+      isThinking,
+    }) => ({
       id,
       object: "model",
       created: 0,
@@ -2185,6 +2213,12 @@ export function buildOpenAIModelCatalog(
         quota_pool: quotaPool,
         multimodal,
         tool_calling: tools,
+        max_output_tokens: maxOutputTokens,
+        thinking: isThinking,
+        thinking_budget: thinkingBudget,
+        ...(minThinkingBudget !== undefined
+          ? { min_thinking_budget: minThinkingBudget }
+          : {}),
       },
     }),
   );
@@ -2262,14 +2296,25 @@ export function serveOpenAIModels(
 export function serveGeminiModels(res: ServerResponse): void {
   writeJson(res, 200, {
     models: getEffectiveAntigravityModels().map(
-      ({ id, ctx, family, quotaPool, multimodal, tools }) => ({
+      ({
+        id,
+        ctx,
+        family,
+        quotaPool,
+        multimodal,
+        tools,
+        maxOutputTokens,
+        thinkingBudget,
+        minThinkingBudget,
+        isThinking,
+      }) => ({
         name: `models/${id}`,
         baseModelId: family,
         version: "v2.0",
         displayName: id,
         description: `Tuxevil Rotator Gemini-compatible model entry for ${id}`,
         inputTokenLimit: ctx,
-        outputTokenLimit: ctx,
+        outputTokenLimit: maxOutputTokens,
         supportedGenerationMethods: [
           "generateContent",
           "streamGenerateContent",
@@ -2278,6 +2323,11 @@ export function serveGeminiModels(res: ServerResponse): void {
           tools,
           multimodal,
           quotaPool,
+          thinking: isThinking,
+          thinkingBudget,
+          ...(minThinkingBudget !== undefined
+            ? { minThinkingBudget }
+            : {}),
         },
       }),
     ),

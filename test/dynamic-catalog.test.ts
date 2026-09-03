@@ -104,6 +104,90 @@ describe("DynamicModelRegistry", () => {
     assert.deepEqual(dynamicCatalog.getAllModels(), []);
   });
 
+  it("rejects late snapshots after an account leaves the active generation set", () => {
+    dynamicCatalog.retainAccounts([{ id: "account-a", generation: "gen-1" }]);
+    const capturedEpoch = dynamicCatalog.captureAccountEpoch("account-a", "gen-1");
+    assert.equal(typeof capturedEpoch, "number");
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { "gemini-before-removal": { quotaInfo: { remainingFraction: 1 } } },
+    }, "account-a", "gen-1");
+
+    dynamicCatalog.retainAccounts([]);
+    assert.equal(dynamicCatalog.getModel("gemini-before-removal"), undefined);
+    dynamicCatalog.retainAccounts([{ id: "account-a", generation: "gen-1" }]);
+    assert.equal(dynamicCatalog.updateFromEndpointResponse({
+      models: { "gemini-late-after-removal": { quotaInfo: { remainingFraction: 1 } } },
+    }, "account-a", "gen-1", capturedEpoch as number), 0);
+    assert.equal(dynamicCatalog.getModel("gemini-late-after-removal"), undefined);
+  });
+
+  it("never treats quota bucket sentinels as discovered models", () => {
+    const newCount = dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        gemini: { quotaInfo: { remainingFraction: 0.75 } },
+        claude: { quotaInfo: { remainingFraction: 0.5 } },
+        "gemini-real-dynamic-model": { quotaInfo: { remainingFraction: 1 } },
+      },
+    });
+
+    assert.equal(newCount, 1);
+    assert.equal(dynamicCatalog.getModel("gemini"), undefined);
+    assert.equal(dynamicCatalog.getModel("claude"), undefined);
+    assert.equal(dynamicCatalog.wasDiscovered("gemini"), false);
+    assert.equal(dynamicCatalog.wasDiscovered("claude"), false);
+    assert.equal(dynamicCatalog.wasDiscovered("gemini-real-dynamic-model"), true);
+  });
+
+  it("keeps a known-good snapshot when the runtime response is malformed", () => {
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-known-good": { quotaInfo: { remainingFraction: 1 } },
+      },
+    }, "account-a");
+
+    assert.equal(dynamicCatalog.updateFromEndpointResponse(
+      { models: null } as unknown as GoogleQuotaResponse,
+      "account-a",
+    ), 0);
+    assert.ok(dynamicCatalog.getModel("gemini-known-good"));
+
+    assert.equal(dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-null-entry": null,
+        "gemini-array-entry": [],
+      },
+      tieredModelIds: {
+        invalid: [null, 42],
+      },
+    } as unknown as GoogleQuotaResponse, "account-a"), 0);
+    assert.ok(dynamicCatalog.getModel("gemini-known-good"));
+  });
+
+  it("skips malformed entries and non-finite metadata without losing valid models", () => {
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-null-entry": null,
+        "gemini-valid-entry": {
+          maxTokens: Number.POSITIVE_INFINITY,
+          maxOutputTokens: Number.NaN,
+          thinkingBudget: Number.POSITIVE_INFINITY,
+          quotaInfo: { remainingFraction: 0.5 },
+        },
+      },
+      tieredModelIds: {
+        invalid: [null, 42, ""],
+      },
+    } as unknown as GoogleQuotaResponse);
+
+    assert.equal(dynamicCatalog.getModel("gemini-null-entry"), undefined);
+    assert.deepEqual(getModelSpec("gemini-valid-entry"), {
+      maxOutputTokens: 65536,
+      thinkingBudget: 24576,
+      isThinking: true,
+      contextWindow: 1_000_000,
+    });
+  });
+
   it("preserves Gemini family defaults for quota-only dynamic metadata", () => {
     dynamicCatalog.updateFromEndpointResponse({
       models: {
@@ -126,6 +210,34 @@ describe("DynamicModelRegistry", () => {
       maxOutputTokens: 32768,
       thinkingConfig: { includeThoughts: true, thinkingBudget: 24576 },
     });
+  });
+
+  it("seeds sparse known models from their exact static specs", () => {
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "claude-sonnet-4-5": { quotaInfo: { remainingFraction: 0.75 } },
+      },
+    });
+
+    assert.deepEqual(getModelSpec("claude-sonnet-4-5"), {
+      maxOutputTokens: 64000,
+      thinkingBudget: 32768,
+      isThinking: true,
+      contextWindow: 200_000,
+    });
+  });
+
+  it("keeps historical quota-pool provenance after a dynamic model disappears", () => {
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-ephemeral-vnext": { quotaInfo: { remainingFraction: 1 } },
+      },
+    }, "account-a");
+    dynamicCatalog.updateFromEndpointResponse({ models: {} }, "account-a");
+
+    assert.equal(dynamicCatalog.getModel("gemini-ephemeral-vnext"), undefined);
+    assert.equal(dynamicCatalog.wasDiscovered("gemini-ephemeral-vnext"), true);
+    assert.equal(dynamicCatalog.resolveQuotaPool("gemini-ephemeral-vnext"), "gemini");
   });
 
   it("exposes dynamic model specs through getModelSpec", () => {
@@ -226,8 +338,8 @@ describe("DynamicModelRegistry", () => {
     // Unlisted future Flash model falls back to Flash pricing
     const flashPrice = getModelPricing("gemini-4.5-flash-hyper");
     assert.ok(flashPrice);
-    assert.equal(flashPrice.inputPer1M, 0.75);
-    assert.equal(flashPrice.outputPer1M, 3.75);
+    assert.equal(flashPrice.inputPer1M, 0.5);
+    assert.equal(flashPrice.outputPer1M, 3.0);
 
     // Unlisted future Pro model falls back to Pro pricing
     const proPrice = getModelPricing("gemini-5.0-pro-ultra");
