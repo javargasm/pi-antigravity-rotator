@@ -3555,7 +3555,7 @@ export class AccountRotator {
   ): boolean {
     if (
       !isStaticAntigravityModel(modelKey) &&
-      dynamicCatalog.wasDiscovered(modelKey) &&
+      dynamicCatalog.wasDiscoveredFromLiveCatalog(modelKey) &&
       !dynamicCatalog.hasModelForAccount(getAccountIdentity(account), modelKey)
     ) {
       return false;
@@ -3581,10 +3581,14 @@ export class AccountRotator {
   }
 
   private resolvePoolKeyForModel(model: string): string | null {
+    const normalizedModel = model.trim().toLowerCase();
     if (
       !isStaticAntigravityModel(model) &&
       dynamicCatalog.wasDiscovered(model)
-    ) return model.toLowerCase();
+    ) return normalizedModel;
+    if (this.hasRelevantQuotaStateForModel(normalizedModel, Date.now())) {
+      return normalizedModel;
+    }
     const context = {
       ollamaModels: this.ollamaModels,
       codexModels: this.codexModels,
@@ -3594,6 +3598,24 @@ export class AccountRotator {
       return adapter.getPoolKey(model);
     }
     return resolveQuotaModelKey(model) ?? null;
+  }
+
+  private hasRelevantQuotaStateForModel(modelKey: string, now: number): boolean {
+    if ((this.modelBreakers[modelKey] ?? 0) > now) return true;
+    if (
+      this.accounts.some(
+        (account) => (account.cooldownsByModel[modelKey] ?? 0) > now,
+      )
+    ) return true;
+    if (
+      Object.entries(this.projectModelBreakers).some(([key, deadline]) =>
+        key.endsWith(`::${modelKey}`) && deadline > now
+      )
+    ) return true;
+    const windowMs = this.config.projectCircuitBreakerWindowMs ?? 10 * 60 * 1000;
+    return this.provider429Events.some(
+      (event) => event.modelKey === modelKey && now - event.ts <= windowMs,
+    );
   }
 
   private resolveQuotaStateKey(modelKey: string): string {

@@ -182,6 +182,9 @@ export async function fetchProviderQuota(
     if (!isCurrentGeneration()) return;
     const data = parseGoogleQuotaResponse(rawData);
     if (!data) return;
+    const oldQuota = account.quota || [];
+    const fresh = extractQuotas(data, oldQuota);
+    if (fresh.length === 0) return;
     const newModels = dynamicCatalog.updateFromEndpointResponse(
       data,
       accountId,
@@ -193,9 +196,6 @@ export async function fetchProviderQuota(
         `${account.config.email}: discovered ${newModels} Antigravity model(s) from quota response`,
       );
     }
-    const oldQuota = account.quota || [];
-    const fresh = extractQuotas(data, oldQuota);
-    if (fresh.length === 0) return;
     // Drop the previous Antigravity entries so the new ones fully replace
     // them; keep entries from OTHER providers (Ollama) so multi-provider
     // accounts accumulate quotas across credentials without overwriting

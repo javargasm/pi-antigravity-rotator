@@ -305,6 +305,166 @@ describe("429 RESOURCE_EXHAUSTED resilience and in-flight lifecycle", () => {
     }
   });
 
+  it("routes a restored neutral dynamic model before its first post-restart poll", async () => {
+    const rawModel = "future-vnext";
+    const email = "restored-neutral-routing@example.com";
+    const projectId = "restored-neutral-routing-project";
+    const originalFetch = globalThis.fetch;
+    let firstRotator: InstanceType<typeof AccountRotator> | undefined;
+    let secondRotator: InstanceType<typeof AccountRotator> | undefined;
+
+    dynamicCatalog.reset();
+    await setCachedState({ modelAccounts: {}, accounts: {} });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      models: {
+        [rawModel]: { quotaInfo: { remainingFraction: 1 } },
+      },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })) as typeof fetch;
+
+    try {
+      const config = {
+        proxyPort: 51224,
+        rotateOnQuotaDrop: 20,
+        quotaPollIntervalMs: 300000,
+        requestsPerRotation: 5,
+        accounts: [{ email, projectId, refreshToken: "persisted-refresh" }],
+      };
+      firstRotator = new AccountRotator(config);
+      firstRotator.stopQuotaPolling();
+      const firstAccount = (firstRotator as any).accounts[0] as AccountRuntime;
+      firstAccount.accessToken = "first-access-token";
+      firstAccount.tokenExpires = Date.now() + 60_000;
+      await firstRotator.pollAccountQuota(firstAccount);
+      await firstRotator.saveState();
+
+      dynamicCatalog.reset();
+      secondRotator = new AccountRotator(config);
+      secondRotator.stopQuotaPolling();
+      const secondAccount = (secondRotator as any).accounts[0] as AccountRuntime;
+      secondAccount.accessToken = "second-access-token";
+      secondAccount.tokenExpires = Date.now() + 60_000;
+
+      assert.equal(dynamicCatalog.resolveQuotaPool(rawModel), "gemini");
+      const selected = await (secondRotator as any).tryGetActiveAccount(rawModel);
+      assert.equal(selected, secondAccount);
+      secondRotator.finishRequest(secondAccount, rawModel);
+    } finally {
+      firstRotator?.stopQuotaPolling();
+      secondRotator?.stopQuotaPolling();
+      dynamicCatalog.reset();
+      globalThis.fetch = originalFetch;
+      await setCachedState({ modelAccounts: {}, accounts: {} });
+    }
+  });
+
+  it("honors legacy neutral dynamic safety state before catalog hydration", async () => {
+    const now = Date.now();
+    const rawModel = "future-vnext";
+    const email = "legacy-neutral-safety@example.com";
+    const projectId = "legacy-neutral-safety-project";
+    const deadline = now + 2 * 60 * 60 * 1000;
+    const originalFetch = globalThis.fetch;
+    let rotator: InstanceType<typeof AccountRotator> | undefined;
+
+    dynamicCatalog.reset();
+    await setCachedState({
+      modelAccounts: {},
+      safety: {
+        day: new Date(now).toISOString().slice(0, 10),
+        projectRequests: {},
+        modelBreakers: { [rawModel]: deadline },
+        projectModelBreakers: { [`${projectId}::${rawModel}`]: deadline },
+        provider429Events: [
+          { ts: now - 2_000, projectId, modelKey: rawModel, account: "legacy-a@example.com" },
+          { ts: now - 1_000, projectId, modelKey: rawModel, account: "legacy-b@example.com" },
+        ],
+      },
+      accounts: {
+        [email]: {
+          totalRequests: 0,
+          cooldownsByModel: { [rawModel]: deadline },
+          quotaExhaustedAt: now,
+          disabled: false,
+          flagged: false,
+        },
+      },
+    });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      models: {
+        [rawModel]: { quotaInfo: { remainingFraction: 1 } },
+      },
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })) as typeof fetch;
+
+    try {
+      rotator = new AccountRotator({
+        proxyPort: 51224,
+        rotateOnQuotaDrop: 20,
+        quotaPollIntervalMs: 300000,
+        requestsPerRotation: 5,
+        projectCircuitBreaker429Threshold: 3,
+        modelCircuitBreaker429Threshold: 3,
+        accounts: [{ email, projectId, refreshToken: "persisted-refresh" }],
+      });
+      rotator.stopQuotaPolling();
+      const account = (rotator as any).accounts[0] as AccountRuntime;
+      account.accessToken = "legacy-access-token";
+      account.tokenExpires = deadline;
+
+      assert.equal((rotator as any).resolveRequestPoolKey(rawModel), rawModel);
+      assert.equal((rotator as any).isAvailableForModel(account, rawModel, now), false);
+
+      delete account.cooldownsByModel[rawModel];
+      assert.equal(
+        (rotator as any).getUnavailableReasonForModel(account, rawModel, now),
+        "model circuit breaker active",
+      );
+      delete (rotator as any).modelBreakers[rawModel];
+      assert.equal(
+        (rotator as any).getUnavailableReasonForModel(account, rawModel, now),
+        "project circuit breaker active",
+      );
+      delete (rotator as any).projectModelBreakers[`${projectId}::${rawModel}`];
+
+      rotator.recordProvider429(account, rawModel, 1_000);
+      assert.ok((rotator as any).modelBreakers[rawModel] > now);
+      assert.equal((rotator as any).provider429Events.length, 3);
+      assert.ok(
+        (rotator as any).provider429Events.every(
+          (event: { modelKey: string }) => event.modelKey === rawModel,
+        ),
+      );
+      account.cooldownsByModel[rawModel] = deadline;
+      (rotator as any).projectModelBreakers[`${projectId}::${rawModel}`] = deadline;
+
+      await rotator.pollAccountQuota(account);
+      assert.equal(account.cooldownsByModel[rawModel], undefined);
+      assert.equal(account.cooldownsByModel.gemini, deadline);
+      assert.equal((rotator as any).modelBreakers[rawModel], undefined);
+      assert.ok((rotator as any).modelBreakers.gemini > now);
+      assert.equal(
+        (rotator as any).projectModelBreakers[`${projectId}::${rawModel}`],
+        undefined,
+      );
+      assert.ok((rotator as any).projectModelBreakers[`${projectId}::gemini`] > now);
+      assert.ok(
+        (rotator as any).provider429Events.every(
+          (event: { modelKey: string }) => event.modelKey === "gemini",
+        ),
+      );
+    } finally {
+      rotator?.stopQuotaPolling();
+      dynamicCatalog.reset();
+      globalThis.fetch = originalFetch;
+      await setCachedState({ modelAccounts: {}, accounts: {} });
+    }
+  });
+
   it("preserves a neutral dynamic cooldown across discovery and restart", async () => {
     const now = Date.now();
     const canonicalDeadline = now + 20 * 60 * 1000;

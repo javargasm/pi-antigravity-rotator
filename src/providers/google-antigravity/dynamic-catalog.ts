@@ -203,6 +203,7 @@ export class DynamicModelRegistry {
     string,
     Pick<DynamicModelEntry, "id" | "quotaPool">
   >();
+  private liveDiscoveredModels = new Set<string>();
   private activeAccountGenerations: Map<
     string,
     ActiveAccountGeneration
@@ -219,6 +220,7 @@ export class DynamicModelRegistry {
     this.accountModels.clear();
     this.defaultAgentModelIds.clear();
     this.discoveredModels.clear();
+    this.liveDiscoveredModels.clear();
     this.activeAccountGenerations = null;
     this.nextAccountEpoch = 0;
   }
@@ -339,6 +341,7 @@ export class DynamicModelRegistry {
         displayName: info.displayName ?? previous?.get(lowerId)?.displayName ?? normalizedId,
       });
       this.discoveredModels.set(lowerId, { id: normalizedId, quotaPool });
+      this.liveDiscoveredModels.add(lowerId);
       if (!knownBefore.has(lowerId)) newModelsCount++;
     }
 
@@ -435,6 +438,10 @@ export class DynamicModelRegistry {
 
   wasDiscovered(id: string): boolean {
     return this.discoveredModels.has(id.trim().toLowerCase());
+  }
+
+  wasDiscoveredFromLiveCatalog(id: string): boolean {
+    return this.liveDiscoveredModels.has(id.trim().toLowerCase());
   }
 
   getObservedModelId(id: string): string | undefined {

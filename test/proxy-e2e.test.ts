@@ -944,6 +944,7 @@ describe("native Code Assist passthrough", () => {
 
 	it("preserves the last Google quota snapshot when a successful poll has no usable rows", async () => {
 		const account = makeAccount("malformed-quota@example.com", "project-safe");
+		const accountId = getAccountIdentity(account);
 		account.quota = [{
 			modelKey: "gemini",
 			displayName: "Gemini",
@@ -952,6 +953,14 @@ describe("native Code Assist passthrough", () => {
 			timerType: "fresh",
 			providerId: "google-antigravity",
 		}];
+		dynamicCatalog.updateFromEndpointResponse({
+			defaultAgentModelId: "future-known-good",
+			models: {
+				"future-known-good": {
+					quotaInfo: { remainingFraction: 0.8 },
+				},
+			},
+		}, accountId);
 		const originalQuota = structuredClone(account.quota);
 		const originalFetch = globalThis.fetch;
 		globalThis.fetch = (async () => new Response(JSON.stringify({
@@ -975,6 +984,12 @@ describe("native Code Assist passthrough", () => {
 				reportQuotaPollFlag: () => {},
 			});
 			assert.deepEqual(account.quota, originalQuota);
+			assert.ok(dynamicCatalog.getModel("future-known-good"));
+			assert.equal(
+				dynamicCatalog.hasModelForAccount(accountId, "future-known-good"),
+				true,
+			);
+			assert.equal(dynamicCatalog.getDefaultAgentModelId(), "future-known-good");
 		} finally {
 			globalThis.fetch = originalFetch;
 		}
