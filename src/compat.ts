@@ -2077,6 +2077,22 @@ const MODEL_CATALOG = [
     multimodal: false,
     tools: true,
   },
+  {
+    id: "models/proactive-observer-v10",
+    family: "proactive-observer",
+    ctx: 1048576,
+    quotaPool: "gemini",
+    multimodal: true,
+    tools: false,
+  },
+  {
+    id: "whisper-1",
+    family: "proactive-observer",
+    ctx: 1048576,
+    quotaPool: "gemini",
+    multimodal: true,
+    tools: false,
+  },
 ] as const;
 
 export interface OpenAIModelCatalogEntry {
