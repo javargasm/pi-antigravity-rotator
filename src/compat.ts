@@ -2183,6 +2183,11 @@ export function getEffectiveAntigravityModels(): CompatModelEntry[] {
     });
   }
 
+  return result;
+}
+
+function getOpenAIAntigravityModels(): CompatModelEntry[] {
+  const result = getEffectiveAntigravityModels();
   const rules = getEffortRouting();
   if (!rules || Object.keys(rules).length === 0) {
     return result;
@@ -2249,7 +2254,7 @@ export function getEffectiveAntigravityModels(): CompatModelEntry[] {
 export function buildOpenAIModelCatalog(
   rotator?: AccountRotator,
 ): OpenAIModelCatalogEntry[] {
-  const catalog: OpenAIModelCatalogEntry[] = getEffectiveAntigravityModels().map(
+  const catalog: OpenAIModelCatalogEntry[] = getOpenAIAntigravityModels().map(
     ({
       id,
       ctx,

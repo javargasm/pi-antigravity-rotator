@@ -306,7 +306,7 @@ describe("effort routing catalog swap", () => {
 		dynamicCatalog.reset();
 	});
 
-	it("swaps targets for alias in /v1/models and /v1beta/models when configured", () => {
+	it("swaps targets only in /v1/models while /v1beta/models retains concrete models", () => {
 		setEffortRoutingOverride({
 			"gemini-3.8-flash": {
 				defaultEffort: "medium",
@@ -344,11 +344,10 @@ describe("effort routing catalog swap", () => {
 		const geminiAliasEntries = geminiPayload.models.filter(
 			(m) => m.name === "models/gemini-3.8-flash",
 		);
-		assert.equal(geminiAliasEntries.length, 1);
-		assert.equal(geminiAliasEntries[0].baseModelId, "gemini-3.8-flash");
+		assert.equal(geminiAliasEntries.length, 0);
 
 		for (const target of ["gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high"]) {
-			assert.ok(!geminiPayload.models.some((m) => m.name === `models/${target}`));
+			assert.ok(geminiPayload.models.some((m) => m.name === `models/${target}`));
 		}
 
 		const dashboardPayload = captureJson((res) =>
@@ -409,14 +408,17 @@ describe("effort routing catalog swap", () => {
 				capabilities: Record<string, unknown>;
 			}>;
 		};
-		const geminiAlias = geminiPayload.models.find(
+		assert.ok(!geminiPayload.models.some(
 			(model) => model.name === "models/gemini-4.0-effort",
+		));
+		const geminiTarget = geminiPayload.models.find(
+			(model) => model.name === "models/gemini-4.0-effort-medium",
 		);
-		assert.ok(geminiAlias);
-		assert.equal(geminiAlias.inputTokenLimit, 2_000_000);
-		assert.equal(geminiAlias.outputTokenLimit, 32_000);
-		assert.equal(geminiAlias.capabilities.thinkingBudget, 12_000);
-		assert.equal(geminiAlias.capabilities.minThinkingBudget, 2_000);
+		assert.ok(geminiTarget);
+		assert.equal(geminiTarget.inputTokenLimit, 2_000_000);
+		assert.equal(geminiTarget.outputTokenLimit, 32_000);
+		assert.equal(geminiTarget.capabilities.thinkingBudget, 12_000);
+		assert.equal(geminiTarget.capabilities.minThinkingBudget, 2_000);
 	});
 
 	it("keeps unmapped variants visible when only partial targets are configured", () => {

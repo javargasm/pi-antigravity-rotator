@@ -906,7 +906,7 @@ describe("effort-based routing endpoint e2e", () => {
 		}
 	});
 
-	it("native /v1beta/models/*:generateContent does not resolve aliases", async () => {
+	it("native catalog exposes concrete targets that generateContent forwards unchanged", async () => {
 		setEffortRoutingOverride({
 			"gemini-3.8-flash": {
 				defaultEffort: "medium",
@@ -939,8 +939,19 @@ describe("effort-based routing endpoint e2e", () => {
 		const port = (proxy.address() as AddressInfo).port;
 
 		try {
+			const catalogResponse = await fetch(`http://127.0.0.1:${port}/v1beta/models`);
+			assert.equal(catalogResponse.status, 200);
+			const catalog = await catalogResponse.json();
+			assert.ok(Array.isArray(catalog.models));
+			assert.ok(!catalog.models.some(
+				(model: { name: string }) => model.name === "models/gemini-3.8-flash",
+			));
+			const target = catalog.models.find(
+				(model: { name: string }) => model.name === "models/gemini-3.8-flash-medium",
+			);
+			assert.ok(target);
 			const res = await fetch(
-				`http://127.0.0.1:${port}/v1beta/models/gemini-3.8-flash:generateContent`,
+				`http://127.0.0.1:${port}/v1beta/${target.name}:generateContent`,
 				{
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -953,7 +964,7 @@ describe("effort-based routing endpoint e2e", () => {
 
 			assert.equal(upstreamCaptures.length, 1);
 			const upstreamBody = JSON.parse(upstreamCaptures[0].body);
-			assert.equal(upstreamBody.model, "gemini-3.8-flash");
+			assert.equal(upstreamBody.model, "gemini-3.8-flash-medium");
 		} finally {
 			proxy.closeAllConnections?.();
 			await closeServer(proxy);
