@@ -9,6 +9,8 @@ export interface ModelSpec {
 	contextWindow?: number;
 }
 
+export type ModelSpecOverride = Partial<ModelSpec>;
+
 export const DEFAULT_MODEL_SPECS: Record<string, ModelSpec> = {
 	"gemini-pro-agent":          { maxOutputTokens: 65535, thinkingBudget: 10001, isThinking: true, contextWindow: 1_000_000 },
 	"gemini-3-flash-agent":      { maxOutputTokens: 65536, thinkingBudget: 10000, isThinking: true, contextWindow: 1_000_000 },
@@ -41,13 +43,13 @@ export const DEFAULT_MODEL_SPECS: Record<string, ModelSpec> = {
 	"gpt-oss-120b":              { maxOutputTokens: 32768, thinkingBudget: 8192,  isThinking: true, contextWindow: 131_072 },
 };
 
-let modelSpecsOverride: Record<string, ModelSpec> | null = null;
+let modelSpecsOverride: Record<string, ModelSpecOverride> | null = null;
 
 /**
- * Replace the bundled model spec table with operator-provided overrides.
+ * Apply operator-provided partial overrides over effective model specs.
  * Pass `null` to restore defaults. Called once at startup from index.ts.
  */
-export function setModelSpecsOverride(specs: Record<string, ModelSpec> | null): void {
+export function setModelSpecsOverride(specs: Record<string, ModelSpecOverride> | null): void {
 	modelSpecsOverride = specs && Object.keys(specs).length > 0
 		? Object.fromEntries(
 			Object.entries(specs).map(([key, spec]) => [key.toLowerCase(), spec]),
@@ -56,7 +58,10 @@ export function setModelSpecsOverride(specs: Record<string, ModelSpec> | null): 
 }
 
 export function getActiveModelSpecs(): Record<string, ModelSpec> {
-	return modelSpecsOverride ?? DEFAULT_MODEL_SPECS;
+	if (!modelSpecsOverride) return DEFAULT_MODEL_SPECS;
+	return Object.fromEntries(
+		Object.keys(modelSpecsOverride).map((model) => [model, getModelSpec(model)]),
+	);
 }
 
 const GEMINI_MAX_OUTPUT_TOKENS = 65536;
@@ -84,7 +89,7 @@ export function getStaticModelSpec(model: string): ModelSpec | undefined {
 	return best?.spec;
 }
 
-export function getModelSpecOverride(model: string): ModelSpec | undefined {
+export function getModelSpecOverride(model: string): ModelSpecOverride | undefined {
 	if (!modelSpecsOverride) return undefined;
 	const lower = model.toLowerCase();
 	if (modelSpecsOverride[lower]) return modelSpecsOverride[lower];
@@ -94,18 +99,51 @@ export function getModelSpecOverride(model: string): ModelSpec | undefined {
 	return undefined;
 }
 
+function mergeModelSpec(
+	defaults: ModelSpec,
+	override: ModelSpecOverride,
+): ModelSpec {
+	const minThinkingBudget = typeof override.minThinkingBudget === "number" &&
+		Number.isFinite(override.minThinkingBudget) &&
+		override.minThinkingBudget >= 0
+		? override.minThinkingBudget
+		: defaults.minThinkingBudget;
+	const contextWindow = typeof override.contextWindow === "number" &&
+		Number.isFinite(override.contextWindow) &&
+		override.contextWindow > 0
+		? override.contextWindow
+		: defaults.contextWindow;
+	return {
+		maxOutputTokens: typeof override.maxOutputTokens === "number" &&
+			Number.isFinite(override.maxOutputTokens) &&
+			override.maxOutputTokens > 0
+			? override.maxOutputTokens
+			: defaults.maxOutputTokens,
+		thinkingBudget: typeof override.thinkingBudget === "number" &&
+			Number.isFinite(override.thinkingBudget)
+			? override.thinkingBudget
+			: defaults.thinkingBudget,
+		...(minThinkingBudget !== undefined ? { minThinkingBudget } : {}),
+		isThinking: typeof override.isThinking === "boolean"
+			? override.isThinking
+			: defaults.isThinking,
+		...(contextWindow !== undefined ? { contextWindow } : {}),
+	};
+}
+
 export function getModelSpec(model: string): ModelSpec {
 	const lower = model.toLowerCase();
-	const override = getModelSpecOverride(lower);
-	if (override) return override;
 	const dynamicSpec = dynamicCatalog.getModelSpec(lower);
-	if (dynamicSpec) return dynamicSpec;
 	const staticSpec = getStaticModelSpec(lower);
-	if (staticSpec) return staticSpec;
 	const family = getModelFamily(model);
-	if (family === "claude") return { maxOutputTokens: CLAUDE_MAX_OUTPUT_TOKENS, thinkingBudget: CLAUDE_DEFAULT_THINKING_BUDGET, isThinking: true, contextWindow: 1_000_000 };
-	if (family === "gemini") return { maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS, thinkingBudget: FALLBACK_THINKING_BUDGET, isThinking: true, contextWindow: 1_000_000 };
-	return { maxOutputTokens: 65536, thinkingBudget: FALLBACK_THINKING_BUDGET, isThinking: false, contextWindow: 128_000 };
+	const defaults = dynamicSpec ?? staticSpec ??
+		(family === "claude"
+			? { maxOutputTokens: CLAUDE_MAX_OUTPUT_TOKENS, thinkingBudget: CLAUDE_DEFAULT_THINKING_BUDGET, isThinking: true, contextWindow: 1_000_000 }
+			: family === "gemini"
+				? { maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS, thinkingBudget: FALLBACK_THINKING_BUDGET, isThinking: true, contextWindow: 1_000_000 }
+				: { maxOutputTokens: 65536, thinkingBudget: FALLBACK_THINKING_BUDGET, isThinking: false, contextWindow: 128_000 });
+	const override = getModelSpecOverride(lower);
+	return override ? mergeModelSpec(defaults, override) : defaults;
 }
 
 export function isThinkingModel(model: string): boolean {

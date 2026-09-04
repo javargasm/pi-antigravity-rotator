@@ -356,6 +356,70 @@ describe("DynamicModelRegistry", () => {
     }
   });
 
+  it("merges partial substring overrides over bundled specs without invalid payload numbers", () => {
+    setModelSpecsOverride({
+      "gemini-3.8": {
+        maxOutputTokens: 1000,
+        isThinking: true,
+      },
+    });
+
+    try {
+      assert.deepEqual(getModelSpec("gemini-3.8-flash-high"), {
+        maxOutputTokens: 1000,
+        thinkingBudget: -1,
+        isThinking: true,
+        contextWindow: 1_000_000,
+      });
+
+      const body = openAIToAntigravityBody({
+        model: "gemini-3.8-flash-high",
+        messages: [{ role: "user", content: "ping" }],
+      }) as { request: { generationConfig?: Record<string, unknown> } };
+      const serialized = JSON.parse(JSON.stringify(body)) as typeof body;
+      assert.deepEqual(serialized.request.generationConfig?.thinkingConfig, {
+        includeThoughts: true,
+      });
+    } finally {
+      setModelSpecsOverride(null);
+    }
+  });
+
+  it("merges partial exact overrides over runtime-discovered specs", () => {
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-5.0-ultra": {
+          maxTokens: 5_000_000,
+          maxOutputTokens: 100_000,
+          supportsThinking: true,
+          thinkingBudget: 50_000,
+          minThinkingBudget: 2_000,
+          quotaInfo: { remainingFraction: 1 },
+        },
+      },
+    });
+    setModelSpecsOverride({
+      "gemini-5.0-ultra": { maxOutputTokens: 60_000 },
+    });
+
+    try {
+      assert.deepEqual(getModelSpec("gemini-5.0-ultra"), {
+        maxOutputTokens: 60_000,
+        thinkingBudget: 50_000,
+        minThinkingBudget: 2_000,
+        isThinking: true,
+        contextWindow: 5_000_000,
+      });
+
+      setModelSpecsOverride({
+        "gemini-5.0-ultra": { thinkingBudget: 0 },
+      });
+      assert.equal(getModelSpec("gemini-5.0-ultra").thinkingBudget, 0);
+    } finally {
+      setModelSpecsOverride(null);
+    }
+  });
+
   it("exposes dynamic context windows through getAntigravityContextWindow", () => {
     dynamicCatalog.updateFromEndpointResponse({
       models: {

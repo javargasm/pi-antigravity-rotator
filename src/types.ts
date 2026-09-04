@@ -142,8 +142,8 @@ export interface Config {
   streamRecoveryMaxRetries?: number;
   // Prompt compression mode ("off" | "lite" | "rtk" | "rtk+lite").
   compressionMode?: "off" | "lite" | "rtk" | "rtk+lite";
-  // Override per-model specs used by the compat layer. Keys are model id substrings
-  // matched case-insensitively. When set, replaces the bundled defaults entirely.
+  // Partially override per-model specs used by the compat layer. Keys are model id
+  // substrings matched case-insensitively; omitted fields inherit effective defaults.
   modelSpecs?: Record<string, ModelSpecConfig>;
   // Override model-id aliases used to translate the operator-facing name
   // (e.g. "gemini-3.1-pro-high") to the upstream Antigravity name
@@ -224,10 +224,11 @@ export interface GoogleQuotaResponse {
 // Per-model thinking/output spec used by the compat layer.
 // Operators can override defaults via the `modelSpecs` field in accounts.json.
 export interface ModelSpecConfig {
-  maxOutputTokens: number;
-  thinkingBudget: number; // -1 = adaptive (model decides), >=0 = fixed
+  maxOutputTokens?: number;
+  thinkingBudget?: number; // -1 = adaptive (model decides), >=0 = fixed
   minThinkingBudget?: number;
-  isThinking: boolean;
+  isThinking?: boolean;
+  contextWindow?: number;
 }
 
 // Per-model quota info for an account

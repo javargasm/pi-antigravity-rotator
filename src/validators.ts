@@ -179,6 +179,9 @@ export function validateConfig(value: unknown): ValidationResult<Config> {
 				if (spec.isThinking !== undefined && typeof spec.isThinking !== "boolean") {
 					errors.push(`config.modelSpecs.${key}.isThinking must be a boolean`);
 				}
+				if (spec.contextWindow !== undefined && !isPositiveNumber(spec.contextWindow)) {
+					errors.push(`config.modelSpecs.${key}.contextWindow must be a positive number`);
+				}
 			}
 		}
 	}

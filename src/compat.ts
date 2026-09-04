@@ -2153,11 +2153,11 @@ export function getEffectiveAntigravityModels(): CompatModelEntry[] {
   const seen = new Set(MODEL_CATALOG.map((model) => model.id.toLowerCase()));
   const result: CompatModelEntry[] = MODEL_CATALOG.map((model) => {
     const spec = getModelSpec(model.id);
-    const contextSpec =
-      getModelSpecOverride(model.id) ?? dynamicCatalog.getModelSpec(model.id);
+    const contextWindow = getModelSpecOverride(model.id)?.contextWindow ??
+      dynamicCatalog.getModelSpec(model.id)?.contextWindow;
     return {
       ...model,
-      ctx: contextSpec?.contextWindow ?? model.ctx,
+      ctx: contextWindow ?? model.ctx,
       maxOutputTokens: spec.maxOutputTokens,
       thinkingBudget: spec.thinkingBudget,
       minThinkingBudget: spec.minThinkingBudget,
