@@ -28,12 +28,14 @@ import {
   sanitizeGeminiSchema,
   sanitizeClaudeViaGeminiSchema,
 } from "./compat/schema-sanitizer.js";
+import { dynamicCatalog } from "./providers/google-antigravity/dynamic-catalog.js";
 import {
   DEFAULT_MODEL_SPECS,
   setModelSpecsOverride,
   getActiveModelSpecs,
   getModelFamily,
   getModelSpec,
+  getModelSpecOverride,
   isThinkingModel,
 } from "./compat/model-specs.js";
 import type { ModelSpec } from "./compat/model-specs.js";
@@ -318,6 +320,7 @@ export function parseAntigravitySse(raw: string): CompatCompletion {
   let inputTokens = 0;
   let outputTokens = 0;
   let responseId: string | undefined;
+  let upstreamFinishReason: string | undefined;
   const toolCallsMap = new Map<string, OpenAIToolCall>();
   let toolCallIndex = 0;
 
@@ -334,6 +337,13 @@ export function parseAntigravitySse(raw: string): CompatCompletion {
         ? response.candidates
         : [];
       for (const candidate of candidates) {
+        if (
+          isRecord(candidate) &&
+          typeof candidate.finishReason === "string" &&
+          candidate.finishReason
+        ) {
+          upstreamFinishReason = candidate.finishReason;
+        }
         if (
           !isRecord(candidate) ||
           !isRecord(candidate.content) ||
@@ -432,6 +442,7 @@ export function parseAntigravitySse(raw: string): CompatCompletion {
     outputTokens,
     responseId,
     toolCalls,
+    finishReason: upstreamFinishReason,
   };
 }
 
@@ -515,6 +526,10 @@ function recordCompatOutcome(
     inputTokens: completion?.inputTokens ?? 0,
     outputTokens: completion?.outputTokens ?? 0,
   });
+  rotator.recordProxyEvent(
+    `[${context.requestId}] COMPAT END account=${context.label} model=${context.displayModelKey} status=${statusCode} ttfbMs=${ttfbMs} totalMs=${totalMs} inTokens=${completion?.inputTokens ?? 0} outTokens=${completion?.outputTokens ?? 0}`,
+    "info",
+  );
   logSpend({
     requestId: context.requestId,
     apiKeyHash: options?.apiKeyHash || null,
@@ -637,6 +652,7 @@ async function streamCompatSse(
   let tailBuffer = "";
   let reqClosed = false;
   let streamError: string | undefined;
+  let upstreamFinishReason: string | undefined;
   interface OpenAiStreamingToolState {
     id: string;
     name: string;
@@ -954,6 +970,13 @@ async function streamCompatSse(
               : [];
             for (const candidate of candidates) {
             if (
+              isRecord(candidate) &&
+              typeof candidate.finishReason === "string" &&
+              candidate.finishReason
+            ) {
+              upstreamFinishReason = candidate.finishReason;
+            }
+            if (
               !isRecord(candidate) ||
               !isRecord(candidate.content) ||
               !Array.isArray(candidate.content.parts)
@@ -1103,7 +1126,14 @@ async function streamCompatSse(
     if (streamError) {
       writeCompatStreamError(res, format, streamError);
     } else if (format === "openai") {
-      const openaiFinishReason = toolCallIndex > 0 ? "tool_calls" : "stop";
+      const openaiFinishReason =
+        toolCallIndex > 0
+          ? "tool_calls"
+          : upstreamFinishReason === "MAX_TOKENS"
+            ? "length"
+            : upstreamFinishReason === "SAFETY"
+              ? "content_filter"
+              : "stop";
       res.write(
         `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: openaiFinishReason }] })}\n\n`,
       );
@@ -1127,7 +1157,12 @@ async function streamCompatSse(
           );
         }
       }
-      const anthropicStopReason = anthropicHasToolUse ? "tool_use" : "end_turn";
+      const anthropicStopReason =
+        anthropicHasToolUse
+          ? "tool_use"
+          : upstreamFinishReason === "MAX_TOKENS"
+            ? "max_tokens"
+            : "end_turn";
       // message_delta carries output_tokens; also include input_tokens so Hermes shows full context count
       res.write(
         `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: anthropicStopReason, stop_sequence: null }, usage: { input_tokens: inputTokens, output_tokens: outputTokens } })}\n\n`,
@@ -1161,7 +1196,13 @@ async function streamCompatSse(
                 content: text || null,
                 ...(collectedToolCalls ? { tool_calls: collectedToolCalls } : {}),
               },
-              finish_reason: collectedToolCalls ? "tool_calls" : "stop",
+              finish_reason: collectedToolCalls
+                ? "tool_calls"
+                : upstreamFinishReason === "MAX_TOKENS"
+                  ? "length"
+                  : upstreamFinishReason === "SAFETY"
+                    ? "content_filter"
+                    : "stop",
             },
           ],
           usage: {
@@ -1186,7 +1227,11 @@ async function streamCompatSse(
                 }))
               : []),
           ],
-          stop_reason: anthropicHasToolUse ? "tool_use" : "end_turn",
+          stop_reason: anthropicHasToolUse
+            ? "tool_use"
+            : upstreamFinishReason === "MAX_TOKENS"
+              ? "max_tokens"
+              : "end_turn",
           usage: { input_tokens: inputTokens, output_tokens: outputTokens },
         };
 
@@ -1199,6 +1244,7 @@ async function streamCompatSse(
     toolCalls: collectedToolCalls,
     rawResponse,
     streamError,
+    finishReason: upstreamFinishReason,
   };
 }
 
@@ -2105,24 +2151,77 @@ export interface OpenAIModelCatalogEntry {
   meta: Record<string, unknown>;
 }
 
+export interface CompatModelEntry {
+  id: string;
+  family: string;
+  ctx: number;
+  quotaPool: string;
+  multimodal: boolean;
+  tools: boolean;
+  maxOutputTokens: number;
+  thinkingBudget: number;
+  minThinkingBudget?: number;
+  isThinking: boolean;
+}
+
+export function getEffectiveAntigravityModels(): CompatModelEntry[] {
+  const dynamic = dynamicCatalog.getAllModels();
+  const seen = new Set(MODEL_CATALOG.map((model) => model.id.toLowerCase()));
+  const result: CompatModelEntry[] = MODEL_CATALOG.map((model) => {
+    const spec = getModelSpec(model.id);
+    const contextWindow = getModelSpecOverride(model.id)?.contextWindow ??
+      dynamicCatalog.getModelSpec(model.id)?.contextWindow;
+    return {
+      ...model,
+      ctx: contextWindow ?? model.ctx,
+      maxOutputTokens: spec.maxOutputTokens,
+      thinkingBudget: spec.thinkingBudget,
+      minThinkingBudget: spec.minThinkingBudget,
+      isThinking: spec.isThinking,
+    };
+  });
+  for (const m of dynamic) {
+    if (seen.has(m.id.toLowerCase())) continue;
+    seen.add(m.id.toLowerCase());
+    const spec = getModelSpec(m.id);
+    result.push({
+      id: m.id,
+      family: m.family,
+      ctx: spec.contextWindow ?? m.ctx,
+      quotaPool: m.quotaPool,
+      multimodal: m.multimodal,
+      tools: m.tools,
+      maxOutputTokens: spec.maxOutputTokens,
+      thinkingBudget: spec.thinkingBudget,
+      minThinkingBudget: spec.minThinkingBudget,
+      isThinking: spec.isThinking,
+    });
+  }
+  return result;
+}
+
 /**
- * Build the full OpenAI-compatible model catalog (static Antigravity catalog
- * + active-provider models for Ollama, OpenAI Codex and OpenCode Zen).
+ * Build the OpenAI-compatible `/v1/models` catalog for the proxy.
  *
- * This is the single source of truth for "what models can the rotator route
- * today" and is consumed by:
- *   - the public /v1/models endpoint (OpenAI compat)
- *   - the admin /api/models endpoint (dashboard virtual key editor)
- *
- * Pass the live AccountRotator so dynamic provider catalogs (Ollama tags
- * fetched at startup, Codex base + discovered models) are included. Without
- * a rotator, only the static MODEL_CATALOG is returned.
+ * The static Antigravity baseline and dynamically-discovered Antigravity models
+ * are always included. An active rotator also contributes its other providers.
  */
 export function buildOpenAIModelCatalog(
   rotator?: AccountRotator,
 ): OpenAIModelCatalogEntry[] {
-  const catalog: OpenAIModelCatalogEntry[] = MODEL_CATALOG.map(
-    ({ id, ctx, family, quotaPool, multimodal, tools }) => ({
+  const catalog: OpenAIModelCatalogEntry[] = getEffectiveAntigravityModels().map(
+    ({
+      id,
+      ctx,
+      family,
+      quotaPool,
+      multimodal,
+      tools,
+      maxOutputTokens,
+      thinkingBudget,
+      minThinkingBudget,
+      isThinking,
+    }) => ({
       id,
       object: "model",
       created: 0,
@@ -2135,6 +2234,12 @@ export function buildOpenAIModelCatalog(
         quota_pool: quotaPool,
         multimodal,
         tool_calling: tools,
+        max_output_tokens: maxOutputTokens,
+        thinking: isThinking,
+        thinking_budget: thinkingBudget,
+        ...(minThinkingBudget !== undefined
+          ? { min_thinking_budget: minThinkingBudget }
+          : {}),
       },
     }),
   );
@@ -2211,15 +2316,26 @@ export function serveOpenAIModels(
 
 export function serveGeminiModels(res: ServerResponse): void {
   writeJson(res, 200, {
-    models: MODEL_CATALOG.map(
-      ({ id, ctx, family, quotaPool, multimodal, tools }) => ({
+    models: getEffectiveAntigravityModels().map(
+      ({
+        id,
+        ctx,
+        family,
+        quotaPool,
+        multimodal,
+        tools,
+        maxOutputTokens,
+        thinkingBudget,
+        minThinkingBudget,
+        isThinking,
+      }) => ({
         name: `models/${id}`,
         baseModelId: family,
         version: "v2.0",
         displayName: id,
         description: `Tuxevil Rotator Gemini-compatible model entry for ${id}`,
         inputTokenLimit: ctx,
-        outputTokenLimit: ctx,
+        outputTokenLimit: maxOutputTokens,
         supportedGenerationMethods: [
           "generateContent",
           "streamGenerateContent",
@@ -2228,6 +2344,11 @@ export function serveGeminiModels(res: ServerResponse): void {
           tools,
           multimodal,
           quotaPool,
+          thinking: isThinking,
+          thinkingBudget,
+          ...(minThinkingBudget !== undefined
+            ? { minThinkingBudget }
+            : {}),
         },
       }),
     ),
@@ -2476,7 +2597,13 @@ export async function handleOpenAIChatCompletions(
             ? { reasoning_content: result.completion.thinkingText }
             : {}),
         },
-        finish_reason: hasToolCalls ? "tool_calls" : "stop",
+        finish_reason: hasToolCalls
+          ? "tool_calls"
+          : result.completion.finishReason === "MAX_TOKENS"
+            ? "length"
+            : result.completion.finishReason === "SAFETY"
+              ? "content_filter"
+              : "stop",
       },
     ],
     usage: {

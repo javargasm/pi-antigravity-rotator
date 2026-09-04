@@ -132,6 +132,13 @@ function routingModelKey(rotator: AccountRotator, model: string): string {
   }).resolveQuotaModelKeyForDisplay;
   return resolver?.call(rotator, model) ?? resolveQuotaModelKey(model) ?? model;
 }
+
+function observedModelKey(rotator: AccountRotator, model: string): string {
+  const resolver = (rotator as unknown as {
+    resolveObservedModelKey?: (value: string) => string;
+  }).resolveObservedModelKey;
+  return resolver?.call(rotator, model) ?? resolveDisplayModelKey(model);
+}
 import { startVersionChecker, performSelfUpdate } from "./version-check.js";
 import { startNotificationPoller } from "./notification-poller.js";
 import {
@@ -1177,7 +1184,7 @@ export async function withRotation<T>(
 
     const label = account.config.label || account.config.email;
     const modelKey = routingModelKey(rotator, model);
-    const displayModelKey = resolveDisplayModelKey(body.displayModel || model);
+    const displayModelKey = observedModelKey(rotator, body.displayModel || model);
     const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
     const requestStartMs = Date.now();
     let accountReleased = false;
@@ -1289,7 +1296,22 @@ export async function withRotation<T>(
       // success
       const result = await onSuccess(response, context);
       const shouldRotate = rotator.recordRequest(account, model);
-      logRequestEnd(response.status, `endpoint=${endpoint}`);
+      const inTokens =
+        result && typeof result === "object" && "inputTokens" in result
+          ? (result as Record<string, unknown>).inputTokens
+          : 0;
+      const outTokens =
+        result && typeof result === "object" && "outputTokens" in result
+          ? (result as Record<string, unknown>).outputTokens
+          : 0;
+      const ttfbMs =
+        result && typeof result === "object" && "firstByteMs" in result
+          ? (result as Record<string, unknown>).firstByteMs
+          : undefined;
+      const ttfbInfo = ttfbMs !== undefined ? ` ttfbMs=${ttfbMs}` : "";
+      const tokensInfo =
+        inTokens || outTokens ? ` inTokens=${inTokens} outTokens=${outTokens}` : "";
+      logRequestEnd(response.status, `endpoint=${endpoint}${ttfbInfo}${tokensInfo}`);
       if (shouldRotate) {
         await rotator.rotateToNext(model, account);
       }
@@ -1603,7 +1625,7 @@ async function handleProxyRequest(
 
     const label = account.config.label || account.config.email;
     const modelKey = rotator.resolveQuotaModelKeyForDisplay(body.model) ?? body.model; // quota routing
-    const displayModelKey = resolveDisplayModelKey(body.model); // metrics/logs
+    const displayModelKey = observedModelKey(rotator, body.model); // metrics/logs
     const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
     let accountReleased = false;
     const releaseCurrentAccount = (): void => {
@@ -1760,7 +1782,7 @@ async function handleProxyRequest(
         const ttfbMs = usage?.firstByteMs ?? totalMs;
         const outcomeStatus = usage?.streamError ? 502 : response.status;
         rotator.recordLatency(body.displayModel || body.model, ttfbMs, totalMs);
-        logRequestEnd(outcomeStatus, `ttfbMs=${ttfbMs} endpoint=${endpoint}`);
+        logRequestEnd(outcomeStatus, `ttfbMs=${ttfbMs} inTokens=${usage?.inputTokens ?? 0} outTokens=${usage?.outputTokens ?? 0} endpoint=${endpoint}`);
         rotator.recordRequestLog({
           model: displayModelKey,
           account: label,

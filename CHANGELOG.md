@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-09-04
+
+### Added
+
+- **Persistent dynamic model ownership**: Dynamic Antigravity model ownership is persisted by complete account identity and credential-generation fingerprint, so cold restarts cannot route a model through an account or project that never advertised it. ([#30](https://github.com/tuxevil/tuxevil-rotator/pull/30) by [@javargasm](https://github.com/javargasm))
+
+### Fixed
+
+- **Dynamic catalog and quota safety**: Malformed quota entries are ignored without replacing the last known-good snapshot; exhausted sibling pools, stale in-flight responses, retired/reserved model IDs, and account removal or credential changes are handled safely. Persisted cooldown, circuit-breaker, and 429 state is migrated without shortening valid deadlines or losing history. ([#30](https://github.com/tuxevil/tuxevil-rotator/pull/30) by [@javargasm](https://github.com/javargasm))
+- **Dynamic model compatibility metadata**: Effective output-token and thinking metadata now honor runtime constraints and operator overrides across Chat, Responses, and Anthropic compatibility paths, with provider- and version-aware Gemini pricing fallbacks. ([#30](https://github.com/tuxevil/tuxevil-rotator/pull/30) by [@javargasm](https://github.com/javargasm))
+- **Partial model specification overrides**: Operators can now override only selected `modelSpecs` fields while inheriting the effective runtime, static, or family defaults for omitted metadata. Overrides are retained through configuration normalization and persistence, including context-window lookups. ([#31](https://github.com/tuxevil/tuxevil-rotator/pull/31) by [@javargasm](https://github.com/javargasm))
+
+## [3.5.0] - 2026-09-03
+
+### Added
+- **Live Antigravity model discovery**: Successful quota polls now reconcile model IDs, context windows, output limits, thinking metadata, and account availability into `/v1/models` without a second discovery request ([#29](https://github.com/tuxevil/tuxevil-rotator/pull/29) by [@javargasm](https://github.com/javargasm)).
+
+### Fixed
+- **Dynamic catalog safety**: Discovery now excludes retired `gemini-3.5-*` IDs, keys snapshots by full account identity, honors case-insensitive operator `modelSpecs` substring overrides, and keeps removed dynamic models from falling through to the generic Gemini pool ([#29](https://github.com/tuxevil/tuxevil-rotator/pull/29) by [@javargasm](https://github.com/javargasm)).
+
 ## [3.4.0] - 2026-09-03
 
 ### Added

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, it } from "node:test";
+import { after, afterEach, before, describe, it } from "node:test";
 
 const testDir = mkdtempSync(join(tmpdir(), "rotator-request-queue-"));
 process.env.TUXEVIL_ROTATOR_DIR = testDir;
@@ -14,9 +14,11 @@ process.env.ANTIGRAVITY_CLIENT_ID = "test-client-id";
 process.env.ANTIGRAVITY_CLIENT_SECRET = "test-client-secret";
 
 let AccountRotator: typeof import("../src/rotator.js").AccountRotator;
+let getAccountIdentity: typeof import("../src/rotator.js").getAccountIdentity;
 let getDefaultConfig: typeof import("../src/config-defaults.js").getDefaultConfig;
 let applyConfigDefaults: typeof import("../src/config-defaults.js").applyConfigDefaults;
 let closeDb: typeof import("../src/db-store.js").closeDb;
+let dynamicCatalog: typeof import("../src/providers/google-antigravity/dynamic-catalog.js").dynamicCatalog;
 type AccountConfig = import("../src/types.js").AccountConfig;
 type AccountRuntime = import("../src/types.js").AccountRuntime;
 type Config = import("../src/types.js").Config;
@@ -26,16 +28,21 @@ const CLAUDE_MODEL = "claude-opus-4-6-thinking";
 const UNKNOWN_MODEL = "custom-antigravity-model";
 
 before(async () => {
-  ({ AccountRotator } = await import("../src/rotator.js"));
+  ({ AccountRotator, getAccountIdentity } = await import("../src/rotator.js"));
   ({ getDefaultConfig, applyConfigDefaults } = await import("../src/config-defaults.js"));
   const db = await import("../src/db-store.js");
   closeDb = db.closeDb;
   await db.initDb();
+  ({ dynamicCatalog } = await import("../src/providers/google-antigravity/dynamic-catalog.js"));
 });
 
 after(async () => {
   await closeDb();
   rmSync(testDir, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  dynamicCatalog.reset();
 });
 
 function makeRotatorFromAccounts(
@@ -54,9 +61,11 @@ function makeRotatorFromAccounts(
   });
   rotator.stopQuotaPolling();
 
-  const runtimes = accounts.map(({ email }) => {
-    const account = rotator.getAccountByEmail(email)!;
-    account.accessToken = `access-${email}`;
+  const runtimes = (
+    rotator as unknown as { accounts: AccountRuntime[] }
+  ).accounts;
+  for (const account of runtimes) {
+    account.accessToken = `access-${account.config.email}`;
     account.tokenExpires = Date.now() + 60_000;
     account.quota = ["gemini", "claude"].map((modelKey) => ({
       modelKey,
@@ -66,8 +75,7 @@ function makeRotatorFromAccounts(
       timerType: "fresh",
       providerId: "google-antigravity",
     }));
-    return account;
-  });
+  }
   return { rotator, accounts: runtimes };
 }
 
@@ -116,6 +124,255 @@ function releaseAll(
 }
 
 describe("Antigravity request queue", () => {
+  it("routes a dynamically discovered model only to an account that advertised it", async () => {
+    const { rotator, accounts } = makeRotator(["project-a", "project-b"]);
+    dynamicCatalog.reset();
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-account-a-only": { quotaInfo: { remainingFraction: 1 } },
+        "gemini-3.8-flash-high": { quotaInfo: { remainingFraction: 1 } },
+      },
+    }, getAccountIdentity(accounts[0]));
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { "gemini-account-b-only": { quotaInfo: { remainingFraction: 1 } } },
+    }, getAccountIdentity(accounts[1]));
+
+    const selected = (rotator as any).pickBestModelAccount(
+      "gemini-account-b-only",
+      Date.now(),
+      -1,
+    );
+    assert.equal(selected, accounts[1]);
+
+    accounts[0].inFlightByModel.gemini = 5;
+    accounts[0].inFlightRequests = 5;
+    const staticSelection = (rotator as any).pickBestModelAccount(
+      "gemini-3.8-flash-high",
+      Date.now(),
+      -1,
+    );
+    assert.equal(staticSelection, accounts[1], "static fallback must not depend on discovery");
+  });
+
+  it("isolates dynamic routing for same-email accounts with different projects", () => {
+    const { rotator, accounts } = makeRotatorFromAccounts([
+      {
+        email: "shared@example.com",
+        credentials: [{
+          provider: "google-antigravity",
+          refreshToken: "refresh-a",
+          projectId: "project-a",
+        }],
+      },
+      {
+        email: "shared@example.com",
+        credentials: [{
+          provider: "google-antigravity",
+          refreshToken: "refresh-b",
+          projectId: "project-b",
+        }],
+      },
+    ]);
+    const firstId = getAccountIdentity(accounts[0]);
+    const secondId = getAccountIdentity(accounts[1]);
+    assert.notEqual(firstId, secondId);
+
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { "gemini-project-a-only": { quotaInfo: { remainingFraction: 1 } } },
+    }, firstId);
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { "gemini-project-b-only": { quotaInfo: { remainingFraction: 1 } } },
+    }, secondId);
+
+    assert.equal(
+      (rotator as any).pickBestModelAccount("gemini-project-a-only", Date.now(), -1),
+      accounts[0],
+    );
+    assert.equal(
+      (rotator as any).pickBestModelAccount("gemini-project-b-only", Date.now(), -1),
+      accounts[1],
+    );
+  });
+
+  it("does not route a removed dynamic model through the generic Gemini pool", () => {
+    const { rotator, accounts } = makeRotator(["project-a", "project-b"]);
+    const accountId = getAccountIdentity(accounts[0]);
+    const removedModel = "gemini-ephemeral-preview";
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { [removedModel]: { quotaInfo: { remainingFraction: 1 } } },
+    }, accountId);
+
+    assert.equal(
+      (rotator as any).pickBestModelAccount(removedModel, Date.now(), -1),
+      accounts[0],
+    );
+
+    dynamicCatalog.updateFromEndpointResponse({ models: {} }, accountId);
+    assert.equal(dynamicCatalog.getModel(removedModel), undefined);
+    assert.equal(
+      (rotator as any).pickBestModelAccount(removedModel, Date.now(), -1),
+      null,
+    );
+    assert.ok(
+      (rotator as any).pickBestModelAccount(
+        "gemini-never-discovered-preview",
+        Date.now(),
+        -1,
+      ),
+      "never-discovered IDs must keep the existing Gemini passthrough behavior",
+    );
+  });
+
+  it("uses the shared quota pool for dynamic-model cooldown state", () => {
+    const { rotator, accounts } = makeRotator(["project-a"]);
+    const model = "gemini-4.0-flash-preview";
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { [model]: { quotaInfo: { remainingFraction: 1 } } },
+    }, getAccountIdentity(accounts[0]));
+
+    rotator.markExhausted(accounts[0], model, 60_000, "RESOURCE_EXHAUSTED");
+
+    assert.ok(accounts[0].cooldownsByModel.gemini > Date.now());
+    assert.equal(accounts[0].cooldownsByModel[model], undefined);
+    assert.equal(
+      (rotator as any).isAvailableForModel(
+        accounts[0],
+        "gemini-3.8-flash-high",
+        Date.now(),
+      ),
+      false,
+    );
+  });
+
+  it("preserves active and historical dynamic IDs in observability", () => {
+    const { rotator, accounts } = makeRotator(["project-a"]);
+    const model = "gemini-4.0-flash-preview";
+    const accountId = getAccountIdentity(accounts[0]);
+    dynamicCatalog.updateFromEndpointResponse({
+      models: { [model]: { quotaInfo: { remainingFraction: 1 } } },
+    }, accountId);
+
+    rotator.recordTokenUsage(model, 10, 20);
+    rotator.recordLatency(model, 5, 15);
+    dynamicCatalog.updateFromEndpointResponse({ models: {} }, accountId);
+    rotator.recordTokenUsage(model, 30, 40);
+    rotator.recordLatency(model, 10, 20);
+
+    const usage = rotator.getTokenUsage();
+    assert.deepEqual(usage.tokensByModel[model], {
+      input: 40,
+      output: 60,
+      requests: 2,
+    });
+    assert.equal(usage.tokensByModel["gemini-3-flash"], undefined);
+    assert.equal(rotator.getLatencyStats()[model]?.count, 2);
+  });
+
+  it("synchronously removes dynamic snapshots when an account becomes ineligible", async () => {
+    const { rotator, accounts } = makeRotatorFromAccounts([{
+      email: "catalog-disable@example.com",
+      credentials: [{
+        provider: "google-antigravity",
+        projectId: "project-a",
+        refreshToken: "catalog-disable-refresh",
+      }],
+    }]);
+    const accountId = getAccountIdentity(accounts[0]);
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-disabled-account-only": { quotaInfo: { remainingFraction: 1 } },
+      },
+    }, accountId);
+    assert.ok(dynamicCatalog.getModel("gemini-disabled-account-only"));
+
+    const disabling = rotator.disableAccount(accounts[0].config.email);
+    assert.equal(dynamicCatalog.getModel("gemini-disabled-account-only"), undefined);
+    await disabling;
+  });
+
+  it("synchronously removes dynamic snapshots when an account is removed", async () => {
+    const { rotator, accounts } = makeRotatorFromAccounts([{
+      email: "catalog-remove@example.com",
+      credentials: [{
+        provider: "google-antigravity",
+        projectId: "project-a",
+        refreshToken: "catalog-remove-refresh",
+      }],
+    }]);
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-removed-account-only": { quotaInfo: { remainingFraction: 1 } },
+      },
+    }, getAccountIdentity(accounts[0]));
+
+    const removing = rotator.removeAccount(accounts[0].config.email);
+    assert.equal(dynamicCatalog.getModel("gemini-removed-account-only"), undefined);
+    assert.equal(await removing, true);
+  });
+
+  it("rejects a late quota snapshot after the account credential generation changes", async () => {
+    const { rotator, accounts } = makeRotatorFromAccounts([{
+      email: "catalog-race@example.com",
+      credentials: [{
+        provider: "google-antigravity",
+        projectId: "project-a",
+        refreshToken: "catalog-race-refresh",
+      }],
+    }]);
+    const account = accounts[0];
+    const accountId = getAccountIdentity(account);
+    dynamicCatalog.updateFromEndpointResponse({
+      models: {
+        "gemini-before-reconfigure": { quotaInfo: { remainingFraction: 1 } },
+      },
+    }, accountId);
+
+    let releaseFetch!: () => void;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    let announceFetch!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      announceFetch = resolve;
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      announceFetch();
+      await fetchGate;
+      return new Response(JSON.stringify({
+        models: {
+          "gemini-stale-in-flight": { quotaInfo: { remainingFraction: 1 } },
+        },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    try {
+      const poll = rotator.pollAccountQuota(account);
+      await fetchStarted;
+      await rotator.replaceConfig({
+        ...rotator.getConfig(),
+        accounts: [{
+          ...account.config,
+          credentials: [{
+            provider: "google-antigravity",
+            projectId: "project-a",
+            refreshToken: "replacement-refresh-token",
+          }],
+        }],
+      });
+      const removedSynchronously =
+        dynamicCatalog.getModel("gemini-before-reconfigure") === undefined;
+
+      releaseFetch();
+      await poll;
+      assert.equal(removedSynchronously, true);
+      assert.equal(dynamicCatalog.getModel("gemini-stale-in-flight"), undefined);
+    } finally {
+      releaseFetch();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("defaults to five total concurrent requests per account and project/model", () => {
     const config = getDefaultConfig();
     assert.equal(config.maxConcurrentRequestsPerAccount, 5);

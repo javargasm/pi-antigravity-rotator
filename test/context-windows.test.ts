@@ -7,7 +7,10 @@ import {
   OPENCODE_ZEN_FREE_MODELS,
   getOpenCodeZenContextWindow,
 } from "../src/providers/opencode-zen/catalog.js";
-import { getModelSpec } from "../src/compat/model-specs.js";
+import {
+	getModelSpec,
+	setModelSpecsOverride,
+} from "../src/compat/model-specs.js";
 
 /**
  * Verify each catalog model has a positive, finite context window.
@@ -68,6 +71,30 @@ describe("official context windows", () => {
 			assert.equal(getModelSpec("claude-sonnet-4-6").contextWindow, 1_000_000);
 			assert.equal(getModelSpec("gemini-3.1-pro-low").contextWindow, 1_000_000);
 			assert.equal(getModelSpec("gpt-oss-120b-medium").contextWindow, 131_072);
+		});
+
+		it("honors an exact operator context window override", () => {
+			setModelSpecsOverride({
+				"gemini-3.8-flash-high": { contextWindow: 222_222 },
+			});
+			try {
+				assert.equal(getModelSpec("gemini-3.8-flash-high").contextWindow, 222_222);
+				assert.equal(getAntigravityContextWindow("gemini-3.8-flash-high"), 222_222);
+			} finally {
+				setModelSpecsOverride(null);
+			}
+		});
+
+		it("honors a substring operator context window override", () => {
+			setModelSpecsOverride({
+				"gemini-3.8": { contextWindow: 333_333 },
+			});
+			try {
+				assert.equal(getModelSpec("gemini-3.8-flash-high").contextWindow, 333_333);
+				assert.equal(getAntigravityContextWindow("gemini-3.8-flash-high"), 333_333);
+			} finally {
+				setModelSpecsOverride(null);
+			}
 		});
 	});
 

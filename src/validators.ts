@@ -173,8 +173,14 @@ export function validateConfig(value: unknown): ValidationResult<Config> {
 				if (spec.thinkingBudget !== undefined && (typeof spec.thinkingBudget !== "number" || !Number.isFinite(spec.thinkingBudget))) {
 					errors.push(`config.modelSpecs.${key}.thinkingBudget must be a number`);
 				}
+				if (spec.minThinkingBudget !== undefined && !isNonNegativeNumber(spec.minThinkingBudget)) {
+					errors.push(`config.modelSpecs.${key}.minThinkingBudget must be a non-negative number`);
+				}
 				if (spec.isThinking !== undefined && typeof spec.isThinking !== "boolean") {
 					errors.push(`config.modelSpecs.${key}.isThinking must be a boolean`);
+				}
+				if (spec.contextWindow !== undefined && !isPositiveNumber(spec.contextWindow)) {
+					errors.push(`config.modelSpecs.${key}.contextWindow must be a positive number`);
 				}
 			}
 		}

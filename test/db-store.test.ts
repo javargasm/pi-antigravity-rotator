@@ -19,6 +19,8 @@ import {
 } from "../src/db-store.js";
 import type { Config, PersistedState, TokenUsageTiered } from "../src/types.js";
 import type { PersistedResponsesStore } from "../src/db-store.js";
+import { applyConfigDefaults } from "../src/config-defaults.js";
+import { validateConfig } from "../src/validators.js";
 
 describe("db-store helpers", () => {
   before(async () => {
@@ -94,6 +96,35 @@ describe("db-store helpers", () => {
     const cached = getCachedConfig();
     assert.ok(cached);
     assert.equal(cached.proxyPort, 51200);
+  });
+
+  it("preserves partial model specs through normalization and persistence", async () => {
+    const modelSpecs = {
+      "gemini-3.8": {
+        maxOutputTokens: 1_000,
+        contextWindow: 222_222,
+      },
+    };
+    const candidate = {
+      accounts: [],
+      modelSpecs,
+      unknownTopLevelField: "discard me",
+    };
+    const validation = validateConfig(candidate);
+
+    assert.equal(validation.ok, true);
+    assert.ok(validation.value);
+
+    const normalized = applyConfigDefaults(validation.value);
+    assert.deepEqual(normalized.modelSpecs, modelSpecs);
+    assert.equal("unknownTopLevelField" in normalized, false);
+
+    await setCachedConfig(validation.value);
+    const cached = getCachedConfig();
+    assert.ok(cached);
+    assert.deepEqual(cached.modelSpecs, modelSpecs);
+    assert.equal("unknownTopLevelField" in cached, false);
+    assert.deepEqual(candidate.modelSpecs, modelSpecs);
   });
 
   it("can cache and retrieve admin token", async () => {

@@ -142,8 +142,8 @@ export interface Config {
   streamRecoveryMaxRetries?: number;
   // Prompt compression mode ("off" | "lite" | "rtk" | "rtk+lite").
   compressionMode?: "off" | "lite" | "rtk" | "rtk+lite";
-  // Override per-model specs used by the compat layer. Keys are model id substrings
-  // matched case-insensitively. When set, replaces the bundled defaults entirely.
+  // Partially override per-model specs used by the compat layer. Keys are model id
+  // substrings matched case-insensitively; omitted fields inherit effective defaults.
   modelSpecs?: Record<string, ModelSpecConfig>;
   // Override model-id aliases used to translate the operator-facing name
   // (e.g. "gemini-3.1-pro-high") to the upstream Antigravity name
@@ -210,16 +210,28 @@ export interface GoogleQuotaResponse {
         remainingFraction?: number;
         resetTime?: string;
       };
+      displayName?: string;
+      maxTokens?: number;
+      maxOutputTokens?: number;
+      thinkingBudget?: number;
+      minThinkingBudget?: number;
+      supportsThinking?: boolean;
+      supportsImages?: boolean;
+      supportsVideo?: boolean;
     }
   >;
+  defaultAgentModelId?: string;
+  tieredModelIds?: Record<string, string[]>;
 }
 
 // Per-model thinking/output spec used by the compat layer.
 // Operators can override defaults via the `modelSpecs` field in accounts.json.
 export interface ModelSpecConfig {
-  maxOutputTokens: number;
-  thinkingBudget: number; // -1 = adaptive (model decides), >=0 = fixed
-  isThinking: boolean;
+  maxOutputTokens?: number;
+  thinkingBudget?: number; // -1 = adaptive (model decides), >=0 = fixed
+  minThinkingBudget?: number;
+  isThinking?: boolean;
+  contextWindow?: number;
 }
 
 // Per-model quota info for an account
@@ -281,6 +293,14 @@ export const QUOTA_MODEL_KEYS: Record<
     display: "Gemini",
   },
 };
+
+const STATIC_ANTIGRAVITY_MODEL_IDS = new Set(
+  Object.values(QUOTA_MODEL_KEYS).flatMap(({ altKeys }) => altKeys),
+);
+
+export function isStaticAntigravityModel(model: string): boolean {
+  return STATIC_ANTIGRAVITY_MODEL_IDS.has(model.toLowerCase());
+}
 
 // Map request model names to quota model keys (family buckets).
 export function resolveQuotaModelKey(requestModel: string): string | null {
@@ -439,7 +459,22 @@ export interface PersistedSafetyState {
   }>;
 }
 
+export interface PersistedDynamicModelOwnership {
+  scopedModels: string[];
+  accounts: Record<
+    string,
+    {
+      credentialGenerationFingerprint: string;
+      models: string[];
+    }
+  >;
+}
+
 export interface PersistedState {
+  // Historical dynamic model IDs mapped to their shared quota pools.
+  dynamicModelQuotaPools?: Record<string, string>;
+  // Exact account ownership for dynamically discovered model IDs.
+  dynamicModelOwnership?: PersistedDynamicModelOwnership;
   // Per-model active account index
   modelAccounts: Record<string, number>;
   // Per-model request count on the active account
@@ -694,16 +729,15 @@ export interface TokenUsageData {
   };
 }
 
+export interface ModelPricing {
+  inputPer1M: number;
+  outputPer1M: number;
+  cachingPer1M?: number;
+  cachingStoragePer1MPerHour?: number;
+}
+
 // Pricing per 1M tokens (USD) — what these would cost on paid APIs
-export const MODEL_PRICING: Record<
-  string,
-  {
-    inputPer1M: number;
-    outputPer1M: number;
-    cachingPer1M?: number;
-    cachingStoragePer1MPerHour?: number;
-  }
-> = {
+export const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-opus-4-6-thinking": { inputPer1M: 5.0, outputPer1M: 25.0 },
   "claude-sonnet-4-6": { inputPer1M: 3.0, outputPer1M: 15.0 },
   "gemini-3.1-pro": { inputPer1M: 2.0, outputPer1M: 12.0 },
@@ -826,6 +860,41 @@ export const MODEL_PRICING: Record<
 
 };
 
+/**
+ * Resolves pricing for a model, using exact lookup first and dynamic family fallbacks
+ * for newly released models without manual pricing entries.
+ */
+export function getModelPricing(model: string): ModelPricing | undefined {
+  if (!model) return undefined;
+  if (MODEL_PRICING[model]) return MODEL_PRICING[model];
+  const lower = model.toLowerCase();
+  if (MODEL_PRICING[lower]) return MODEL_PRICING[lower];
+  // Dynamic family fallbacks for unseen future models. Keep provider and
+  // version checks explicit so an unrelated model containing "flash" cannot
+  // inherit Gemini pricing.
+  if (lower.includes("claude") && lower.includes("opus")) {
+    return MODEL_PRICING["claude-opus-4-6-thinking"];
+  }
+  if (lower.includes("claude") && lower.includes("sonnet")) {
+    return MODEL_PRICING["claude-sonnet-4-6"];
+  }
+  if (lower.includes("gemini")) {
+    if (lower.includes("3.8") && lower.includes("flash")) {
+      return MODEL_PRICING["gemini-3.8-flash-high"];
+    }
+    if (lower.includes("3.7") && lower.includes("flash")) {
+      return MODEL_PRICING["gemini-3.7-flash-tiered"];
+    }
+    if (lower.includes("3.6") && lower.includes("flash")) {
+      return MODEL_PRICING["gemini-3.6-flash-high"];
+    }
+    if (lower.includes("flash")) return MODEL_PRICING["gemini-3-flash"];
+    if (lower.includes("pro")) return MODEL_PRICING["gemini-3.1-pro"];
+  }
+  if (lower.includes("gpt-oss")) return MODEL_PRICING["gpt-oss-120b-medium"];
+  return undefined;
+}
+
 // Which Ollama Cloud models respond on which subscription tiers, verified
 // 2026-08-30 via scripts/verify_ollama_models.ts (/api/tags discovery +
 // /api/chat probes: HTTP 200 = free, HTTP 402 = subscription-only).
@@ -909,9 +978,11 @@ export const ANTIGRAVITY_VERSION =
 	rotatorEnv("ANTIGRAVITY_VERSION") ||
 	process.env.PI_AI_ANTIGRAVITY_VERSION ||
 	"2.11.0";
+export const DEFAULT_ANTIGRAVITY_USER_AGENT =
+  `antigravity/ide/${ANTIGRAVITY_VERSION} (aidev_client; os_type=darwin; arch=arm64)`;
 export const QUOTA_USER_AGENT =
 	rotatorEnv("QUOTA_USER_AGENT") ||
-	`antigravity/${ANTIGRAVITY_VERSION} darwin/arm64`;
+	DEFAULT_ANTIGRAVITY_USER_AGENT;
 export const REQUEST_USER_AGENT =
   rotatorEnv("REQUEST_USER_AGENT") || QUOTA_USER_AGENT;
 export const REQUEST_GOOG_API_CLIENT =

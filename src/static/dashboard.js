@@ -1221,13 +1221,16 @@ var MODEL_PRICING_CLIENT = {
 function getModelPricingClient(m) {
   if (MODEL_PRICING_CLIENT[m]) return MODEL_PRICING_CLIENT[m];
   var lower = (m || "").toLowerCase();
-  if (lower.indexOf("opus") !== -1) return MODEL_PRICING_CLIENT["claude-opus-4-6-thinking"];
-  if (lower.indexOf("sonnet") !== -1) return MODEL_PRICING_CLIENT["claude-sonnet-4-6"];
-  if (lower.indexOf("3.8-flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.8-flash-high"];
-  if (lower.indexOf("3.7-flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.7-flash-tiered"];
-  if (lower.indexOf("3.6-flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.6-flash-high"];
-  if (lower.indexOf("flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3-flash"];
-  if (lower.indexOf("pro") !== -1) return MODEL_PRICING_CLIENT["gemini-3.1-pro"];
+  if (lower.indexOf("claude") !== -1 && lower.indexOf("opus") !== -1) return MODEL_PRICING_CLIENT["claude-opus-4-6-thinking"];
+  if (lower.indexOf("claude") !== -1 && lower.indexOf("sonnet") !== -1) return MODEL_PRICING_CLIENT["claude-sonnet-4-6"];
+  if (lower.indexOf("gemini") !== -1) {
+    if (lower.indexOf("3.8") !== -1 && lower.indexOf("flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.8-flash-high"];
+    if (lower.indexOf("3.7") !== -1 && lower.indexOf("flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.7-flash-tiered"];
+    if (lower.indexOf("3.6") !== -1 && lower.indexOf("flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3.6-flash-high"];
+    if (lower.indexOf("flash") !== -1) return MODEL_PRICING_CLIENT["gemini-3-flash"];
+    if (lower.indexOf("pro") !== -1) return MODEL_PRICING_CLIENT["gemini-3.1-pro"];
+  }
+  if (lower.indexOf("gpt-oss") !== -1) return MODEL_PRICING_CLIENT["gpt-oss-120b-medium"];
   return null;
 }
 

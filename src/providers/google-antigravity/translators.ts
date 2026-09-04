@@ -11,6 +11,7 @@ import {
   getModelSpec,
   isThinkingModel,
 } from "../../compat/model-specs.js";
+import { dynamicCatalog } from "./dynamic-catalog.js";
 import {
   thoughtSignatureCache,
   getStoredResponse,
@@ -21,6 +22,32 @@ import {
 const compatLogger = logger.child("compat");
 
 const VALIDATION_LOG_MAX_CHARS = 200;
+
+function normalizeFixedThinking(
+  modelSpec: ReturnType<typeof getModelSpec>,
+  requestedMaxOutputTokens: number | undefined,
+): { budget?: number; maxOutputTokens: number | undefined } {
+  const outputLimit = Math.max(1, Math.floor(modelSpec.maxOutputTokens));
+  const minimum = typeof modelSpec.minThinkingBudget === "number" &&
+      Number.isFinite(modelSpec.minThinkingBudget)
+    ? Math.max(0, Math.floor(modelSpec.minThinkingBudget))
+    : 0;
+  let budget = Math.max(
+    minimum,
+    Math.max(0, Math.floor(modelSpec.thinkingBudget)),
+  );
+  budget = Math.min(budget, outputLimit - 1);
+  if (budget < minimum) {
+    return { maxOutputTokens: requestedMaxOutputTokens };
+  }
+
+  let maxOutputTokens = requestedMaxOutputTokens;
+  if (!maxOutputTokens || maxOutputTokens <= budget) {
+    maxOutputTokens = Math.min(budget + 8192, outputLimit);
+    if (maxOutputTokens <= budget) maxOutputTokens = budget + 1;
+  }
+  return { budget, maxOutputTokens };
+}
 
 export function logValidationFailure(scope: string, payload: unknown): void {
   const truncated = redactSensitive(JSON.stringify(payload));
@@ -156,6 +183,7 @@ export interface CompatCompletion {
   toolCalls?: OpenAIToolCall[];
   rawResponse?: unknown;
   streamError?: string;
+  finishReason?: string;
 }
 
 export type AntigravityPart =
@@ -841,20 +869,34 @@ export function convertResponsesToChatRequest(
  * reasoning_effort. Matched case-insensitively against the exact ID only;
  * virtual siblings (e.g. `gemini-3.7-flash-tiered-high`) are excluded.
  */
+
 export const TIERED_EFFORT_MODEL_ID = "gemini-3.7-flash-tiered";
+export const TIERED_EFFORT_MODEL_IDS = new Set([
+  "gemini-3.7-flash-tiered",
+]);
+
+export function isTieredEffortModel(modelId: string): boolean {
+  const l = modelId.toLowerCase().trim();
+  if (l.includes("3.6")) return false;
+  if (TIERED_EFFORT_MODEL_IDS.has(l)) return true;
+  // Exclude virtual siblings like gemini-X-tiered-high
+  if (l.includes("-tiered-")) return false;
+  if (l.endsWith("-tiered")) return true;
+  return dynamicCatalog.isTiered(l);
+}
 
 /**
  * Map an OpenAI Chat `reasoning_effort` to a Gemini `thinkingLevel` for
- * `gemini-3.7-flash-tiered` only. Accepts exactly low/medium/high
- * (case-insensitive); anything else returns undefined so the caller falls
- * back to the existing adaptive/fixed-budget semantics and never emits an
- * invalid upstream enum.
+ * tiered models (`gemini-3.7-flash-tiered`) only.
+ * Accepts exactly low/medium/high (case-insensitive); anything else returns
+ * undefined so the caller falls back to the existing adaptive/fixed-budget
+ * semantics and never emits an invalid upstream enum.
  */
 export function mapTieredReasoningEffortToThinkingLevel(
   effort: string | undefined,
   modelId: string,
 ): "LOW" | "MEDIUM" | "HIGH" | undefined {
-  if (modelId.toLowerCase() !== TIERED_EFFORT_MODEL_ID) return undefined;
+  if (!isTieredEffortModel(modelId)) return undefined;
   if (!isNonEmptyString(effort)) return undefined;
   switch (effort.toLowerCase()) {
     case "low":
@@ -1177,13 +1219,22 @@ export function openAIToAntigravityBody(
 
   let thinkingConfigObj: Record<string, unknown> | undefined;
   if (modelFamily === "claude" && isThinking && !forcesToolUse(input.tool_choice)) {
-    const tb = modelSpec.thinkingBudget;
-    thinkingConfigObj = { include_thoughts: true, thinking_budget: tb };
-    if (!maxOutputTokens || maxOutputTokens <= tb) {
-      maxOutputTokens = Math.min(tb + 8192, modelSpec.maxOutputTokens);
-      compatLogger.debug(
-        `Adjusted Claude maxOutputTokens → ${maxOutputTokens}`,
-      );
+    if (modelSpec.thinkingBudget === -1) {
+      thinkingConfigObj = { include_thoughts: true };
+    } else {
+      const normalized = normalizeFixedThinking(modelSpec, maxOutputTokens);
+      if (normalized.budget !== undefined) {
+        thinkingConfigObj = {
+          include_thoughts: true,
+          thinking_budget: normalized.budget,
+        };
+      }
+      if (maxOutputTokens !== normalized.maxOutputTokens) {
+        maxOutputTokens = normalized.maxOutputTokens;
+        compatLogger.debug(
+          `Adjusted Claude maxOutputTokens → ${maxOutputTokens}`,
+        );
+      }
     }
   } else if (isThinking && modelFamily !== "claude") {
     const tb = modelSpec.thinkingBudget;
@@ -1206,23 +1257,29 @@ export function openAIToAntigravityBody(
       };
     } else if (tb === -1) {
       thinkingConfigObj = { includeThoughts: true };
+      if (maxOutputTokens !== undefined) {
+        // Adaptive models spend from the output budget before emitting visible text.
+        const targetTokens = Math.max(maxOutputTokens + 8192, 8192);
+        maxOutputTokens = Math.min(targetTokens, modelSpec.maxOutputTokens);
+        compatLogger.debug(
+          `Adjusted adaptive Gemini maxOutputTokens → ${maxOutputTokens}`,
+        );
+      }
     } else {
-      thinkingConfigObj = { includeThoughts: true, thinkingBudget: tb };
+      const normalized = normalizeFixedThinking(modelSpec, maxOutputTokens);
+      if (normalized.budget !== undefined) {
+        thinkingConfigObj = {
+          includeThoughts: true,
+          thinkingBudget: normalized.budget,
+        };
+      }
+      if (maxOutputTokens !== normalized.maxOutputTokens) {
+        maxOutputTokens = normalized.maxOutputTokens;
+        compatLogger.debug(
+          `Adjusted Gemini maxOutputTokens → ${maxOutputTokens}`,
+        );
+      }
     }
-    if (tb !== -1 && (!maxOutputTokens || maxOutputTokens <= tb)) {
-      maxOutputTokens = Math.min(tb + 8192, modelSpec.maxOutputTokens);
-      compatLogger.debug(
-        `Adjusted Gemini maxOutputTokens → ${maxOutputTokens}`,
-      );
-    }
-  } else if (input.reasoning_effort) {
-    const budgets: Record<string, number> = {
-      low: Math.round(modelSpec.thinkingBudget / 4),
-      medium: Math.round(modelSpec.thinkingBudget / 2),
-      high: modelSpec.thinkingBudget,
-    };
-    const b = budgets[input.reasoning_effort.toLowerCase()];
-    if (b) thinkingConfigObj = { includeThoughts: true, thinkingBudget: b };
   }
 
   const generationConfig: Record<string, unknown> = {
