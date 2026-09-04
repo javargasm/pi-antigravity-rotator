@@ -262,6 +262,35 @@ Remap model names to upstream model names via `modelAliases` in `accounts.json`:
 }
 ```
 
+## Effort-Based Model Routing
+
+Route a client-facing alias model (such as `gemini-3.8-flash`) to concrete Antigravity target models based on the request's `reasoning_effort` via `effortRouting` in `accounts.json`:
+
+```json
+{
+  "effortRouting": {
+    "gemini-3.8-flash": {
+      "defaultEffort": "medium",
+      "targets": {
+        "low": "gemini-3.8-flash-low",
+        "medium": "gemini-3.8-flash-medium",
+        "high": "gemini-3.8-flash-high"
+      }
+    }
+  }
+}
+```
+
+### Matching and Default Semantics
+
+- **Opt-in**: if `effortRouting` is absent, `null`, or `{}`, no effort routing occurs and models behave as standard.
+- **Alias matching**: client request models match configured aliases case-insensitively.
+- **Effort selection**: requests with a recognized effort value (matched case-insensitively against `targets` keys) dispatch to the mapped concrete target. Requests without effort, with empty/unrecognized effort, or from surfaces that do not pass effort (such as `/v1/messages`) route to `defaultEffort` (defaults to `"medium"` if omitted). The effective default effort must exist in `targets`.
+- **Precedence**: `effortRouting` takes precedence for its configured alias names. After effort resolution to a concrete target, operator `modelAliases` and `modelSpecs` overrides continue to apply to that resolved target. An alias name cannot be defined in both `modelAliases` and `effortRouting` simultaneously. Chaining (an effort routing target equaling another effort routing alias) is not supported.
+- **Non-Google provider collision constraint**: aliases and targets must be Google Antigravity-dispatchable models. Statically known Codex, OpenCode Zen, or Ollama catalog IDs may not be used as effort-routing aliases or targets. If an alias or target later matches a dynamically discovered Ollama model, the proxy logs a runtime warning and keeps the existing provider precedence.
+- **Catalog visibility**: when configured, `/v1/models` advertises the alias and soft-hides its configured concrete targets. The alias inherits catalog metadata from its default effort target. The native `/v1beta/models` catalog retains concrete models and does not substitute effort aliases, because native `/v1beta` and `/v1internal` requests forward model IDs unchanged. Direct requests to concrete targets remain functional.
+- **Virtual key scoping**: virtual key authorization runs on the raw request model pre-translation. A virtual key scoped to `gemini-3.8-flash` authorizes the bare alias and all suffixed concrete variants through substring matching. A key scoped specifically to a concrete variant such as `gemini-3.8-flash-high` will reject requests specifying the bare alias. Once an alias is configured, the dashboard picker hides concrete targets. Create or update virtual keys scoped to concrete targets through the API.
+
 ## Audio Transcription & Live Streaming
 
 The rotator provides OpenAI-compatible audio transcription and bidirectional live streaming powered by the local Antigravity Language Server observer model (`models/proactive-observer-v10`).

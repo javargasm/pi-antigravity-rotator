@@ -1,5 +1,5 @@
 import { logger, redactSensitive } from "../../logger.js";
-import { applyModelAlias } from "../../types.js";
+import { applyModelAlias, getEffortRoutingRule } from "../../types.js";
 import type { RequestBody } from "../../proxy.js";
 import {
   isRecord,
@@ -136,7 +136,7 @@ export interface OpenAIChatCompletionRequest {
   tools?: OpenAITool[];
   tool_choice?: unknown;
   /** OpenAI-style reasoning effort. Mapped to Gemini thinkingLevel. */
-  reasoning_effort?: string;
+  reasoning_effort?: unknown;
   [key: string]: unknown;
 }
 
@@ -893,7 +893,7 @@ export function isTieredEffortModel(modelId: string): boolean {
  * semantics and never emits an invalid upstream enum.
  */
 export function mapTieredReasoningEffortToThinkingLevel(
-  effort: string | undefined,
+  effort: unknown,
   modelId: string,
 ): "LOW" | "MEDIUM" | "HIGH" | undefined {
   if (!isTieredEffortModel(modelId)) return undefined;
@@ -910,9 +910,35 @@ export function mapTieredReasoningEffortToThinkingLevel(
   }
 }
 
+export function resolveEffortAliasModel(
+  requestedModel: string,
+  effort: unknown,
+): string | null {
+  const rule = getEffortRoutingRule(requestedModel);
+  if (!rule) return null;
+  const key = typeof effort === "string" ? effort.trim().toLowerCase() : "";
+  if (key && Object.hasOwn(rule.targets, key)) return rule.targets[key];
+  if (effort !== undefined) {
+    const supplied = typeof effort === "string"
+      ? JSON.stringify(effort.length > 40 ? `${effort.slice(0, 40)}…` : effort)
+      : `<${effort === null ? "null" : typeof effort}>`;
+    compatLogger.debug(
+      `Unrecognized effort ${supplied} for alias "${requestedModel.trim().toLowerCase()}", falling back to default`,
+    );
+  }
+  return Object.hasOwn(rule.targets, rule.defaultEffort)
+    ? rule.targets[rule.defaultEffort]
+    : null;
+}
+
 export function openAIToAntigravityBody(
   input: OpenAIChatCompletionRequest,
 ): RequestBody {
+  const requestedModel = input.model;
+  const effortTarget =
+    resolveEffortAliasModel(requestedModel, input.reasoning_effort) ??
+    requestedModel;
+
   const systemParts: string[] = [];
   const conversationMessages = input.messages.filter((msg) => {
     if (msg.role === "system" || msg.role === "developer") {
@@ -926,8 +952,8 @@ export function openAIToAntigravityBody(
     return true;
   });
 
-  const isClaude = /^claude-/i.test(input.model);
-  const isThinking = isThinkingModel(input.model);
+  const isClaude = /^claude-/i.test(effortTarget);
+  const isThinking = isThinkingModel(effortTarget);
   const isGeminiThinking = !isClaude && isThinking;
 
   const contents: GeminiContent[] = [];
@@ -1206,13 +1232,13 @@ export function openAIToAntigravityBody(
       ? convertToolChoiceToGemini(input.tool_choice)
       : undefined;
 
-  const modelSpec = getModelSpec(input.model);
-  const modelFamily = getModelFamily(input.model);
+  const modelSpec = getModelSpec(effortTarget);
+  const modelFamily = getModelFamily(effortTarget);
   let maxOutputTokens =
     typeof input.max_tokens === "number" ? input.max_tokens : undefined;
   if (maxOutputTokens && maxOutputTokens > modelSpec.maxOutputTokens) {
     compatLogger.debug(
-      `Capping ${input.model} maxOutputTokens ${maxOutputTokens} → ${modelSpec.maxOutputTokens}`,
+      `Capping ${effortTarget} maxOutputTokens ${maxOutputTokens} → ${modelSpec.maxOutputTokens}`,
     );
     maxOutputTokens = modelSpec.maxOutputTokens;
   }
@@ -1247,7 +1273,7 @@ export function openAIToAntigravityBody(
       tb === -1
         ? mapTieredReasoningEffortToThinkingLevel(
             input.reasoning_effort,
-            input.model,
+            effortTarget,
           )
         : undefined;
     if (tieredThinkingLevel) {
@@ -1324,12 +1350,12 @@ export function openAIToAntigravityBody(
   if (geminiTools.length > 0) request.tools = geminiTools;
   if (geminiToolConfig) request.toolConfig = geminiToolConfig;
 
-  const mappedModel = applyModelAlias(input.model);
+  const mappedModel = applyModelAlias(effortTarget);
 
   return {
     project: "compat-placeholder",
     model: mappedModel,
-    displayModel: input.model,
+    displayModel: requestedModel,
     userAgent: "antigravity",
     requestType: "agent",
     request,

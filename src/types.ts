@@ -149,6 +149,15 @@ export interface Config {
   // (e.g. "gemini-3.1-pro-high") to the upstream Antigravity name
   // (e.g. "gemini-pro-agent"). When set, replaces the bundled defaults.
   modelAliases?: Record<string, string>;
+  // Config-driven alias routing based on reasoning_effort.
+  // Absent, null, or empty object = disabled.
+  effortRouting?: Record<string, EffortRoutingRule> | null;
+}
+
+export interface EffortRoutingRule {
+  /** Effort key used when the request carries no recognizable effort. Defaults to "medium". */
+  defaultEffort?: string;
+  targets: Record<string, string>;
 }
 
 export const DEFAULT_QUOTA_POLL_INTERVAL_MS = 300_000;
@@ -167,6 +176,13 @@ const DEFAULT_MODEL_ALIASES: Record<string, string> = {
   "proactive-observer-v10": "models/proactive-observer-v10",
 };
 let modelAliasesOverride: Record<string, string> | null = null;
+type StoredEffortRoutingRule = {
+  defaultEffort: string;
+  targets: Record<string, string>;
+};
+type EffortRoutingModelKind = "alias" | "target";
+
+let effortRoutingOverride: Record<string, StoredEffortRoutingRule> | null = null;
 
 /**
  * Replace the bundled model-alias table with operator-provided overrides.
@@ -183,6 +199,65 @@ export function setModelAliasesOverride(
     aliases && Object.keys(aliases).length > 0 ? aliases : null;
 }
 
+export function setEffortRoutingOverride(
+  rules: Record<string, EffortRoutingRule> | null | undefined,
+): void {
+  if (!rules || Object.keys(rules).length === 0) {
+    effortRoutingOverride = null;
+    return;
+  }
+  const normalized = Object.create(null) as Record<
+    string,
+    StoredEffortRoutingRule
+  >;
+  for (const [rawAlias, rule] of Object.entries(rules)) {
+    const alias = rawAlias.trim().toLowerCase();
+    const defaultEffort = rule.defaultEffort?.trim().toLowerCase() || "medium";
+    const targets = Object.create(null) as Record<string, string>;
+    for (const [effortKey, targetValue] of Object.entries(rule.targets ?? {})) {
+      targets[effortKey.trim().toLowerCase()] =
+        typeof targetValue === "string" ? targetValue.trim() : targetValue;
+    }
+    normalized[alias] = {
+      defaultEffort,
+      targets,
+    };
+  }
+  effortRoutingOverride = normalized;
+}
+
+export function getEffortRouting(): Record<string, StoredEffortRoutingRule> | null {
+  return effortRoutingOverride;
+}
+
+export function getEffortRoutingRule(
+  requestedModel: string,
+): StoredEffortRoutingRule | undefined {
+  const rules = effortRoutingOverride;
+  if (!rules) return undefined;
+  const alias = requestedModel.trim().toLowerCase();
+  return Object.hasOwn(rules, alias) ? rules[alias] : undefined;
+}
+
+export function classifyEffortRoutingModel(
+  model: string,
+): EffortRoutingModelKind | null {
+  const rules = effortRoutingOverride;
+  if (!rules) return null;
+  const normalizedModel = model.trim().toLowerCase();
+  if (Object.hasOwn(rules, normalizedModel)) return "alias";
+  for (const rule of Object.values(rules)) {
+    if (
+      Object.values(rule.targets).some(
+        (target) => target.toLowerCase() === normalizedModel,
+      )
+    ) {
+      return "target";
+    }
+  }
+  return null;
+}
+
 function getActiveModelAliases(): Record<string, string> {
   return modelAliasesOverride ?? DEFAULT_MODEL_ALIASES;
 }
@@ -193,7 +268,7 @@ function getActiveModelAliases(): Record<string, string> {
  */
 export function applyModelAlias(model: string): string {
   const aliases = getActiveModelAliases();
-  if (model in aliases) return aliases[model];
+  if (Object.hasOwn(aliases, model)) return aliases[model];
   const lower = model.toLowerCase();
   for (const [from, to] of Object.entries(aliases)) {
     if (from.toLowerCase() === lower) return to;
@@ -335,7 +410,17 @@ export function resolveQuotaModelKey(requestModel: string): string | null {
  * - gemini-3.1-pro-low vs gemini-3.1-pro-high (same quota pool, different display)
  * - claude-sonnet-4-6 vs claude-opus-4-6-thinking (different pricing)
  */
-export function resolveDisplayModelKey(requestModel: string): string {
+export function resolveDisplayModelKey(
+  requestModel: string,
+  effectiveModel?: string,
+): string {
+  if (
+    effectiveModel &&
+    effectiveModel !== requestModel &&
+    getEffortRoutingRule(requestModel)
+  ) {
+    return resolveDisplayModelKey(effectiveModel);
+  }
   const lower = requestModel.toLowerCase();
   // Explicit agent and gpt-oss overrides
   if (lower.includes("gemini-3-flash-agent")) return "gemini-3-flash";

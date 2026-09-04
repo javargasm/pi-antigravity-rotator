@@ -23,6 +23,7 @@ import {
   type RotationAttemptContext,
   type RotationOutcome,
 } from "./proxy.js";
+import { getEffortRouting } from "./types.js";
 import {
   isRecord,
   sanitizeGeminiSchema,
@@ -516,7 +517,7 @@ function recordCompatOutcome(
   },
 ): void {
   const ttfbMs = completion?.firstByteMs ?? totalMs;
-  rotator.recordLatency(body.displayModel || body.model, ttfbMs, totalMs);
+  rotator.recordLatency(context.displayModelKey, ttfbMs, totalMs);
   rotator.recordRequestLog({
     model: context.displayModelKey,
     account: context.label,
@@ -1802,7 +1803,7 @@ async function completeResponsesViaRotator(
       );
       if (completion.inputTokens > 0 || completion.outputTokens > 0) {
         rotator.recordTokenUsage(
-          body.displayModel || body.model,
+          context.displayModelKey,
           completion.inputTokens,
           completion.outputTokens,
         );
@@ -1898,7 +1899,7 @@ async function completeViaRotator(
               : parseAntigravitySse(raw);
           if (completion.inputTokens > 0 || completion.outputTokens > 0) {
             rotator.recordTokenUsage(
-              body.displayModel || body.model,
+              context.displayModelKey,
               completion.inputTokens,
               completion.outputTokens,
             );
@@ -1931,7 +1932,7 @@ async function completeViaRotator(
           );
           if (completion.inputTokens > 0 || completion.outputTokens > 0) {
             rotator.recordTokenUsage(
-              body.displayModel || body.model,
+              context.displayModelKey,
               completion.inputTokens,
               completion.outputTokens,
             );
@@ -2197,7 +2198,67 @@ export function getEffectiveAntigravityModels(): CompatModelEntry[] {
       isThinking: spec.isThinking,
     });
   }
+
   return result;
+}
+
+function getOpenAIAntigravityModels(): CompatModelEntry[] {
+  const result = getEffectiveAntigravityModels();
+  const rules = getEffortRouting();
+  if (!rules || Object.keys(rules).length === 0) {
+    return result;
+  }
+
+  const successfulAliases: Array<{
+    alias: string;
+    representative: CompatModelEntry;
+  }> = [];
+  const hiddenTargetIds = new Set<string>();
+  const successfulAliasNames = new Set<string>();
+
+  for (const [alias, rule] of Object.entries(rules)) {
+    const defaultEffortKey = rule.defaultEffort;
+    const defaultTargetId = rule.targets[defaultEffortKey];
+    if (!defaultTargetId) {
+      compatLogger.warn(
+        `Effort routing alias "${alias}" default effort "${defaultEffortKey}" target not found; skipping catalog swap`,
+      );
+      continue;
+    }
+    const representative = result.find(
+      (m) => m.id.toLowerCase() === defaultTargetId.toLowerCase(),
+    );
+    if (!representative) {
+      compatLogger.warn(
+        `Effort routing alias "${alias}" default target "${defaultTargetId}" absent from catalog; skipping catalog swap`,
+      );
+      continue;
+    }
+    successfulAliases.push({ alias, representative });
+    successfulAliasNames.add(alias.toLowerCase());
+    for (const targetId of Object.values(rule.targets)) {
+      hiddenTargetIds.add(targetId.toLowerCase());
+    }
+  }
+
+  if (successfulAliases.length === 0) {
+    return result;
+  }
+
+  const filtered = result.filter(
+    (m) =>
+      !hiddenTargetIds.has(m.id.toLowerCase()) &&
+      !successfulAliasNames.has(m.id.toLowerCase()),
+  );
+
+  for (const { alias, representative } of successfulAliases) {
+    filtered.push({
+      ...representative,
+      id: alias,
+    });
+  }
+
+  return filtered;
 }
 
 /**
@@ -2209,7 +2270,7 @@ export function getEffectiveAntigravityModels(): CompatModelEntry[] {
 export function buildOpenAIModelCatalog(
   rotator?: AccountRotator,
 ): OpenAIModelCatalogEntry[] {
-  const catalog: OpenAIModelCatalogEntry[] = getEffectiveAntigravityModels().map(
+  const catalog: OpenAIModelCatalogEntry[] = getOpenAIAntigravityModels().map(
     ({
       id,
       ctx,

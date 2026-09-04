@@ -56,6 +56,8 @@ export function applyConfigDefaults(config: Config): Config {
 		streamRecoveryMaxRetries: safeStreamRecoveryMaxRetries(config.streamRecoveryMaxRetries),
 		compressionMode: config.compressionMode ?? "off",
 		modelSpecs: config.modelSpecs,
+		modelAliases: config.modelAliases,
+		effortRouting: config.effortRouting,
 		accounts: config.accounts ? config.accounts.map((account) => ({
 			...normalizeAccountConfig(account),
 			tier: account.tier || "unknown",
