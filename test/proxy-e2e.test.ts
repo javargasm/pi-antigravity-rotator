@@ -13,7 +13,11 @@ import {
   type RequestBody,
 } from "../src/proxy.js";
 import { ANTIGRAVITY_ENDPOINTS, type AccountRuntime } from "../src/types.js";
-import { getAccountIdentity, type AccountRotator } from "../src/rotator.js";
+import {
+	getAccountIdentity,
+	getCredentialGeneration,
+	type AccountRotator,
+} from "../src/rotator.js";
 import { fetchProviderQuota } from "../src/providers/google-antigravity/quota.js";
 import { dynamicCatalog } from "../src/providers/google-antigravity/dynamic-catalog.js";
 
@@ -877,6 +881,162 @@ describe("native Code Assist passthrough", () => {
 			assert.equal(dynamicCatalog.hasModelForAccount(secondId, "gemini-project-b-only"), true);
 			assert.equal(dynamicCatalog.hasModelForAccount(secondId, "gemini-project-a-only"), false);
 		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("keeps quota polling usable when runtime catalog entries are malformed", async () => {
+		const account = makeAccount("malformed-catalog@example.com", "project-safe");
+		account.quota = [{
+			modelKey: "gemini",
+			displayName: "Gemini",
+			percentRemaining: 80,
+			resetTime: null,
+			timerType: "fresh",
+			providerId: "google-antigravity",
+		}];
+		const accountId = getAccountIdentity(account);
+		dynamicCatalog.updateFromEndpointResponse({
+			models: {
+				"gemini-known-good-before-malformed": {
+					quotaInfo: { remainingFraction: 0.8 },
+				},
+			},
+		}, accountId);
+
+		const responses: unknown[] = [
+			{ models: null },
+			{
+				models: {
+					"gemini-bad-null-entry": null,
+					"gemini-valid-after-bad-entry": {
+						maxTokens: null,
+						quotaInfo: { remainingFraction: 0.6 },
+					},
+				},
+				tieredModelIds: { bad: [null, 42, ""] },
+			},
+		];
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => new Response(
+			JSON.stringify(responses.shift()),
+			{ status: 200, headers: { "Content-Type": "application/json" } },
+		)) as typeof fetch;
+		const ctx = {
+			log: () => {},
+			markFlagged: () => {},
+			reportQuotaPollFlag: () => {},
+		};
+
+		try {
+			await fetchProviderQuota(account, ctx);
+			assert.ok(dynamicCatalog.getModel("gemini-known-good-before-malformed"));
+			assert.equal(account.quota[0]?.percentRemaining, 80);
+
+			await fetchProviderQuota(account, ctx);
+			assert.equal(dynamicCatalog.getModel("gemini-bad-null-entry"), undefined);
+			assert.ok(dynamicCatalog.getModel("gemini-valid-after-bad-entry"));
+			assert.equal(account.quota[0]?.percentRemaining, 60);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("preserves the last Google quota snapshot when a successful poll has no usable rows", async () => {
+		const account = makeAccount("malformed-quota@example.com", "project-safe");
+		const accountId = getAccountIdentity(account);
+		account.quota = [{
+			modelKey: "gemini",
+			displayName: "Gemini",
+			percentRemaining: 80,
+			resetTime: null,
+			timerType: "fresh",
+			providerId: "google-antigravity",
+		}];
+		dynamicCatalog.updateFromEndpointResponse({
+			defaultAgentModelId: "future-known-good",
+			models: {
+				"future-known-good": {
+					quotaInfo: { remainingFraction: 0.8 },
+				},
+			},
+		}, accountId);
+		const originalQuota = structuredClone(account.quota);
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => new Response(JSON.stringify({
+			models: {
+				gemini: {
+					quotaInfo: {
+						remainingFraction: 2,
+						resetTime: "2099-01-01T00:00:00Z",
+					},
+				},
+			},
+		}), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		})) as typeof fetch;
+
+		try {
+			await fetchProviderQuota(account, {
+				log: () => {},
+				markFlagged: () => {},
+				reportQuotaPollFlag: () => {},
+			});
+			assert.deepEqual(account.quota, originalQuota);
+			assert.ok(dynamicCatalog.getModel("future-known-good"));
+			assert.equal(
+				dynamicCatalog.hasModelForAccount(accountId, "future-known-good"),
+				true,
+			);
+			assert.equal(dynamicCatalog.getDefaultAgentModelId(), "future-known-good");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("ignores a stale quota 401 after replacement credentials arrive during body read", async () => {
+		const account = makeAccount("stale-quota-error@example.com", "shared-project");
+		const accountId = getAccountIdentity(account);
+		const generation = getCredentialGeneration(account, "google-antigravity");
+		dynamicCatalog.retainAccounts([{ id: accountId, generation }]);
+
+		let announceBodyRead!: () => void;
+		const bodyRead = new Promise<void>((resolve) => {
+			announceBodyRead = resolve;
+		});
+		let releaseBodyRead!: () => void;
+		const bodyGate = new Promise<void>((resolve) => {
+			releaseBodyRead = resolve;
+		});
+		const response = new Response("stale credentials", { status: 401 });
+		response.text = async () => {
+			announceBodyRead();
+			await bodyGate;
+			return "stale credentials";
+		};
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => response) as typeof fetch;
+		const effects: string[] = [];
+
+		try {
+			const poll = fetchProviderQuota(account, {
+				log: () => effects.push("log"),
+				reportQuotaPollFlag: () => effects.push("report"),
+				markFlagged: () => effects.push("flag"),
+			});
+			await bodyRead;
+			account.config.refreshToken = "replacement-refresh-token";
+			dynamicCatalog.retainAccounts([{
+				id: getAccountIdentity(account),
+				generation: getCredentialGeneration(account, "google-antigravity"),
+			}]);
+			releaseBodyRead();
+			await poll;
+
+			assert.deepEqual(effects, []);
+		} finally {
+			releaseBodyRead();
 			globalThis.fetch = originalFetch;
 		}
 	});

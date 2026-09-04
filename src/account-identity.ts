@@ -68,3 +68,29 @@ export function getAccountIdentity(
   }
   return `${email}#${creds}`;
 }
+
+/** Identify the exact provider credential revision used by an async operation. */
+export function getCredentialGeneration(
+  account: AccountRuntime | AccountConfig,
+  providerId: string,
+): string {
+  const config = "config" in account ? account.config : account;
+  const norm = normalizeAccountConfig(config);
+  const cred = norm.credentials?.find((candidate) => candidate.provider === providerId);
+  const details = getProviderCredentialDetails(
+    norm,
+    cred ?? { provider: providerId },
+  );
+  if (!cred && !details.secret) return "none";
+  return `${providerId}:${details.projectId}:${details.providerAccountId}:${details.secret}`;
+}
+
+/** Persist a credential revision without exposing its raw secret. */
+export function getCredentialGenerationFingerprint(
+  account: AccountRuntime | AccountConfig,
+  providerId: string,
+): string {
+  return createHash("sha256")
+    .update(getCredentialGeneration(account, providerId))
+    .digest("hex");
+}

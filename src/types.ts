@@ -226,6 +226,7 @@ export interface GoogleQuotaResponse {
 export interface ModelSpecConfig {
   maxOutputTokens: number;
   thinkingBudget: number; // -1 = adaptive (model decides), >=0 = fixed
+  minThinkingBudget?: number;
   isThinking: boolean;
 }
 
@@ -454,7 +455,22 @@ export interface PersistedSafetyState {
   }>;
 }
 
+export interface PersistedDynamicModelOwnership {
+  scopedModels: string[];
+  accounts: Record<
+    string,
+    {
+      credentialGenerationFingerprint: string;
+      models: string[];
+    }
+  >;
+}
+
 export interface PersistedState {
+  // Historical dynamic model IDs mapped to their shared quota pools.
+  dynamicModelQuotaPools?: Record<string, string>;
+  // Exact account ownership for dynamically discovered model IDs.
+  dynamicModelOwnership?: PersistedDynamicModelOwnership;
   // Per-model active account index
   modelAccounts: Record<string, number>;
   // Per-model request count on the active account
@@ -849,11 +865,28 @@ export function getModelPricing(model: string): ModelPricing | undefined {
   if (MODEL_PRICING[model]) return MODEL_PRICING[model];
   const lower = model.toLowerCase();
   if (MODEL_PRICING[lower]) return MODEL_PRICING[lower];
-  // Dynamic family fallbacks for unseen future models:
-  if (lower.includes("opus")) return MODEL_PRICING["claude-opus-4-6-thinking"];
-  if (lower.includes("sonnet")) return MODEL_PRICING["claude-sonnet-4-6"];
-  if (lower.includes("flash")) return MODEL_PRICING["gemini-3.8-flash-high"] ?? MODEL_PRICING["gemini-3.7-flash-tiered"];
-  if (lower.includes("pro")) return MODEL_PRICING["gemini-3.1-pro"];
+  // Dynamic family fallbacks for unseen future models. Keep provider and
+  // version checks explicit so an unrelated model containing "flash" cannot
+  // inherit Gemini pricing.
+  if (lower.includes("claude") && lower.includes("opus")) {
+    return MODEL_PRICING["claude-opus-4-6-thinking"];
+  }
+  if (lower.includes("claude") && lower.includes("sonnet")) {
+    return MODEL_PRICING["claude-sonnet-4-6"];
+  }
+  if (lower.includes("gemini")) {
+    if (lower.includes("3.8") && lower.includes("flash")) {
+      return MODEL_PRICING["gemini-3.8-flash-high"];
+    }
+    if (lower.includes("3.7") && lower.includes("flash")) {
+      return MODEL_PRICING["gemini-3.7-flash-tiered"];
+    }
+    if (lower.includes("3.6") && lower.includes("flash")) {
+      return MODEL_PRICING["gemini-3.6-flash-high"];
+    }
+    if (lower.includes("flash")) return MODEL_PRICING["gemini-3-flash"];
+    if (lower.includes("pro")) return MODEL_PRICING["gemini-3.1-pro"];
+  }
   if (lower.includes("gpt-oss")) return MODEL_PRICING["gpt-oss-120b-medium"];
   return undefined;
 }

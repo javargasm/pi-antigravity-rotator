@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { serveGeminiModels, serveOpenAIModels } from "../src/compat.js";
-import { getModelSpec } from "../src/compat/model-specs.js";
+import { getModelSpec, setModelSpecsOverride } from "../src/compat/model-specs.js";
 import { dynamicCatalog } from "../src/providers/google-antigravity/dynamic-catalog.js";
 
 function captureJson(render: (res: never) => void): unknown {
@@ -162,6 +162,116 @@ describe("model discovery", () => {
 			assert.ok(!payload.data.some((model) => model.id.toLowerCase().startsWith("gemini-3.5-")));
 			assert.deepEqual(dynamicCatalog.getAllModels(), []);
 		} finally {
+			dynamicCatalog.reset();
+		}
+	});
+
+	it("publishes dynamic output and thinking metadata without using the context window as output", () => {
+		dynamicCatalog.updateFromEndpointResponse({
+			models: {
+				"gemini-4.0-flash-thinking": {
+					maxTokens: 2_000_000,
+					maxOutputTokens: 32_000,
+					supportsThinking: true,
+					thinkingBudget: 12_000,
+					minThinkingBudget: 2_000,
+					quotaInfo: { remainingFraction: 1 },
+				},
+			},
+		});
+		try {
+			const openAiPayload = captureJson(serveOpenAIModels) as {
+				data: Array<{ id: string; meta: Record<string, unknown> }>;
+			};
+			const openAiEntry = openAiPayload.data.find(
+				(model) => model.id === "gemini-4.0-flash-thinking",
+			);
+			assert.ok(openAiEntry);
+			assert.equal(openAiEntry.meta.max_output_tokens, 32_000);
+			assert.equal(openAiEntry.meta.thinking, true);
+			assert.equal(openAiEntry.meta.thinking_budget, 12_000);
+			assert.equal(openAiEntry.meta.min_thinking_budget, 2_000);
+
+			const geminiPayload = captureJson(serveGeminiModels) as {
+				models: Array<{
+					name: string;
+					inputTokenLimit: number;
+					outputTokenLimit: number;
+					capabilities: Record<string, unknown>;
+				}>;
+			};
+			const geminiEntry = geminiPayload.models.find(
+				(model) => model.name === "models/gemini-4.0-flash-thinking",
+			);
+			assert.ok(geminiEntry);
+			assert.equal(geminiEntry.inputTokenLimit, 2_000_000);
+			assert.equal(geminiEntry.outputTokenLimit, 32_000);
+			assert.equal(geminiEntry.capabilities.thinking, true);
+			assert.equal(geminiEntry.capabilities.thinkingBudget, 12_000);
+			assert.equal(geminiEntry.capabilities.minThinkingBudget, 2_000);
+		} finally {
+			dynamicCatalog.reset();
+		}
+	});
+
+	it("publishes operator-overridden effective specs for dynamic models", () => {
+		dynamicCatalog.updateFromEndpointResponse({
+			models: {
+				"gemini-4.0-operator-model": {
+					maxTokens: 2_000_000,
+					maxOutputTokens: 32_000,
+					supportsThinking: false,
+					quotaInfo: { remainingFraction: 1 },
+				},
+			},
+		});
+		setModelSpecsOverride({
+			"gemini-4.0": {
+				maxOutputTokens: 7000,
+				thinkingBudget: 2000,
+				minThinkingBudget: 1000,
+				isThinking: true,
+				contextWindow: 300_000,
+			},
+		});
+
+		try {
+			const openAiPayload = captureJson(serveOpenAIModels) as {
+				data: Array<{
+					id: string;
+					context_window: number;
+					meta: Record<string, unknown>;
+				}>;
+			};
+			const openAiEntry = openAiPayload.data.find(
+				(model) => model.id === "gemini-4.0-operator-model",
+			);
+			assert.ok(openAiEntry);
+			assert.equal(openAiEntry.context_window, 300_000);
+			assert.equal(openAiEntry.meta.max_output_tokens, 7000);
+			assert.equal(openAiEntry.meta.thinking, true);
+			assert.equal(openAiEntry.meta.thinking_budget, 2000);
+			assert.equal(openAiEntry.meta.min_thinking_budget, 1000);
+
+			const geminiPayload = captureJson(serveGeminiModels) as {
+				models: Array<{
+					name: string;
+					inputTokenLimit: number;
+					outputTokenLimit: number;
+					capabilities: Record<string, unknown>;
+				}>;
+			};
+			const geminiEntry = geminiPayload.models.find(
+				(model) => model.name === "models/gemini-4.0-operator-model",
+			);
+			assert.ok(geminiEntry);
+			assert.equal(geminiEntry.inputTokenLimit, 300_000);
+			assert.equal(geminiEntry.outputTokenLimit, 7000);
+			assert.equal(geminiEntry.capabilities.thinking, true);
+			assert.equal(geminiEntry.capabilities.thinkingBudget, 2000);
+			assert.equal(geminiEntry.capabilities.minThinkingBudget, 1000);
+		} finally {
+			setModelSpecsOverride(null);
 			dynamicCatalog.reset();
 		}
 	});

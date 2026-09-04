@@ -12,13 +12,38 @@ import {
   QUOTA_MODEL_KEYS,
 } from "../../types.js";
 import { fetchWithRetry } from "../../fetch-with-retry.js";
-import { getAccountIdentity } from "../../account-identity.js";
+import {
+  getAccountIdentity,
+  getCredentialGeneration,
+} from "../../account-identity.js";
 import type { QuotaFetchContext } from "../adapter.js";
 import { DEFAULT_PROVIDER, getProviderProjectId } from "../credential-helpers.js";
 import { getAccountProxyDispatcher } from "../proxy-dispatcher.js";
 import { sortQuotaPools } from "../registry.js";
 
-import { dynamicCatalog, DynamicModelRegistry } from "./dynamic-catalog.js";
+import {
+  dynamicCatalog,
+  DynamicModelRegistry,
+  parseGoogleQuotaResponse,
+} from "./dynamic-catalog.js";
+
+type GoogleModelInfo = GoogleQuotaResponse["models"][string];
+type GoogleModelInfoWithQuota = GoogleModelInfo & {
+  quotaInfo: NonNullable<GoogleModelInfo["quotaInfo"]> & {
+    remainingFraction: number;
+  };
+};
+
+function hasUsableQuotaInfo(
+  info: GoogleModelInfo | undefined,
+): info is GoogleModelInfoWithQuota {
+  if (!info?.quotaInfo) return false;
+  const remaining = info.quotaInfo.remainingFraction;
+  return typeof remaining === "number" &&
+    Number.isFinite(remaining) &&
+    remaining >= 0 &&
+    remaining <= 1;
+}
 
 /**
  * Extract per-model quotas from a Google quota response, preserving the
@@ -32,18 +57,21 @@ export function extractQuotas(
   const now = Date.now();
 
   for (const [, config] of Object.entries(QUOTA_MODEL_KEYS)) {
-    let modelInfo = data.models[config.key];
-
-    if (!modelInfo) {
-      for (const altKey of config.altKeys) {
-        modelInfo = data.models[altKey];
-        if (modelInfo) break;
+    let modelInfo: GoogleModelInfoWithQuota | undefined;
+    for (const candidate of [config.key, ...config.altKeys]) {
+      const info = data.models[candidate];
+      if (hasUsableQuotaInfo(info)) {
+        modelInfo = info;
+        break;
       }
     }
 
     if (!modelInfo) {
       for (const [modelKey, info] of Object.entries(data.models)) {
-        if (DynamicModelRegistry.inferFamilyAndPool(modelKey).quotaPool === config.key) {
+        if (
+          DynamicModelRegistry.inferFamilyAndPool(modelKey).quotaPool === config.key &&
+          hasUsableQuotaInfo(info)
+        ) {
           modelInfo = info;
           break;
         }
@@ -51,7 +79,7 @@ export function extractQuotas(
     }
 
     if (modelInfo?.quotaInfo) {
-      const remainingFraction = modelInfo.quotaInfo.remainingFraction ?? 0;
+      const remainingFraction = modelInfo.quotaInfo.remainingFraction;
       // Google can publish a nominal reset for an untouched pool; no usage means
       // there is no active quota window yet.
       const resetTime =
@@ -98,6 +126,24 @@ export async function fetchProviderQuota(
   ctx: QuotaFetchContext,
 ): Promise<void> {
   if (!account.accessToken) return;
+  const accountId = getAccountIdentity(account);
+  const credentialGeneration = getCredentialGeneration(
+    account,
+    DEFAULT_PROVIDER,
+  );
+  const accountEpoch = dynamicCatalog.captureAccountEpoch(
+    accountId,
+    credentialGeneration,
+  );
+  if (accountEpoch === null) return;
+  const isCurrentGeneration = (): boolean =>
+    accountId === getAccountIdentity(account) &&
+    credentialGeneration === getCredentialGeneration(account, DEFAULT_PROVIDER) &&
+    dynamicCatalog.isAccountGenerationActive(
+      accountId,
+      credentialGeneration,
+      accountEpoch,
+    );
 
   try {
     const response = await fetchWithRetry(QUOTA_API_URL, {
@@ -113,10 +159,12 @@ export async function fetchProviderQuota(
       timeoutMs: 8000,
       dispatcher: getAccountProxyDispatcher(account, "google-antigravity"),
     });
+    if (!isCurrentGeneration()) return;
 
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
         const errorText = await response.text();
+        if (!isCurrentGeneration()) return;
         ctx.log(
           `${account.config.email}: quota API returned ${response.status}, flagging account`,
         );
@@ -130,18 +178,24 @@ export async function fetchProviderQuota(
       return;
     }
 
-    const data = (await response.json()) as GoogleQuotaResponse;
+    const rawData = await response.json();
+    if (!isCurrentGeneration()) return;
+    const data = parseGoogleQuotaResponse(rawData);
+    if (!data) return;
+    const oldQuota = account.quota || [];
+    const fresh = extractQuotas(data, oldQuota);
+    if (fresh.length === 0) return;
     const newModels = dynamicCatalog.updateFromEndpointResponse(
       data,
-      getAccountIdentity(account),
+      accountId,
+      credentialGeneration,
+      accountEpoch,
     );
     if (newModels > 0) {
       ctx.log(
         `${account.config.email}: discovered ${newModels} Antigravity model(s) from quota response`,
       );
     }
-    const oldQuota = account.quota || [];
-    const fresh = extractQuotas(data, oldQuota);
     // Drop the previous Antigravity entries so the new ones fully replace
     // them; keep entries from OTHER providers (Ollama) so multi-provider
     // accounts accumulate quotas across credentials without overwriting

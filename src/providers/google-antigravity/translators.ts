@@ -11,6 +11,7 @@ import {
   getModelSpec,
   isThinkingModel,
 } from "../../compat/model-specs.js";
+import { dynamicCatalog } from "./dynamic-catalog.js";
 import {
   thoughtSignatureCache,
   getStoredResponse,
@@ -21,6 +22,32 @@ import {
 const compatLogger = logger.child("compat");
 
 const VALIDATION_LOG_MAX_CHARS = 200;
+
+function normalizeFixedThinking(
+  modelSpec: ReturnType<typeof getModelSpec>,
+  requestedMaxOutputTokens: number | undefined,
+): { budget?: number; maxOutputTokens: number | undefined } {
+  const outputLimit = Math.max(1, Math.floor(modelSpec.maxOutputTokens));
+  const minimum = typeof modelSpec.minThinkingBudget === "number" &&
+      Number.isFinite(modelSpec.minThinkingBudget)
+    ? Math.max(0, Math.floor(modelSpec.minThinkingBudget))
+    : 0;
+  let budget = Math.max(
+    minimum,
+    Math.max(0, Math.floor(modelSpec.thinkingBudget)),
+  );
+  budget = Math.min(budget, outputLimit - 1);
+  if (budget < minimum) {
+    return { maxOutputTokens: requestedMaxOutputTokens };
+  }
+
+  let maxOutputTokens = requestedMaxOutputTokens;
+  if (!maxOutputTokens || maxOutputTokens <= budget) {
+    maxOutputTokens = Math.min(budget + 8192, outputLimit);
+    if (maxOutputTokens <= budget) maxOutputTokens = budget + 1;
+  }
+  return { budget, maxOutputTokens };
+}
 
 export function logValidationFailure(scope: string, payload: unknown): void {
   const truncated = redactSensitive(JSON.stringify(payload));
@@ -842,7 +869,6 @@ export function convertResponsesToChatRequest(
  * reasoning_effort. Matched case-insensitively against the exact ID only;
  * virtual siblings (e.g. `gemini-3.7-flash-tiered-high`) are excluded.
  */
-import { dynamicCatalog } from "./dynamic-catalog.js";
 
 export const TIERED_EFFORT_MODEL_ID = "gemini-3.7-flash-tiered";
 export const TIERED_EFFORT_MODEL_IDS = new Set([
@@ -1193,13 +1219,22 @@ export function openAIToAntigravityBody(
 
   let thinkingConfigObj: Record<string, unknown> | undefined;
   if (modelFamily === "claude" && isThinking && !forcesToolUse(input.tool_choice)) {
-    const tb = modelSpec.thinkingBudget;
-    thinkingConfigObj = { include_thoughts: true, thinking_budget: tb };
-    if (!maxOutputTokens || maxOutputTokens <= tb) {
-      maxOutputTokens = Math.min(tb + 8192, modelSpec.maxOutputTokens);
-      compatLogger.debug(
-        `Adjusted Claude maxOutputTokens → ${maxOutputTokens}`,
-      );
+    if (modelSpec.thinkingBudget === -1) {
+      thinkingConfigObj = { include_thoughts: true };
+    } else {
+      const normalized = normalizeFixedThinking(modelSpec, maxOutputTokens);
+      if (normalized.budget !== undefined) {
+        thinkingConfigObj = {
+          include_thoughts: true,
+          thinking_budget: normalized.budget,
+        };
+      }
+      if (maxOutputTokens !== normalized.maxOutputTokens) {
+        maxOutputTokens = normalized.maxOutputTokens;
+        compatLogger.debug(
+          `Adjusted Claude maxOutputTokens → ${maxOutputTokens}`,
+        );
+      }
     }
   } else if (isThinking && modelFamily !== "claude") {
     const tb = modelSpec.thinkingBudget;
@@ -1222,37 +1257,29 @@ export function openAIToAntigravityBody(
       };
     } else if (tb === -1) {
       thinkingConfigObj = { includeThoughts: true };
-    } else {
-      thinkingConfigObj = { includeThoughts: true, thinkingBudget: tb };
-    }
-    if (tb !== -1 && (!maxOutputTokens || maxOutputTokens <= tb)) {
-      maxOutputTokens = Math.min(tb + 8192, modelSpec.maxOutputTokens);
-      compatLogger.debug(
-        `Adjusted Gemini maxOutputTokens → ${maxOutputTokens}`,
-      );
-    } else if (tb === -1 && maxOutputTokens !== undefined) {
-      // Adaptive thinking models (e.g. gemini-3.8-flash-*, gemini-3.7-flash-tiered)
-      // allocate tokens to thinking first. If a client specifies a small max_tokens
-      // (e.g. 500), thinking tokens consume the entire budget and truncate visible output.
-      // Ensure sufficient headroom above client's requested output tokens.
-      const adaptiveHeadroom = 8192;
-      const minAdaptiveFloor = 8192;
-      const targetTokens = Math.max(maxOutputTokens + adaptiveHeadroom, minAdaptiveFloor);
-      if (maxOutputTokens < targetTokens) {
+      if (maxOutputTokens !== undefined) {
+        // Adaptive models spend from the output budget before emitting visible text.
+        const targetTokens = Math.max(maxOutputTokens + 8192, 8192);
         maxOutputTokens = Math.min(targetTokens, modelSpec.maxOutputTokens);
         compatLogger.debug(
           `Adjusted adaptive Gemini maxOutputTokens → ${maxOutputTokens}`,
         );
       }
+    } else {
+      const normalized = normalizeFixedThinking(modelSpec, maxOutputTokens);
+      if (normalized.budget !== undefined) {
+        thinkingConfigObj = {
+          includeThoughts: true,
+          thinkingBudget: normalized.budget,
+        };
+      }
+      if (maxOutputTokens !== normalized.maxOutputTokens) {
+        maxOutputTokens = normalized.maxOutputTokens;
+        compatLogger.debug(
+          `Adjusted Gemini maxOutputTokens → ${maxOutputTokens}`,
+        );
+      }
     }
-  } else if (input.reasoning_effort) {
-    const budgets: Record<string, number> = {
-      low: Math.round(modelSpec.thinkingBudget / 4),
-      medium: Math.round(modelSpec.thinkingBudget / 2),
-      high: modelSpec.thinkingBudget,
-    };
-    const b = budgets[input.reasoning_effort.toLowerCase()];
-    if (b) thinkingConfigObj = { includeThoughts: true, thinkingBudget: b };
   }
 
   const generationConfig: Record<string, unknown> = {

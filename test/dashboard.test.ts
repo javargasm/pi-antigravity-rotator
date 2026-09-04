@@ -527,6 +527,11 @@ describe("dashboard", () => {
       getModelPricingClient("google/gemini-3.8-flash-high")?.output,
       3.75,
     );
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(getModelPricingClient("google/gemini-4.0-flash-preview"))),
+      { input: 0.5, output: 3.0 },
+    );
+    assert.equal(getModelPricingClient("acme-flash-preview"), null);
 
     const savings = calcSavingsFromBuckets([{
       byModel: {

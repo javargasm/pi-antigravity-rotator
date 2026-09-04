@@ -132,6 +132,13 @@ function routingModelKey(rotator: AccountRotator, model: string): string {
   }).resolveQuotaModelKeyForDisplay;
   return resolver?.call(rotator, model) ?? resolveQuotaModelKey(model) ?? model;
 }
+
+function observedModelKey(rotator: AccountRotator, model: string): string {
+  const resolver = (rotator as unknown as {
+    resolveObservedModelKey?: (value: string) => string;
+  }).resolveObservedModelKey;
+  return resolver?.call(rotator, model) ?? resolveDisplayModelKey(model);
+}
 import { startVersionChecker, performSelfUpdate } from "./version-check.js";
 import { startNotificationPoller } from "./notification-poller.js";
 import {
@@ -1173,7 +1180,7 @@ export async function withRotation<T>(
 
     const label = account.config.label || account.config.email;
     const modelKey = routingModelKey(rotator, model);
-    const displayModelKey = resolveDisplayModelKey(body.displayModel || model);
+    const displayModelKey = observedModelKey(rotator, body.displayModel || model);
     const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
     const requestStartMs = Date.now();
     let accountReleased = false;
@@ -1609,7 +1616,7 @@ async function handleProxyRequest(
 
     const label = account.config.label || account.config.email;
     const modelKey = rotator.resolveQuotaModelKeyForDisplay(body.model) ?? body.model; // quota routing
-    const displayModelKey = resolveDisplayModelKey(body.model); // metrics/logs
+    const displayModelKey = observedModelKey(rotator, body.model); // metrics/logs
     const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
     let accountReleased = false;
     const releaseCurrentAccount = (): void => {
