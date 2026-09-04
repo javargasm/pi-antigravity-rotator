@@ -3553,10 +3553,12 @@ export class AccountRotator {
     account: AccountRuntime,
     modelKey: string,
   ): boolean {
+    const accountId = getAccountIdentity(account);
     if (
       !isStaticAntigravityModel(modelKey) &&
-      dynamicCatalog.wasDiscoveredFromLiveCatalog(modelKey) &&
-      !dynamicCatalog.hasModelForAccount(getAccountIdentity(account), modelKey)
+      dynamicCatalog.wasDiscovered(modelKey) &&
+      dynamicCatalog.hasLiveCatalogSnapshot() &&
+      !dynamicCatalog.hasModelForAccount(accountId, modelKey)
     ) {
       return false;
     }

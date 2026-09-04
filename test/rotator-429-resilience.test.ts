@@ -310,16 +310,17 @@ describe("429 RESOURCE_EXHAUSTED resilience and in-flight lifecycle", () => {
     const email = "restored-neutral-routing@example.com";
     const projectId = "restored-neutral-routing-project";
     const originalFetch = globalThis.fetch;
+    let quotaResponse: unknown = {
+      models: {
+        [rawModel]: { quotaInfo: { remainingFraction: 1 } },
+      },
+    };
     let firstRotator: InstanceType<typeof AccountRotator> | undefined;
     let secondRotator: InstanceType<typeof AccountRotator> | undefined;
 
     dynamicCatalog.reset();
     await setCachedState({ modelAccounts: {}, accounts: {} });
-    globalThis.fetch = (async () => new Response(JSON.stringify({
-      models: {
-        [rawModel]: { quotaInfo: { remainingFraction: 1 } },
-      },
-    }), {
+    globalThis.fetch = (async () => new Response(JSON.stringify(quotaResponse), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     })) as typeof fetch;
@@ -351,6 +352,18 @@ describe("429 RESOURCE_EXHAUSTED resilience and in-flight lifecycle", () => {
       const selected = await (secondRotator as any).tryGetActiveAccount(rawModel);
       assert.equal(selected, secondAccount);
       secondRotator.finishRequest(secondAccount, rawModel);
+
+      quotaResponse = {
+        models: {
+          gemini: { quotaInfo: { remainingFraction: 1 } },
+        },
+      };
+      await secondRotator.pollAccountQuota(secondAccount);
+      assert.equal(dynamicCatalog.getModel(rawModel), undefined);
+      assert.equal(
+        await (secondRotator as any).tryGetActiveAccount(rawModel),
+        null,
+      );
     } finally {
       firstRotator?.stopQuotaPolling();
       secondRotator?.stopQuotaPolling();

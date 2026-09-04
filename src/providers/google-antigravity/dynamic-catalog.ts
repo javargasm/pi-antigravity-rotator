@@ -203,7 +203,7 @@ export class DynamicModelRegistry {
     string,
     Pick<DynamicModelEntry, "id" | "quotaPool">
   >();
-  private liveDiscoveredModels = new Set<string>();
+  private liveCatalogHydrated = false;
   private activeAccountGenerations: Map<
     string,
     ActiveAccountGeneration
@@ -220,7 +220,7 @@ export class DynamicModelRegistry {
     this.accountModels.clear();
     this.defaultAgentModelIds.clear();
     this.discoveredModels.clear();
-    this.liveDiscoveredModels.clear();
+    this.liveCatalogHydrated = false;
     this.activeAccountGenerations = null;
     this.nextAccountEpoch = 0;
   }
@@ -260,6 +260,7 @@ export class DynamicModelRegistry {
         accountEpoch,
       )
     ) return 0;
+    this.liveCatalogHydrated = true;
     const previous = this.accountModels.get(key);
     const knownBefore = new Set(this.getAllModels().map((model) => model.id.toLowerCase()));
     const next = new Map<string, DynamicModelEntry>();
@@ -341,7 +342,6 @@ export class DynamicModelRegistry {
         displayName: info.displayName ?? previous?.get(lowerId)?.displayName ?? normalizedId,
       });
       this.discoveredModels.set(lowerId, { id: normalizedId, quotaPool });
-      this.liveDiscoveredModels.add(lowerId);
       if (!knownBefore.has(lowerId)) newModelsCount++;
     }
 
@@ -436,12 +436,12 @@ export class DynamicModelRegistry {
       ?.has(id.trim().toLowerCase()) ?? false;
   }
 
-  wasDiscovered(id: string): boolean {
-    return this.discoveredModels.has(id.trim().toLowerCase());
+  hasLiveCatalogSnapshot(): boolean {
+    return this.liveCatalogHydrated;
   }
 
-  wasDiscoveredFromLiveCatalog(id: string): boolean {
-    return this.liveDiscoveredModels.has(id.trim().toLowerCase());
+  wasDiscovered(id: string): boolean {
+    return this.discoveredModels.has(id.trim().toLowerCase());
   }
 
   getObservedModelId(id: string): string | undefined {
