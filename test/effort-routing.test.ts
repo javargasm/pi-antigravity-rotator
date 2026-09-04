@@ -2,7 +2,9 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
 	setEffortRoutingOverride,
+	setModelAliasesOverride,
 	getEffortRouting,
+	applyModelAlias,
 	resolveDisplayModelKey,
 	type VirtualKey,
 } from "../src/types.js";
@@ -11,10 +13,12 @@ import { validateConfig, formatValidationErrors } from "../src/validators.js";
 import { applyConfigDefaults } from "../src/config-defaults.js";
 import { AccountRotator } from "../src/rotator.js";
 import { initDb, closeDb, setCachedConfig, getCachedConfig } from "../src/db-store.js";
+import { logger } from "../src/logger.js";
 
 describe("Effort-based model routing resolver", () => {
 	afterEach(() => {
 		setEffortRoutingOverride(null);
+		setModelAliasesOverride(null);
 	});
 
 	it("returns null for everything when no config is set (opt-in default)", () => {
@@ -59,6 +63,49 @@ describe("Effort-based model routing resolver", () => {
 		);
 	});
 
+	it("treats reserved alias and effort keys from JSON as ordinary own data", () => {
+		setEffortRoutingOverride(JSON.parse(`{
+			"constructor":{"defaultEffort":"__proto__","targets":{"constructor":"constructor-target","prototype":"prototype-target","__proto__":"proto-target"}},
+			"prototype":{"defaultEffort":"constructor","targets":{"constructor":"prototype-constructor-target","prototype":"prototype-prototype-target","__proto__":"prototype-proto-target"}},
+			"__proto__":{"defaultEffort":"prototype","targets":{"constructor":"proto-constructor-target","prototype":"proto-prototype-target","__proto__":"proto-proto-target"}}
+		}`));
+
+		const expected = [
+			["constructor", "constructor", "constructor-target"],
+			["constructor", "prototype", "prototype-target"],
+			["constructor", "__proto__", "proto-target"],
+			["prototype", "constructor", "prototype-constructor-target"],
+			["prototype", "prototype", "prototype-prototype-target"],
+			["prototype", "__proto__", "prototype-proto-target"],
+			["__proto__", "constructor", "proto-constructor-target"],
+			["__proto__", "prototype", "proto-prototype-target"],
+			["__proto__", "__proto__", "proto-proto-target"],
+		] as const;
+
+		for (const [alias, effort, target] of expected) {
+			assert.equal(resolveEffortAliasModel(alias, effort), target);
+		}
+	});
+
+	it("does not treat inherited reserved names as configured aliases", () => {
+		setEffortRoutingOverride({
+			safe: {
+				defaultEffort: "medium",
+				targets: { medium: "gemini-3.8-flash-medium" },
+			},
+		});
+
+		for (const name of ["constructor", "prototype", "__proto__"]) {
+			assert.equal(resolveEffortAliasModel(name, "medium"), null);
+		}
+	});
+
+	it("does not resolve inherited Object properties as model aliases", () => {
+		for (const name of ["constructor", "prototype", "__proto__"]) {
+			assert.equal(applyModelAlias(name), name);
+		}
+	});
+
 	it("falls back to default effort for missing, null, non-string, empty, or whitespace effort", () => {
 		setEffortRoutingOverride({
 			"gemini-3.8-flash": {
@@ -95,6 +142,39 @@ describe("Effort-based model routing resolver", () => {
 			resolveEffortAliasModel("gemini-3.8-flash", "unknown-effort"),
 			"gemini-3.8-flash-medium",
 		);
+	});
+
+	it("logs each provided malformed effort while falling back without throwing", () => {
+		setEffortRoutingOverride({
+			"gemini-3.8-flash": {
+				defaultEffort: "medium",
+				targets: { medium: "gemini-3.8-flash-medium" },
+			},
+		});
+
+		const originalLog = logger.log;
+		const debugMessages: string[] = [];
+		logger.log = (level, scope, message) => {
+			if (level === "debug" && scope === "compat") {
+				debugMessages.push(String(message));
+			}
+		};
+
+		try {
+			for (const effort of [5, "", "   ", "unknown"]) {
+				assert.equal(
+					resolveEffortAliasModel("gemini-3.8-flash", effort),
+					"gemini-3.8-flash-medium",
+				);
+			}
+		} finally {
+			logger.log = originalLog;
+		}
+
+		assert.equal(debugMessages.length, 4);
+		for (const message of debugMessages) {
+			assert.match(message, /falling back to default/);
+		}
 	});
 
 	it("handles effort values case-insensitively and with whitespace", () => {

@@ -422,6 +422,7 @@ describe("effort-based routing in openAIToAntigravityBody", () => {
 		setEffortRoutingOverride(null);
 		setModelAliasesOverride(null);
 		setModelSpecsOverride(null);
+		dynamicCatalog.reset();
 	});
 
 	it("routes alias + effort to upstream model with displayModel = alias and adaptive thinking", () => {
@@ -502,6 +503,39 @@ describe("effort-based routing in openAIToAntigravityBody", () => {
 			thinkingBudget: 2048,
 		});
 		assert.equal(body.request.generationConfig?.maxOutputTokens, 4096);
+	});
+
+	it("uses dynamic target thinking and output constraints after effort routing", () => {
+		dynamicCatalog.updateFromEndpointResponse({
+			models: {
+				"gemini-4.0-effort-target": {
+					maxOutputTokens: 12_000,
+					supportsThinking: true,
+					thinkingBudget: 1_000,
+					minThinkingBudget: 4_000,
+					quotaInfo: { remainingFraction: 1 },
+				},
+			},
+		});
+		setEffortRoutingOverride({
+			"gemini-4.0-effort": {
+				defaultEffort: "medium",
+				targets: { medium: "gemini-4.0-effort-target" },
+			},
+		});
+
+		const body = openAIToAntigravityBody({
+			model: "gemini-4.0-effort",
+			messages: [{ role: "user", content: "ping" }],
+			max_tokens: 3_000,
+		}) as AntigravityBodyWithRequest;
+
+		assert.equal(body.model, "gemini-4.0-effort-target");
+		assert.deepEqual(body.request.generationConfig?.thinkingConfig, {
+			includeThoughts: true,
+			thinkingBudget: 4_000,
+		});
+		assert.equal(body.request.generationConfig?.maxOutputTokens, 12_000);
 	});
 
 	it("remaps configured target via operator modelAliases", () => {
