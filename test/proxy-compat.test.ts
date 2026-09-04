@@ -22,6 +22,7 @@ import {
 import { stopVersionChecker } from "../src/version-check.js";
 import { stopNotificationPoller } from "../src/notification-poller.js";
 import type { AccountRotator } from "../src/rotator.js";
+import { logger } from "../src/logger.js";
 
 type Capture = {
 	url: string;
@@ -485,7 +486,11 @@ describe("effort-based routing endpoint e2e", () => {
 		tokenUsage: Array<{ model: string | undefined; inputTokens: number; outputTokens: number }>;
 	};
 
-	function createE2eRotator(account: AccountRuntime, tracking: Tracking): AccountRotator {
+	function createE2eRotator(
+		account: AccountRuntime,
+		tracking: Tracking,
+		resolveObservedModelKey: (model: string) => string = (model) => model,
+	): AccountRotator {
 		return {
 			getActiveAccount: async () => account,
 			getRetryAfterMs: () => 0,
@@ -519,6 +524,7 @@ describe("effort-based routing endpoint e2e", () => {
 				tracking.tokenUsage.push({ model, inputTokens, outputTokens });
 			},
 			resolveQuotaModelKeyForDisplay: (m: string) => m,
+			resolveObservedModelKey,
 			saveState: () => {},
 			getStatus: () => ({ accounts: [] }),
 		} as unknown as AccountRotator;
@@ -531,57 +537,68 @@ describe("effort-based routing endpoint e2e", () => {
 		stopNotificationPoller();
 	});
 
-	it("passes effectiveModel in withRotation to derive displayModelKey for accounting", async () => {
-		setEffortRoutingOverride({
-			"gemini-3.8-flash": {
-				defaultEffort: "medium",
-				targets: {
-					high: "gemini-3.8-flash-high",
+	it("warns for live Ollama collisions without changing provider precedence", () => {
+		const collisions = [
+			{
+				kind: "alias",
+				model: "live-ollama-alias",
+				rules: {
+					"live-ollama-alias": {
+						defaultEffort: "medium",
+						targets: { medium: "gemini-3.8-flash-medium" },
+					},
 				},
 			},
-		});
-
-		const upstream = await listenServer((_req, res) => {
-			res.writeHead(200, { "Content-Type": "text/event-stream" });
-			res.end('data: {"response":{}}\n\n');
-		});
-		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
-
-		let capturedDisplayKey: string | undefined;
-		const rotator = createRotatorStub(createAccount());
-		const fakeBody: RequestBody = {
-			project: "test-proj",
-			model: "gemini-3.8-flash-high",
-			displayModel: "gemini-3.8-flash",
-			request: {},
+			{
+				kind: "target",
+				model: "live-ollama-target",
+				rules: {
+					"gemini-3.8-flash": {
+						defaultEffort: "medium",
+						targets: { medium: "live-ollama-target" },
+					},
+				},
+			},
+		] as const;
+		const originalLog = logger.log;
+		const warnings: string[] = [];
+		logger.log = (level, scope, message) => {
+			if (level === "warn" && scope === "proxy") warnings.push(String(message));
 		};
 
 		try {
-			await withRotation(
-				rotator,
-				fakeBody.model,
-				{},
-				fakeBody,
-				async (_response: Response, context) => {
-					capturedDisplayKey = context.displayModelKey;
-					return "ok";
-				},
-			);
+			for (const collision of collisions) {
+				setEffortRoutingOverride(collision.rules);
+				const provider = providerAdapterForModel(
+					createAccount(),
+					collision.model,
+					{ getOllamaModels: () => [collision.model] },
+				);
 
-			assert.equal(capturedDisplayKey, "gemini-3.8-flash-high");
+				assert.equal(provider.id, "ollama", `${collision.kind} collision changed provider precedence`);
+				assert.ok(
+					warnings.some(
+						(message) =>
+							message.includes(collision.model) &&
+							/effort.?routing/i.test(message) &&
+							/ollama/i.test(message),
+					),
+					`missing dynamic Ollama warning for configured ${collision.kind}`,
+				);
+			}
 		} finally {
-			await closeServer(upstream.server);
+			logger.log = originalLog;
 		}
 	});
 
-	it("/v1/chat/completions routes alias to concrete targets, echoes alias, and attributes logs to concrete model", async () => {
+	it("/v1/chat/completions routes aliases and preserves exact dynamic target identity in accounting", async () => {
 		setEffortRoutingOverride({
 			"gemini-3.8-flash": {
 				defaultEffort: "medium",
 				targets: {
 					low: "gemini-3.8-flash-low",
 					medium: "gemini-3.8-flash-medium",
-					high: "gemini-3.8-flash-high",
+					high: "gemini-dynamic-preview",
 				},
 			},
 		});
@@ -603,7 +620,11 @@ describe("effort-based routing endpoint e2e", () => {
 		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
 
 		const tracking: Tracking = { requestLogs: [], latencies: [], tokenUsage: [] };
-		const rotator = createE2eRotator(createAccount(), tracking);
+		const rotator = createE2eRotator(
+			createAccount(),
+			tracking,
+			(model) => model === "gemini-dynamic-preview" ? "Gemini-Dynamic-Preview" : model,
+		);
 		const proxy = startProxy(rotator, 0, "127.0.0.1");
 		await once(proxy, "listening");
 		const port = (proxy.address() as AddressInfo).port;
@@ -626,7 +647,7 @@ describe("effort-based routing endpoint e2e", () => {
 
 			assert.equal(upstreamCaptures.length, 1);
 			const highUpstreamBody = JSON.parse(upstreamCaptures[0].body);
-			assert.equal(highUpstreamBody.model, "gemini-3.8-flash-high");
+			assert.equal(highUpstreamBody.model, "gemini-dynamic-preview");
 
 			// 2. low effort
 			const lowRes = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
@@ -664,15 +685,15 @@ describe("effort-based routing endpoint e2e", () => {
 			// Verify spend/request log accounting attributed to concrete models
 			assert.deepEqual(
 				tracking.requestLogs.map((e) => e.model),
-				["gemini-3.8-flash-high", "gemini-3.8-flash-low", "gemini-3.8-flash-medium"],
+				["Gemini-Dynamic-Preview", "gemini-3.8-flash-low", "gemini-3.8-flash-medium"],
 			);
 			assert.deepEqual(
 				tracking.latencies.map((e) => e.model),
-				["gemini-3.8-flash-high", "gemini-3.8-flash-low", "gemini-3.8-flash-medium"],
+				["Gemini-Dynamic-Preview", "gemini-3.8-flash-low", "gemini-3.8-flash-medium"],
 			);
 			assert.deepEqual(
 				tracking.tokenUsage.map((e) => e.model),
-				["gemini-3.8-flash-high", "gemini-3.8-flash-low", "gemini-3.8-flash-medium"],
+				["Gemini-Dynamic-Preview", "gemini-3.8-flash-low", "gemini-3.8-flash-medium"],
 			);
 		} finally {
 			proxy.closeAllConnections?.();
@@ -793,22 +814,29 @@ describe("effort-based routing endpoint e2e", () => {
 		}
 	});
 
-	it("streaming echo preserves the alias across chat completion SSE chunks", async () => {
+	it("streaming echo preserves the alias across Chat, Responses, and Anthropic events", async () => {
 		setEffortRoutingOverride({
 			"gemini-3.8-flash": {
 				defaultEffort: "medium",
 				targets: {
 					high: "gemini-3.8-flash-high",
+					medium: "gemini-3.8-flash-medium",
 				},
 			},
 		});
 
-		const upstream = await listenServer((_req, res) => {
-			res.writeHead(200, { "Content-Type": "text/event-stream" });
-			res.end([
-				'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"chunk1"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}}',
-				"",
-			].join("\n"));
+		const upstreamBodies: Array<Record<string, unknown>> = [];
+		const upstream = await listenServer((req, res) => {
+			let body = "";
+			req.on("data", (chunk) => { body += chunk.toString(); });
+			req.on("end", () => {
+				upstreamBodies.push(JSON.parse(body));
+				res.writeHead(200, { "Content-Type": "text/event-stream" });
+				res.end([
+					'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"chunk1"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}}',
+					"",
+				].join("\n"));
+			});
 		});
 
 		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
@@ -820,19 +848,61 @@ describe("effort-based routing endpoint e2e", () => {
 		const port = (proxy.address() as AddressInfo).port;
 
 		try {
-			const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					model: "gemini-3.8-flash",
-					reasoning_effort: "high",
-					stream: true,
-					messages: [{ role: "user", content: "ping" }],
-				}),
-			});
-			assert.equal(res.status, 200);
-			const text = await res.text();
-			assert.ok(text.includes('"model":"gemini-3.8-flash"'));
+			const surfaces = [
+				{
+					name: "Chat",
+					path: "/v1/chat/completions",
+					request: {
+						model: "gemini-3.8-flash",
+						reasoning_effort: "high",
+						stream: true,
+						messages: [{ role: "user", content: "ping" }],
+					},
+					event: /chat\.completion\.chunk/,
+					target: "gemini-3.8-flash-high",
+				},
+				{
+					name: "Responses",
+					path: "/v1/responses",
+					request: {
+						model: "gemini-3.8-flash",
+						reasoning: { effort: "high" },
+						stream: true,
+						input: "ping",
+					},
+					event: /response\.created/,
+					target: "gemini-3.8-flash-high",
+				},
+				{
+					name: "Anthropic",
+					path: "/v1/messages",
+					request: {
+						model: "gemini-3.8-flash",
+						max_tokens: 100,
+						stream: true,
+						messages: [{ role: "user", content: "ping" }],
+					},
+					event: /event: message_start/,
+					target: "gemini-3.8-flash-medium",
+				},
+			] as const;
+
+			for (const [index, surface] of surfaces.entries()) {
+				const res = await fetch(`http://127.0.0.1:${port}${surface.path}`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(surface.request),
+				});
+				assert.equal(res.status, 200, `${surface.name} streaming status`);
+				assert.equal(res.headers.get("x-rotator-model"), "gemini-3.8-flash");
+				const text = await res.text();
+				assert.match(text, surface.event);
+				assert.ok(
+					text.includes('"model":"gemini-3.8-flash"'),
+					`${surface.name} event did not echo the raw alias`,
+				);
+				assert.equal(upstreamBodies[index].model, surface.target);
+			}
 		} finally {
 			proxy.closeAllConnections?.();
 			await closeServer(proxy);
