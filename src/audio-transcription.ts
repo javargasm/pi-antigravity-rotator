@@ -15,6 +15,7 @@ const audioLogger = logger.child("audio-transcription");
 const AUDIO_SESSION_START_TIMEOUT_MS = 10_000;
 export const MAX_AUDIO_FRAME_BYTES = 256 * 1024;
 export const MAX_QUEUED_AUDIO_BYTES = 1024 * 1024;
+const MAX_QUEUED_AUDIO_CHUNKS = 1024;
 const MAX_WS_INCOMING_BUFFER_BYTES = 2 * MAX_QUEUED_AUDIO_BYTES;
 
 export interface AntigravityCredentials {
@@ -627,7 +628,9 @@ export class AntigravityAudioSession {
   public sendChunk(pcmBuffer: Buffer): boolean {
     if (
       (this.state !== "starting" && this.state !== "ready") ||
+      pcmBuffer.length === 0 ||
       pcmBuffer.length > MAX_AUDIO_FRAME_BYTES ||
+      this.queue.length >= MAX_QUEUED_AUDIO_CHUNKS ||
       this.queuedAudioBytes + pcmBuffer.length > MAX_QUEUED_AUDIO_BYTES
     ) {
       return false;

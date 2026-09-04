@@ -440,6 +440,26 @@ describe("audio WebSocket security boundary", () => {
     }
   });
 
+  it("closes with 1009 on an empty binary audio frame", async () => {
+    const rawKey = "rk-ws-empty-audio";
+    addVirtualKey(rawKey, ["*"]);
+    const languageServer = mockLanguageServer("pending");
+    const { server, port } = await listenServer((_req, res) => res.end());
+    installUpgradeHandler(server);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?key=${rawKey}`);
+
+    try {
+      await waitForWebSocketEvent(ws, "open");
+      ws.send(Buffer.alloc(0));
+      const close = await waitForWebSocketEvent<CloseEvent>(ws, "close", 300);
+      assert.equal(close.code, 1009);
+    } finally {
+      ws.close();
+      languageServer.restore();
+      await closeServer(server);
+    }
+  });
+
   it("rejects an unsafe uint64 frame length with close code 1009", async () => {
     const rawKey = "rk-ws-uint64-limit";
     addVirtualKey(rawKey, ["*"]);

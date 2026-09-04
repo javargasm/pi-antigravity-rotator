@@ -471,4 +471,25 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
       requestMock.mock.restore();
     }
   });
+
+  it("bounds queued audio object count for tiny chunks", async () => {
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) =>
+        new FakeRequest(options, callback, () => {})) as unknown as typeof https.request,
+    );
+    const session = new AntigravityAudioSession({ port: 1, csrf: "test" });
+    const start = session.start();
+    void start.catch(() => {});
+
+    try {
+      const accepted = Array.from({ length: 1025 }, () => session.sendChunk(Buffer.alloc(1)));
+      assert.equal(accepted[1023], true);
+      assert.equal(accepted[1024], false);
+    } finally {
+      session.destroy();
+      requestMock.mock.restore();
+    }
+  });
 });
