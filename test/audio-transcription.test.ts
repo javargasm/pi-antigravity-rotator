@@ -1,9 +1,111 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { describe, it } from "node:test";
+import https from "node:https";
+import { describe, it, mock } from "node:test";
 import { applyModelAlias } from "../src/types.js";
 import { buildOpenAIModelCatalog } from "../src/compat.js";
-import { handleOpenAIAudioTranscriptions } from "../src/audio-transcription.js";
+import {
+  AntigravityAudioSession,
+  handleOpenAIAudioTranscriptions,
+  transcribeAudioWithAntigravity,
+} from "../src/audio-transcription.js";
+
+class FakeResponse extends EventEmitter {
+  constructor(public statusCode = 200) {
+    super();
+  }
+
+  resume(): void {}
+}
+
+class FakeRequest extends EventEmitter {
+  readonly chunks: Buffer[] = [];
+  destroyed = false;
+
+  constructor(
+    readonly options: Record<string, unknown>,
+    readonly callback: ((response: FakeResponse) => void) | undefined,
+    private readonly onEnd: (request: FakeRequest) => void,
+  ) {
+    super();
+  }
+
+  write(data: string | Buffer): boolean {
+    this.chunks.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+    return true;
+  }
+
+  end(data?: string | Buffer): this {
+    if (data !== undefined) this.write(data);
+    queueMicrotask(() => this.onEnd(this));
+    return this;
+  }
+
+  destroy(): this {
+    this.destroyed = true;
+    return this;
+  }
+}
+
+function connectFrame(message: unknown): Buffer {
+  const payload = Buffer.from(JSON.stringify(message));
+  const frame = Buffer.alloc(5 + payload.length);
+  frame.writeUInt8(0, 0);
+  frame.writeUInt32BE(payload.length, 1);
+  payload.copy(frame, 5);
+  return frame;
+}
+
+function mockSuccessfulLanguageServer(): {
+  requests: FakeRequest[];
+  restore: () => void;
+} {
+  const requests: FakeRequest[] = [];
+  const requestMock = mock.method(
+    https,
+    "request",
+    ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+      const request = new FakeRequest(options, callback, () => {
+        const response = new FakeResponse();
+        callback?.(response);
+        if (String(options.path).endsWith("/StreamAudioTranscription")) {
+          queueMicrotask(() => {
+            response.emit("data", connectFrame({ ready: { sessionId: "session-1" } }));
+            response.emit("data", connectFrame({ transcription: { text: "hello", isFinal: true } }));
+            response.emit("data", connectFrame({ complete: true }));
+          });
+        } else {
+          queueMicrotask(() => response.emit("end"));
+        }
+      });
+      requests.push(request);
+      return request;
+    }) as unknown as typeof https.request,
+  );
+  return { requests, restore: () => requestMock.mock.restore() };
+}
+
+function makeWav(seconds: number): Buffer {
+  const byteRate = 32_000;
+  const dataLength = Math.round(seconds * byteRate);
+  const wav = Buffer.alloc(44 + dataLength);
+  wav.write("RIFF", 0);
+  wav.writeUInt32LE(36 + dataLength, 4);
+  wav.write("WAVE", 8);
+  wav.write("fmt ", 12);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(16_000, 24);
+  wav.writeUInt32LE(byteRate, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36);
+  wav.writeUInt32LE(dataLength, 40);
+  return wav;
+}
 
 async function listenServer(
   handler: (req: IncomingMessage, res: ServerResponse) => void,
@@ -96,10 +198,9 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     }
   });
 
-  it("successfully transcribes audio file via POST /v1/audio/transcriptions (default json format)", async () => {
-    const fs = await import("node:fs");
-    if (!fs.existsSync("/tmp/test_hello.wav")) return;
-
+  it("successfully transcribes audio file via POST /v1/audio/transcriptions (default json format)", {
+    skip: !fs.existsSync("/tmp/test_hello.wav"),
+  }, async () => {
     const { server, url } = await listenServer((req, res) => {
       handleOpenAIAudioTranscriptions(req, res).catch((err) => {
         res.writeHead(500);
@@ -128,10 +229,9 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     }
   });
 
-  it("successfully transcribes audio with response_format: 'text'", async () => {
-    const fs = await import("node:fs");
-    if (!fs.existsSync("/tmp/test_hello.wav")) return;
-
+  it("successfully transcribes audio with response_format: 'text'", {
+    skip: !fs.existsSync("/tmp/test_hello.wav"),
+  }, async () => {
     const { server, url } = await listenServer((req, res) => {
       handleOpenAIAudioTranscriptions(req, res).catch((err) => {
         res.writeHead(500);
@@ -226,5 +326,149 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     const creds2 = getAntigravityCredentials();
     assert.deepEqual(creds1, creds2);
   });
-});
 
+  it("forwards the optional language hint to the Language Server", async () => {
+    const languageServer = mockSuccessfulLanguageServer();
+    try {
+      assert.equal(
+        await transcribeAudioWithAntigravity(Buffer.alloc(0), { language: "fr" } as never),
+        "hello",
+      );
+      const frame = Buffer.concat(languageServer.requests[0].chunks);
+      const payload = JSON.parse(frame.subarray(5).toString("utf8")) as Record<string, unknown>;
+      assert.equal(payload.language, "fr");
+    } finally {
+      languageServer.restore();
+    }
+  });
+
+  it("reports verbose metadata only when supplied or derivable from WAV data", async () => {
+    const languageServer = mockSuccessfulLanguageServer();
+    const { server, url } = await listenServer((req, res) => {
+      handleOpenAIAudioTranscriptions(req, res).catch((err) => {
+        res.writeHead(500);
+        res.end(err.message);
+      });
+    });
+
+    try {
+      const transcribe = async (bytes: Buffer, name: string, type: string, language?: string) => {
+        const formData = new FormData();
+        formData.append("file", new File([Uint8Array.from(bytes).buffer], name, { type }));
+        formData.append("response_format", "verbose_json");
+        if (language) formData.append("language", language);
+        const response = await fetch(`${url}/v1/audio/transcriptions`, {
+          method: "POST",
+          body: formData,
+        });
+        assert.equal(response.status, 200);
+        return response.json() as Promise<Record<string, unknown>>;
+      };
+
+      const compressed = await transcribe(Buffer.from("not-real-mp3"), "sample.mp3", "audio/mpeg");
+      assert.equal("language" in compressed, false);
+      assert.equal("duration" in compressed, false);
+
+      const wav = await transcribe(makeWav(1), "sample.wav", "audio/wav", "en");
+      assert.equal(wav.language, "en");
+      assert.equal(wav.duration, 1);
+    } finally {
+      languageServer.restore();
+      await closeServer(server);
+    }
+  });
+
+  it("rejects a non-ready Language Server start and never accepts queued audio", async () => {
+    const requests: FakeRequest[] = [];
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          callback?.(new FakeResponse(503));
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    const session = new AntigravityAudioSession({ port: 1, csrf: "test" });
+
+    try {
+      await assert.rejects(session.start(), /status: 503/);
+      assert.equal((session as unknown as { sendChunk: (chunk: Buffer) => boolean }).sendChunk(Buffer.alloc(1)), false);
+      assert.equal(requests[0].destroyed, true);
+    } finally {
+      session.destroy();
+      requestMock.mock.restore();
+    }
+  });
+
+  it("times out a Language Server start and destroy clears pending audio", async () => {
+    const requests: FakeRequest[] = [];
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {});
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      { startTimeoutMs: 20 } as never,
+    );
+    const start = session.start();
+    session.sendChunk(Buffer.alloc(32));
+
+    try {
+      await assert.rejects(
+        Promise.race([
+          start,
+          new Promise((_, reject) => setTimeout(() => reject(new Error("start remained pending")), 100)),
+        ]),
+        /timed out/i,
+      );
+      assert.equal((session as unknown as { queue: Buffer[] }).queue.length, 0);
+      assert.equal(requests[0].destroyed, true);
+    } finally {
+      session.destroy();
+      (session as unknown as { sessionId: string | null }).sessionId = "release-old-loop";
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      requestMock.mock.restore();
+    }
+  });
+
+  it("destroy cancels an in-flight unary audio request", async () => {
+    const requests: FakeRequest[] = [];
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            const response = new FakeResponse();
+            callback?.(response);
+            queueMicrotask(() => {
+              response.emit("data", connectFrame({ ready: { sessionId: "session-unary" } }));
+            });
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    const session = new AntigravityAudioSession({ port: 1, csrf: "test" });
+
+    try {
+      await session.start();
+      assert.equal(session.sendChunk(Buffer.alloc(32)), true);
+      while (requests.length < 2) await new Promise((resolve) => setTimeout(resolve, 1));
+      session.destroy();
+      assert.equal(requests[1].destroyed, true);
+    } finally {
+      session.destroy();
+      requestMock.mock.restore();
+    }
+  });
+});

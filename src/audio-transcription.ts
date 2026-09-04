@@ -5,10 +5,17 @@ import cp from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { readLimitedBody } from "./body-limit.js";
+import { authenticateVirtualKey, sendAuthErrorResponse, type KeyAuthResult } from "./key-auth.js";
 import { logger } from "./logger.js";
+import { logSpend } from "./spend-logger.js";
 import { applyModelAlias } from "./types.js";
+import { hashKey } from "./virtual-keys.js";
 
 const audioLogger = logger.child("audio-transcription");
+const AUDIO_SESSION_START_TIMEOUT_MS = 10_000;
+export const MAX_AUDIO_FRAME_BYTES = 256 * 1024;
+export const MAX_QUEUED_AUDIO_BYTES = 1024 * 1024;
+const MAX_WS_INCOMING_BUFFER_BYTES = 2 * MAX_QUEUED_AUDIO_BYTES;
 
 export interface AntigravityCredentials {
   port: number;
@@ -73,6 +80,7 @@ export interface TranscribeOptions {
   mimeType?: string;
   model?: string;
   prompt?: string;
+  language?: string;
 }
 
 /**
@@ -100,6 +108,7 @@ export async function transcribeAudioWithAntigravity(
       cascadeId: `transcribe-${Date.now()}`,
       preCursorText: prompt,
       continuous: false,
+      language: options.language,
     });
     const payloadBuf = Buffer.from(payload, "utf8");
     const frame = Buffer.alloc(5 + payloadBuf.length);
@@ -261,6 +270,35 @@ export async function transcribeAudioWithAntigravity(
   });
 }
 
+export function getAudioDurationSeconds(audioBuffer: Buffer, mimeType: string): number | undefined {
+  if (!mimeType.toLowerCase().startsWith("audio/wav")) return undefined;
+  if (
+    audioBuffer.length < 12 ||
+    audioBuffer.toString("ascii", 0, 4) !== "RIFF" ||
+    audioBuffer.toString("ascii", 8, 12) !== "WAVE"
+  ) {
+    return undefined;
+  }
+
+  let byteRate: number | undefined;
+  let dataLength: number | undefined;
+  for (let offset = 12; offset + 8 <= audioBuffer.length; ) {
+    const chunkId = audioBuffer.toString("ascii", offset, offset + 4);
+    const chunkLength = audioBuffer.readUInt32LE(offset + 4);
+    const dataOffset = offset + 8;
+    const chunkEnd = dataOffset + chunkLength;
+    if (!Number.isSafeInteger(chunkEnd) || chunkEnd > audioBuffer.length) return undefined;
+    if (chunkId === "fmt " && chunkLength >= 12) {
+      byteRate = audioBuffer.readUInt32LE(dataOffset + 8);
+    } else if (chunkId === "data") {
+      dataLength = chunkLength;
+    }
+    if (byteRate && dataLength !== undefined) return dataLength / byteRate;
+    offset = chunkEnd + (chunkLength % 2);
+  }
+  return undefined;
+}
+
 /**
  * Handles standard OpenAI-compatible POST /v1/audio/transcriptions
  */
@@ -268,8 +306,36 @@ export async function handleOpenAIAudioTranscriptions(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
+  const requestStartedAt = Date.now();
+  const initialAuth = await authenticateVirtualKey(req);
+  if (!initialAuth.authenticated) {
+    sendAuthErrorResponse(res, initialAuth);
+    return;
+  }
+  let apiKeyHash = initialAuth.key?.tokenHash || (initialAuth.rawKey ? hashKey(initialAuth.rawKey) : null);
+  let spendModel = "models/proactive-observer-v10";
+  let spendLogged = false;
+  const logRequest = (status: "success" | "failure"): void => {
+    if (spendLogged) return;
+    spendLogged = true;
+    const endTime = Date.now();
+    logSpend({
+      apiKeyHash,
+      model: applyModelAlias(spendModel),
+      callType: "audio_transcription",
+      status,
+      promptTokens: 0,
+      completionTokens: 0,
+      startTime: new Date(requestStartedAt).toISOString(),
+      endTime: new Date(endTime).toISOString(),
+      durationMs: endTime - requestStartedAt,
+      requesterIp: req.socket?.remoteAddress || null,
+    });
+  };
+
   const contentType = req.headers["content-type"] || "";
   if (!contentType.includes("multipart/form-data")) {
+    logRequest("failure");
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
@@ -289,6 +355,7 @@ export async function handleOpenAIAudioTranscriptions(
     rawBody = await readLimitedBody(req);
   } catch (err: unknown) {
     const error = err as Error;
+    logRequest("failure");
     res.writeHead(413, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
@@ -309,6 +376,7 @@ export async function handleOpenAIAudioTranscriptions(
     formData = await responseWrapper.formData();
   } catch (err: unknown) {
     const error = err as Error;
+    logRequest("failure");
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
@@ -323,6 +391,7 @@ export async function handleOpenAIAudioTranscriptions(
 
   const fileEntry = formData.get("file");
   if (!fileEntry || typeof fileEntry === "string") {
+    logRequest("failure");
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
@@ -337,6 +406,14 @@ export async function handleOpenAIAudioTranscriptions(
   }
 
   const model = String(formData.get("model") || "models/proactive-observer-v10");
+  spendModel = model;
+  const modelAuth = await authenticateVirtualKey(req, model);
+  if (!modelAuth.authenticated) {
+    logRequest("failure");
+    sendAuthErrorResponse(res, modelAuth);
+    return;
+  }
+  apiKeyHash = modelAuth.key?.tokenHash || (modelAuth.rawKey ? hashKey(modelAuth.rawKey) : apiKeyHash);
   const prompt = formData.get("prompt") ? String(formData.get("prompt")) : undefined;
   const language = formData.get("language") ? String(formData.get("language")) : undefined;
   const responseFormat = String(formData.get("response_format") || "json").toLowerCase();
@@ -351,33 +428,38 @@ export async function handleOpenAIAudioTranscriptions(
       mimeType,
       model,
       prompt,
+      language,
     });
 
     if (responseFormat === "text") {
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
       res.end(transcribedText);
+      logRequest("success");
       return;
     }
 
     if (responseFormat === "verbose_json") {
+      const verbose: Record<string, unknown> = {
+        task: "transcribe",
+        text: transcribedText,
+        segments: [],
+      };
+      if (language) verbose.language = language;
+      const duration = getAudioDurationSeconds(audioBuffer, mimeType);
+      if (duration !== undefined) verbose.duration = duration;
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-      res.end(
-        JSON.stringify({
-          task: "transcribe",
-          language: language || "es",
-          duration: audioBuffer.length / 32000,
-          text: transcribedText,
-          segments: [],
-        }),
-      );
+      res.end(JSON.stringify(verbose));
+      logRequest("success");
       return;
     }
 
     // Default: json
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ text: transcribedText }));
+    logRequest("success");
   } catch (err: unknown) {
     const error = err as Error;
+    logRequest("failure");
     audioLogger.error(`Transcription failed: ${error.message}`);
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(
@@ -402,12 +484,20 @@ export class AntigravityAudioSession {
   public preCursorText: string;
   public postCursorText: string;
   public continuous: boolean;
+  public language?: string;
   public sessionId: string | null = null;
   private seq = 0;
   private streamReq: ClientRequest | null = null;
+  private streamBuffer = Buffer.alloc(0);
   private queue: Buffer[] = [];
+  private queuedAudioBytes = 0;
   private isProcessingQueue = false;
   private pendingEnd = false;
+  private state: "idle" | "starting" | "ready" | "failed" | "destroyed" = "idle";
+  private startTimer: ReturnType<typeof setTimeout> | null = null;
+  private startReject: ((error: Error) => void) | null = null;
+  private readonly startTimeoutMs: number;
+  private readonly pendingRequests = new Map<ClientRequest, () => void>();
   private onEvent: (event: any) => void;
   private onError: (err: Error) => void;
 
@@ -419,6 +509,8 @@ export class AntigravityAudioSession {
       preCursorText?: string;
       postCursorText?: string;
       continuous?: boolean;
+      language?: string;
+      startTimeoutMs?: number;
       onEvent?: (event: any) => void;
       onError?: (err: Error) => void;
     } = {},
@@ -430,12 +522,22 @@ export class AntigravityAudioSession {
     this.preCursorText = options.preCursorText || "";
     this.postCursorText = options.postCursorText || "";
     this.continuous = options.continuous ?? false;
+    this.language = options.language;
+    this.startTimeoutMs = Math.max(1, options.startTimeoutMs ?? AUDIO_SESSION_START_TIMEOUT_MS);
     this.onEvent = options.onEvent || (() => {});
     this.onError = options.onError || (() => {});
   }
 
   public start(): Promise<string> {
+    if (this.state !== "idle") {
+      return Promise.reject(new Error("Antigravity audio session has already been started"));
+    }
+    this.state = "starting";
     return new Promise((resolve, reject) => {
+      this.startReject = reject;
+      this.startTimer = setTimeout(() => {
+        this.failStart(new Error(`Antigravity audio session start timed out after ${this.startTimeoutMs}ms`));
+      }, this.startTimeoutMs);
       const payload = JSON.stringify({
         mimeType: "audio/pcm;rate=16000",
         model: this.model,
@@ -443,6 +545,7 @@ export class AntigravityAudioSession {
         preCursorText: this.preCursorText,
         postCursorText: this.postCursorText,
         continuous: this.continuous,
+        language: this.language,
       });
       const payloadBuf = Buffer.from(payload, "utf8");
       const frame = Buffer.alloc(5 + payloadBuf.length);
@@ -466,26 +569,30 @@ export class AntigravityAudioSession {
         (res) => {
           if (res.statusCode !== 200) {
             const err = new Error(`Antigravity stream error status: ${res.statusCode}`);
-            this.onError(err);
-            return reject(err);
+            res.resume();
+            this.failStart(err);
+            return;
           }
-          let buf = Buffer.alloc(0);
           res.on("data", (chunk: Buffer) => {
-            buf = Buffer.concat([buf, chunk]);
-            while (buf.length >= 5) {
-              const flag = buf.readUInt8(0);
-              const len = buf.readUInt32BE(1);
-              if (buf.length < 5 + len) break;
-              const msgBuf = buf.subarray(5, 5 + len);
-              buf = buf.subarray(5 + len);
+            if (this.state === "destroyed" || this.state === "failed") return;
+            this.streamBuffer = Buffer.concat([this.streamBuffer, chunk]);
+            while (this.streamBuffer.length >= 5) {
+              const flag = this.streamBuffer.readUInt8(0);
+              const len = this.streamBuffer.readUInt32BE(1);
+              if (this.streamBuffer.length < 5 + len) break;
+              const msgBuf = this.streamBuffer.subarray(5, 5 + len);
+              this.streamBuffer = this.streamBuffer.subarray(5 + len);
 
               if (flag === 0) {
                 try {
                   const msg = JSON.parse(msgBuf.toString("utf8"));
-                  if (msg.ready?.sessionId) {
-                    this.sessionId = msg.ready.sessionId;
-                    resolve(this.sessionId!);
-                    this.processQueue();
+                  if (msg.ready?.sessionId && this.state === "starting") {
+                    const sessionId = String(msg.ready.sessionId);
+                    this.sessionId = sessionId;
+                    this.state = "ready";
+                    this.clearStartWait();
+                    resolve(sessionId);
+                    void this.processQueue();
                   }
                   this.onEvent(msg);
                 } catch (e) {
@@ -498,14 +605,18 @@ export class AntigravityAudioSession {
           });
 
           res.on("end", () => {
+            if (this.state === "starting") {
+              this.failStart(new Error("Antigravity audio stream ended before becoming ready"));
+              return;
+            }
             this.onEvent({ streamEnded: true });
           });
+          res.on("error", (err) => this.handleStreamError(err));
         },
       );
 
       this.streamReq.on("error", (err) => {
-        this.onError(err);
-        reject(err);
+        this.handleStreamError(err);
       });
 
       this.streamReq.write(frame);
@@ -513,29 +624,35 @@ export class AntigravityAudioSession {
     });
   }
 
-  public sendChunk(pcmBuffer: Buffer): void {
+  public sendChunk(pcmBuffer: Buffer): boolean {
+    if (
+      (this.state !== "starting" && this.state !== "ready") ||
+      pcmBuffer.length > MAX_AUDIO_FRAME_BYTES ||
+      this.queuedAudioBytes + pcmBuffer.length > MAX_QUEUED_AUDIO_BYTES
+    ) {
+      return false;
+    }
     this.queue.push(pcmBuffer);
-    this.processQueue();
+    this.queuedAudioBytes += pcmBuffer.length;
+    if (this.state === "ready") void this.processQueue();
+    return true;
   }
 
   private async processQueue(): Promise<void> {
-    if (this.isProcessingQueue) return;
+    if (this.isProcessingQueue || this.state !== "ready" || !this.sessionId) return;
     this.isProcessingQueue = true;
 
-    while (this.queue.length > 0) {
-      if (!this.sessionId) {
-        await new Promise((r) => setTimeout(r, 20));
-        continue;
-      }
+    while (this.queue.length > 0 && this.state === "ready" && this.sessionId) {
       const chunk = this.queue.shift();
       if (chunk) {
+        this.queuedAudioBytes -= chunk.length;
         await this.sendChunkUnary(chunk);
       }
     }
 
     this.isProcessingQueue = false;
 
-    if (this.pendingEnd) {
+    if (this.pendingEnd && this.state === "ready") {
       this.pendingEnd = false;
       await this.executeEndSession();
     }
@@ -550,6 +667,13 @@ export class AntigravityAudioSession {
     });
 
     return new Promise((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        this.pendingRequests.delete(req);
+        resolve();
+      };
       const req = https.request(
         {
           hostname: "127.0.0.1",
@@ -565,12 +689,14 @@ export class AntigravityAudioSession {
         },
         (res) => {
           res.resume();
-          res.on("end", resolve);
+          res.on("end", finish);
+          res.on("error", finish);
         },
       );
+      this.pendingRequests.set(req, finish);
       req.on("error", (e) => {
         audioLogger.warn(`SendAudioChunk error: ${e.message}`);
-        resolve();
+        finish();
       });
       req.write(data);
       req.end();
@@ -589,6 +715,13 @@ export class AntigravityAudioSession {
     if (!this.sessionId) return Promise.resolve();
     const data = JSON.stringify({ sessionId: this.sessionId });
     return new Promise((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        this.pendingRequests.delete(req);
+        resolve();
+      };
       const req = https.request(
         {
           hostname: "127.0.0.1",
@@ -604,22 +737,79 @@ export class AntigravityAudioSession {
         },
         (res) => {
           res.resume();
-          res.on("end", resolve);
+          res.on("end", finish);
+          res.on("error", finish);
         },
       );
-      req.on("error", () => resolve());
+      this.pendingRequests.set(req, finish);
+      req.on("error", finish);
       req.write(data);
       req.end();
     });
   }
 
   public destroy(): void {
+    if (this.state === "destroyed") return;
+    const rejectStart = this.startReject;
+    this.state = "destroyed";
+    this.clearStartWait();
+    this.queue = [];
+    this.queuedAudioBytes = 0;
+    this.pendingEnd = false;
+    this.sessionId = null;
+    this.streamBuffer = Buffer.alloc(0);
+    for (const [request, finish] of [...this.pendingRequests]) {
+      try {
+        request.destroy();
+      } catch {
+        // ignore destroy error
+      }
+      finish();
+    }
     if (this.streamReq) {
       try {
         this.streamReq.destroy();
       } catch {
         // ignore destroy error
       }
+      this.streamReq = null;
+    }
+    rejectStart?.(new Error("Antigravity audio session was destroyed before becoming ready"));
+  }
+
+  private clearStartWait(): void {
+    if (this.startTimer) clearTimeout(this.startTimer);
+    this.startTimer = null;
+    this.startReject = null;
+  }
+
+  private failStart(error: Error): void {
+    if (this.state !== "starting") return;
+    const reject = this.startReject;
+    this.state = "failed";
+    this.clearStartWait();
+    this.queue = [];
+    this.queuedAudioBytes = 0;
+    this.streamBuffer = Buffer.alloc(0);
+    if (this.streamReq) {
+      try {
+        this.streamReq.destroy();
+      } catch {
+        // ignore destroy error
+      }
+      this.streamReq = null;
+    }
+    reject?.(error);
+  }
+
+  private handleStreamError(error: Error): void {
+    if (this.state === "starting") {
+      this.failStart(error);
+      return;
+    }
+    if (this.state === "ready") {
+      this.onError(error);
+      this.destroy();
     }
   }
 }
@@ -627,93 +817,171 @@ export class AntigravityAudioSession {
 interface AudioWsClient {
   socket: Duplex;
   antigravity: AntigravityAudioSession | null;
+  authorizeModel: (model: string) => Promise<KeyAuthResult>;
+  apiKeyHash: string | null;
+  requesterIp: string | null;
+  spendStartedAt: number | null;
+  spendModel: string;
+  closed: boolean;
   tStartTime: number | null;
   tFirstAntigravity: number | null;
   tStopTime: number | null;
   send: (obj: unknown) => void;
 }
 
-function cleanupClient(client: AudioWsClient): void {
+function destroyClientSession(client: AudioWsClient): void {
   if (client.antigravity) {
     client.antigravity.destroy();
     client.antigravity = null;
   }
 }
 
+function beginClientSpend(client: AudioWsClient, model: string): void {
+  client.spendStartedAt = Date.now();
+  client.spendModel = applyModelAlias(model);
+}
+
+function finishClientSpend(client: AudioWsClient, status: "success" | "failure"): void {
+  if (client.spendStartedAt === null) return;
+  const startedAt = client.spendStartedAt;
+  client.spendStartedAt = null;
+  const endTime = Date.now();
+  logSpend({
+    apiKeyHash: client.apiKeyHash,
+    model: client.spendModel,
+    callType: "audio_stream",
+    status,
+    promptTokens: 0,
+    completionTokens: 0,
+    startTime: new Date(startedAt).toISOString(),
+    endTime: new Date(endTime).toISOString(),
+    durationMs: endTime - startedAt,
+    requesterIp: client.requesterIp,
+  });
+}
+
+function cleanupClient(client: AudioWsClient, status: "success" | "failure" = "failure"): void {
+  finishClientSpend(client, status);
+  destroyClientSession(client);
+}
+
+function closeClient(client: AudioWsClient, code: number, reason: string): void {
+  if (client.closed) return;
+  client.closed = true;
+  cleanupClient(client);
+  const reasonBuffer = Buffer.from(reason, "utf8").subarray(0, 123);
+  const frame = Buffer.alloc(4 + reasonBuffer.length);
+  frame[0] = 0x88;
+  frame[1] = 2 + reasonBuffer.length;
+  frame.writeUInt16BE(code, 2);
+  reasonBuffer.copy(frame, 4);
+  try {
+    client.socket.end(frame);
+  } catch {
+    client.socket.destroy();
+  }
+}
+
+async function authorizeClientModel(client: AudioWsClient, model: string): Promise<boolean> {
+  const auth = await client.authorizeModel(model);
+  if (auth.authenticated) return true;
+  client.send({
+    type: "antigravity_error",
+    event: "error",
+    message: auth.error || "Authentication failed",
+  });
+  closeClient(client, 1008, "Model is not allowed");
+  return false;
+}
+
+function createClientSession(
+  client: AudioWsClient,
+  model: string,
+  options: { preCursorText?: string; postCursorText?: string; continuous?: boolean; language?: string },
+): AntigravityAudioSession {
+  const creds = getAntigravityCredentials();
+  client.tStartTime = Date.now();
+  client.tFirstAntigravity = null;
+  client.tStopTime = null;
+  beginClientSpend(client, model);
+  const session = new AntigravityAudioSession(creds, {
+    model,
+    ...options,
+    onEvent: (event) => {
+      if (client.antigravity !== session || client.closed) return;
+      const now = Date.now();
+      if (event.ready) {
+        client.send({
+          type: "antigravity_ready",
+          event: "ready",
+          sessionId: event.ready.sessionId,
+        });
+      } else if (event.transcription) {
+        if (!client.tFirstAntigravity) client.tFirstAntigravity = now;
+        client.send({
+          type: "antigravity_transcript",
+          event: "transcript",
+          text: event.transcription.text || "",
+          isFinal: !!event.transcription.isFinal,
+          is_final: !!event.transcription.isFinal,
+          ttftMs: client.tStartTime ? now - client.tStartTime : 0,
+          latencyFromStopMs: client.tStopTime ? now - client.tStopTime : null,
+          timestamp: now,
+        });
+      } else if (event.complete) {
+        client.send({
+          type: "antigravity_complete",
+          event: "complete",
+          totalDurationMs: client.tStartTime ? now - client.tStartTime : 0,
+          timestamp: now,
+        });
+        finishClientSpend(client, "success");
+      }
+    },
+    onError: (err) => {
+      if (client.antigravity !== session || client.closed) return;
+      client.send({ type: "antigravity_error", event: "error", message: err.message });
+      finishClientSpend(client, "failure");
+    },
+  });
+  return session;
+}
+
 async function handleClientCommand(client: AudioWsClient, cmd: any): Promise<void> {
   if (cmd.type === "start") {
-    cleanupClient(client);
-
-    const creds = getAntigravityCredentials();
-    client.tStartTime = Date.now();
-    client.tFirstAntigravity = null;
-    client.tStopTime = null;
+    const model = String(cmd.antigravityModel || cmd.model || "models/proactive-observer-v10");
+    if (!(await authorizeClientModel(client, model))) return;
+    if (client.antigravity) {
+      finishClientSpend(client, "success");
+      destroyClientSession(client);
+    }
 
     client.send({
       type: "session_starting",
       event: "session_starting",
-      timestamp: client.tStartTime,
+      timestamp: Date.now(),
     });
 
-    // Initialize Antigravity Session
-    client.antigravity = new AntigravityAudioSession(creds, {
-      model: cmd.antigravityModel || cmd.model || "models/proactive-observer-v10",
+    const session = createClientSession(client, model, {
       preCursorText: cmd.preCursorText || "",
       postCursorText: cmd.postCursorText || "",
       continuous: cmd.continuous ?? false,
-      onEvent: (event) => {
-        const now = Date.now();
-        if (event.ready) {
-          client.send({
-            type: "antigravity_ready",
-            event: "ready",
-            sessionId: event.ready.sessionId,
-          });
-        } else if (event.transcription) {
-          if (!client.tFirstAntigravity) {
-            client.tFirstAntigravity = now;
-          }
-          const ttft = client.tStartTime ? now - client.tStartTime : 0;
-          const latencyFromStop = client.tStopTime ? now - client.tStopTime : null;
-
-          client.send({
-            type: "antigravity_transcript",
-            event: "transcript",
-            text: event.transcription.text || "",
-            isFinal: !!event.transcription.isFinal,
-            is_final: !!event.transcription.isFinal,
-            ttftMs: ttft,
-            latencyFromStopMs: latencyFromStop,
-            timestamp: now,
-          });
-        } else if (event.complete) {
-          client.send({
-            type: "antigravity_complete",
-            event: "complete",
-            totalDurationMs: client.tStartTime ? now - client.tStartTime : 0,
-            timestamp: now,
-          });
-        }
-      },
-      onError: (err) => {
-        client.send({
-          type: "antigravity_error",
-          event: "error",
-          message: err.message,
-        });
-      },
+      language: typeof cmd.language === "string" ? cmd.language : undefined,
     });
+    client.antigravity = session;
 
     try {
-      await client.antigravity.start();
+      await session.start();
     } catch (e: any) {
-      client.send({
-        type: "antigravity_error",
-        event: "error",
-        message: e.message || String(e),
-      });
+      if (client.antigravity === session) {
+        client.send({ type: "antigravity_error", event: "error", message: e.message || String(e) });
+        finishClientSpend(client, "failure");
+        destroyClientSession(client);
+      }
+      return;
     }
 
+    if (client.closed || client.antigravity !== session) return;
     client.send({
       type: "ready_to_receive_audio",
       event: "ready_to_receive_audio",
@@ -728,53 +996,38 @@ async function handleClientCommand(client: AudioWsClient, cmd: any): Promise<voi
 
     if (client.antigravity) {
       await client.antigravity.endSession();
+      finishClientSpend(client, "success");
     }
   } else if (cmd.type === "test_sample") {
     await runTestSample(client, cmd.sample || "es");
   }
 }
 
-function handleAudioChunk(client: AudioWsClient, pcmBuffer: Buffer): void {
+async function handleAudioChunk(client: AudioWsClient, pcmBuffer: Buffer): Promise<void> {
+  if (pcmBuffer.length > MAX_AUDIO_FRAME_BYTES) {
+    closeClient(client, 1009, "Audio frame is too large");
+    return;
+  }
   // If Antigravity session was not explicitly started via JSON command, start it automatically
   if (!client.antigravity) {
-    const creds = getAntigravityCredentials();
-    client.tStartTime = Date.now();
-    client.antigravity = new AntigravityAudioSession(creds, {
-      model: "models/proactive-observer-v10",
+    const model = "models/proactive-observer-v10";
+    if (!(await authorizeClientModel(client, model))) return;
+    const session = createClientSession(client, model, {
       continuous: true,
-      onEvent: (event) => {
-        if (event.ready) {
-          client.send({
-            type: "antigravity_ready",
-            event: "ready",
-            sessionId: event.ready.sessionId,
-          });
-        } else if (event.transcription) {
-          client.send({
-            type: "antigravity_transcript",
-            event: "transcript",
-            text: event.transcription.text || "",
-            isFinal: !!event.transcription.isFinal,
-            is_final: !!event.transcription.isFinal,
-          });
-        } else if (event.complete) {
-          client.send({ type: "antigravity_complete", event: "complete" });
-        }
-      },
-      onError: (err) => {
-        client.send({
-          type: "antigravity_error",
-          event: "error",
-          message: err.message,
-        });
-      },
     });
-    client.antigravity.start().catch((err) => {
+    client.antigravity = session;
+    void session.start().catch((err) => {
+      if (client.antigravity !== session) return;
       audioLogger.error(`Auto-start Antigravity session failed: ${err}`);
+      client.send({ type: "antigravity_error", event: "error", message: err.message || String(err) });
+      finishClientSpend(client, "failure");
+      destroyClientSession(client);
     });
   }
 
-  client.antigravity.sendChunk(pcmBuffer);
+  if (!client.antigravity.sendChunk(pcmBuffer)) {
+    closeClient(client, 1009, "Queued audio limit exceeded");
+  }
 }
 
 async function runTestSample(client: AudioWsClient, _lang: string): Promise<void> {
@@ -810,7 +1063,7 @@ async function runTestSample(client: AudioWsClient, _lang: string): Promise<void
   const chunkSize = 3200; // 100ms
   for (let i = 0; i < rawPcm.length; i += chunkSize) {
     const chunk = rawPcm.subarray(i, Math.min(i + chunkSize, rawPcm.length));
-    handleAudioChunk(client, chunk);
+    await handleAudioChunk(client, chunk);
     await new Promise((r) => setTimeout(r, 40));
   }
 
@@ -820,9 +1073,28 @@ async function runTestSample(client: AudioWsClient, _lang: string): Promise<void
 /**
  * Handles WebSocket streaming on /ws, /ws/audio, /v1/audio/transcriptions/stream, or /v1/listen
  */
-export function handleAudioWebSocket(req: IncomingMessage, socket: Duplex): void {
+export async function handleAudioWebSocket(req: IncomingMessage, socket: Duplex): Promise<void> {
+  const auth = await authenticateVirtualKey(req);
+  if (!auth.authenticated) {
+    const statusCode = auth.statusCode || 401;
+    const body = JSON.stringify({
+      error: {
+        message: auth.error || "Authentication failed",
+        type: statusCode === 403 ? "permission_error" : "authentication_error",
+      },
+    });
+    socket.end(
+      `HTTP/1.1 ${statusCode} ${statusCode === 403 ? "Forbidden" : "Unauthorized"}\r\n` +
+        "Content-Type: application/json\r\n" +
+        `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+        "Connection: close\r\n\r\n" +
+        body,
+    );
+    return;
+  }
+
   const key = req.headers["sec-websocket-key"];
-  if (!key) {
+  if (typeof key !== "string") {
     socket.destroy();
     return;
   }
@@ -844,6 +1116,12 @@ export function handleAudioWebSocket(req: IncomingMessage, socket: Duplex): void
   const client: AudioWsClient = {
     socket,
     antigravity: null,
+    authorizeModel: (model) => authenticateVirtualKey(req, model),
+    apiKeyHash: auth.key?.tokenHash || (auth.rawKey ? hashKey(auth.rawKey) : null),
+    requesterIp: req.socket?.remoteAddress || null,
+    spendStartedAt: null,
+    spendModel: "models/proactive-observer-v10",
+    closed: false,
     tStartTime: null,
     tFirstAntigravity: null,
     tStopTime: null,
@@ -883,10 +1161,13 @@ export function handleAudioWebSocket(req: IncomingMessage, socket: Duplex): void
   });
 
   let incomingBuffer = Buffer.alloc(0);
+  let processing = false;
 
-  socket.on("data", async (chunk: Buffer) => {
-    incomingBuffer = Buffer.concat([incomingBuffer, chunk]);
-    while (incomingBuffer.length >= 2) {
+  const processFrames = async (): Promise<void> => {
+    if (processing || client.closed) return;
+    processing = true;
+    try {
+      while (incomingBuffer.length >= 2) {
       const firstByte = incomingBuffer[0];
       const secondByte = incomingBuffer[1];
       const opcode = firstByte & 0x0f;
@@ -900,8 +1181,20 @@ export function handleAudioWebSocket(req: IncomingMessage, socket: Duplex): void
         offset = 4;
       } else if (payloadLength === 127) {
         if (incomingBuffer.length < 10) break;
-        payloadLength = Number(incomingBuffer.readBigUInt64BE(2));
+        const largePayloadLength = incomingBuffer.readBigUInt64BE(2);
+        if (largePayloadLength > BigInt(MAX_AUDIO_FRAME_BYTES)) {
+          closeClient(client, 1009, "WebSocket frame is too large");
+          incomingBuffer = Buffer.alloc(0);
+          return;
+        }
+        payloadLength = Number(largePayloadLength);
         offset = 10;
+      }
+
+      if (payloadLength > MAX_AUDIO_FRAME_BYTES) {
+        closeClient(client, 1009, "WebSocket frame is too large");
+        incomingBuffer = Buffer.alloc(0);
+        return;
       }
 
       const maskLength = isMasked ? 4 : 0;
@@ -928,6 +1221,7 @@ export function handleAudioWebSocket(req: IncomingMessage, socket: Duplex): void
       // Handle frame
       if (opcode === 8) {
         // Close
+        client.closed = true;
         cleanupClient(client);
         socket.end();
         break;
@@ -947,16 +1241,34 @@ export function handleAudioWebSocket(req: IncomingMessage, socket: Duplex): void
         }
       } else if (opcode === 2) {
         // Binary frame (Audio PCM 16kHz Chunk)
-        handleAudioChunk(client, payload);
+        await handleAudioChunk(client, payload);
       }
+      }
+    } finally {
+      processing = false;
     }
+  };
+
+  socket.on("data", (chunk: Buffer) => {
+    if (client.closed) return;
+    if (incomingBuffer.length + chunk.length > MAX_WS_INCOMING_BUFFER_BYTES) {
+      closeClient(client, 1009, "WebSocket input buffer is too large");
+      incomingBuffer = Buffer.alloc(0);
+      return;
+    }
+    incomingBuffer = Buffer.concat([incomingBuffer, chunk]);
+    void processFrames();
   });
 
   socket.on("close", () => {
+    client.closed = true;
     cleanupClient(client);
+    incomingBuffer = Buffer.alloc(0);
   });
 
   socket.on("error", () => {
+    client.closed = true;
     cleanupClient(client);
+    incomingBuffer = Buffer.alloc(0);
   });
 }

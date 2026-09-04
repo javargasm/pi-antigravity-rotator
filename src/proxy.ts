@@ -2645,7 +2645,7 @@ export function startProxy(
       pathname === "/v1/listen" ||
       pathname.startsWith("/ws/")
     ) {
-      handleAudioWebSocket(req, socket);
+      handleAudioWebSocket(req, socket).catch(() => socket.destroy());
       return;
     }
     socket.destroy();
