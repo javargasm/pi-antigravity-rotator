@@ -156,6 +156,7 @@ export interface CompatCompletion {
   toolCalls?: OpenAIToolCall[];
   rawResponse?: unknown;
   streamError?: string;
+  finishReason?: string;
 }
 
 export type AntigravityPart =
@@ -1229,6 +1230,20 @@ export function openAIToAntigravityBody(
       compatLogger.debug(
         `Adjusted Gemini maxOutputTokens → ${maxOutputTokens}`,
       );
+    } else if (tb === -1 && maxOutputTokens !== undefined) {
+      // Adaptive thinking models (e.g. gemini-3.8-flash-*, gemini-3.7-flash-tiered)
+      // allocate tokens to thinking first. If a client specifies a small max_tokens
+      // (e.g. 500), thinking tokens consume the entire budget and truncate visible output.
+      // Ensure sufficient headroom above client's requested output tokens.
+      const adaptiveHeadroom = 8192;
+      const minAdaptiveFloor = 8192;
+      const targetTokens = Math.max(maxOutputTokens + adaptiveHeadroom, minAdaptiveFloor);
+      if (maxOutputTokens < targetTokens) {
+        maxOutputTokens = Math.min(targetTokens, modelSpec.maxOutputTokens);
+        compatLogger.debug(
+          `Adjusted adaptive Gemini maxOutputTokens → ${maxOutputTokens}`,
+        );
+      }
     }
   } else if (input.reasoning_effort) {
     const budgets: Record<string, number> = {

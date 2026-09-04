@@ -457,13 +457,14 @@ describe("compat adapters", () => {
 	it("parses Antigravity SSE into a compat completion", () => {
 		const parsed = parseAntigravitySse([
 			'data: {"response":{"responseId":"abc","candidates":[{"content":{"parts":[{"text":"hel"}]}}]}}',
-			'data: {"response":{"candidates":[{"content":{"parts":[{"text":"lo"}]}}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2}}}',
+			'data: {"response":{"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"MAX_TOKENS"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2}}}',
 			"",
 		].join("\n"));
 		assert.equal(parsed.text, "hello");
 		assert.equal(parsed.inputTokens, 3);
 		assert.equal(parsed.outputTokens, 2);
 		assert.equal(parsed.responseId, "abc");
+		assert.equal(parsed.finishReason, "MAX_TOKENS");
 	});
 
 	it("handles empty SSE payloads without crashing", () => {

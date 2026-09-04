@@ -94,6 +94,31 @@ describe("gemini-3.8-flash native reasoning levels", () => {
 			});
 		}
 	});
+
+	it("protects adaptive thinking models against low max_tokens exhaustion", () => {
+		for (const variant of ["low", "medium", "high"]) {
+			const id = `gemini-3.8-flash-${variant}`;
+			const body = openAIToAntigravityBody({
+				model: id,
+				messages: [{ role: "user", content: "ping" }],
+				max_tokens: 500,
+			}) as AntigravityBodyWithRequest;
+			// With max_tokens: 500, maxOutputTokens must be elevated with headroom (500 + 8192 = 8692)
+			// so thinking tokens do not exhaust the response.
+			assert.equal(body.request.generationConfig?.maxOutputTokens, 8692);
+			assert.deepEqual(body.request.generationConfig?.thinkingConfig, {
+				includeThoughts: true,
+			});
+		}
+	});
+
+	it("leaves maxOutputTokens unset when max_tokens is not provided", () => {
+		const body = openAIToAntigravityBody({
+			model: "gemini-3.8-flash-high",
+			messages: [{ role: "user", content: "ping" }],
+		}) as AntigravityBodyWithRequest;
+		assert.equal(body.request.generationConfig?.maxOutputTokens, undefined);
+	});
 });
 
 describe("gemini-3.7-flash-tiered thinkingLevel mapping", () => {

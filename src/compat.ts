@@ -319,6 +319,7 @@ export function parseAntigravitySse(raw: string): CompatCompletion {
   let inputTokens = 0;
   let outputTokens = 0;
   let responseId: string | undefined;
+  let upstreamFinishReason: string | undefined;
   const toolCallsMap = new Map<string, OpenAIToolCall>();
   let toolCallIndex = 0;
 
@@ -335,6 +336,13 @@ export function parseAntigravitySse(raw: string): CompatCompletion {
         ? response.candidates
         : [];
       for (const candidate of candidates) {
+        if (
+          isRecord(candidate) &&
+          typeof candidate.finishReason === "string" &&
+          candidate.finishReason
+        ) {
+          upstreamFinishReason = candidate.finishReason;
+        }
         if (
           !isRecord(candidate) ||
           !isRecord(candidate.content) ||
@@ -433,6 +441,7 @@ export function parseAntigravitySse(raw: string): CompatCompletion {
     outputTokens,
     responseId,
     toolCalls,
+    finishReason: upstreamFinishReason,
   };
 }
 
@@ -642,6 +651,7 @@ async function streamCompatSse(
   let tailBuffer = "";
   let reqClosed = false;
   let streamError: string | undefined;
+  let upstreamFinishReason: string | undefined;
   interface OpenAiStreamingToolState {
     id: string;
     name: string;
@@ -959,6 +969,13 @@ async function streamCompatSse(
               : [];
             for (const candidate of candidates) {
             if (
+              isRecord(candidate) &&
+              typeof candidate.finishReason === "string" &&
+              candidate.finishReason
+            ) {
+              upstreamFinishReason = candidate.finishReason;
+            }
+            if (
               !isRecord(candidate) ||
               !isRecord(candidate.content) ||
               !Array.isArray(candidate.content.parts)
@@ -1108,7 +1125,14 @@ async function streamCompatSse(
     if (streamError) {
       writeCompatStreamError(res, format, streamError);
     } else if (format === "openai") {
-      const openaiFinishReason = toolCallIndex > 0 ? "tool_calls" : "stop";
+      const openaiFinishReason =
+        toolCallIndex > 0
+          ? "tool_calls"
+          : upstreamFinishReason === "MAX_TOKENS"
+            ? "length"
+            : upstreamFinishReason === "SAFETY"
+              ? "content_filter"
+              : "stop";
       res.write(
         `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: openaiFinishReason }] })}\n\n`,
       );
@@ -1132,7 +1156,12 @@ async function streamCompatSse(
           );
         }
       }
-      const anthropicStopReason = anthropicHasToolUse ? "tool_use" : "end_turn";
+      const anthropicStopReason =
+        anthropicHasToolUse
+          ? "tool_use"
+          : upstreamFinishReason === "MAX_TOKENS"
+            ? "max_tokens"
+            : "end_turn";
       // message_delta carries output_tokens; also include input_tokens so Hermes shows full context count
       res.write(
         `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: anthropicStopReason, stop_sequence: null }, usage: { input_tokens: inputTokens, output_tokens: outputTokens } })}\n\n`,
@@ -1166,7 +1195,13 @@ async function streamCompatSse(
                 content: text || null,
                 ...(collectedToolCalls ? { tool_calls: collectedToolCalls } : {}),
               },
-              finish_reason: collectedToolCalls ? "tool_calls" : "stop",
+              finish_reason: collectedToolCalls
+                ? "tool_calls"
+                : upstreamFinishReason === "MAX_TOKENS"
+                  ? "length"
+                  : upstreamFinishReason === "SAFETY"
+                    ? "content_filter"
+                    : "stop",
             },
           ],
           usage: {
@@ -1191,7 +1226,11 @@ async function streamCompatSse(
                 }))
               : []),
           ],
-          stop_reason: anthropicHasToolUse ? "tool_use" : "end_turn",
+          stop_reason: anthropicHasToolUse
+            ? "tool_use"
+            : upstreamFinishReason === "MAX_TOKENS"
+              ? "max_tokens"
+              : "end_turn",
           usage: { input_tokens: inputTokens, output_tokens: outputTokens },
         };
 
@@ -1204,6 +1243,7 @@ async function streamCompatSse(
     toolCalls: collectedToolCalls,
     rawResponse,
     streamError,
+    finishReason: upstreamFinishReason,
   };
 }
 
@@ -2486,7 +2526,13 @@ export async function handleOpenAIChatCompletions(
             ? { reasoning_content: result.completion.thinkingText }
             : {}),
         },
-        finish_reason: hasToolCalls ? "tool_calls" : "stop",
+        finish_reason: hasToolCalls
+          ? "tool_calls"
+          : result.completion.finishReason === "MAX_TOKENS"
+            ? "length"
+            : result.completion.finishReason === "SAFETY"
+              ? "content_filter"
+              : "stop",
       },
     ],
     usage: {
