@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-09-04
+
 ### Added
 
 - **Persistent dynamic model ownership**: Dynamic Antigravity model ownership is persisted by complete account identity and credential-generation fingerprint, so cold restarts cannot route a model through an account or project that never advertised it. ([#30](https://github.com/tuxevil/tuxevil-rotator/pull/30) by [@javargasm](https://github.com/javargasm))
