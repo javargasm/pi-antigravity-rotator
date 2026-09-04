@@ -157,7 +157,6 @@ export interface Config {
 export interface EffortRoutingRule {
   /** Effort key used when the request carries no recognizable effort. Defaults to "medium". */
   defaultEffort?: string;
-  /** Effort key (lowercase) -> concrete Antigravity model ID. */
   targets: Record<string, string>;
 }
 
@@ -197,10 +196,6 @@ export function setModelAliasesOverride(
     aliases && Object.keys(aliases).length > 0 ? aliases : null;
 }
 
-/**
- * Configure effort-based model routing rules. Pass `null` or undefined or an
- * empty object to disable effort routing.
- */
 export function setEffortRoutingOverride(
   rules: Record<string, EffortRoutingRule> | null | undefined,
 ): void {

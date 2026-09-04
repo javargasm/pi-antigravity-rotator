@@ -630,7 +630,6 @@ describe("effort-based routing endpoint e2e", () => {
 		const port = (proxy.address() as AddressInfo).port;
 
 		try {
-			// 1. high effort
 			const highRes = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -649,7 +648,6 @@ describe("effort-based routing endpoint e2e", () => {
 			const highUpstreamBody = JSON.parse(upstreamCaptures[0].body);
 			assert.equal(highUpstreamBody.model, "gemini-dynamic-preview");
 
-			// 2. low effort
 			const lowRes = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -666,7 +664,6 @@ describe("effort-based routing endpoint e2e", () => {
 			const lowUpstreamBody = JSON.parse(upstreamCaptures[1].body);
 			assert.equal(lowUpstreamBody.model, "gemini-3.8-flash-low");
 
-			// 3. no effort -> default target (medium)
 			const defaultRes = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -682,7 +679,6 @@ describe("effort-based routing endpoint e2e", () => {
 			const defaultUpstreamBody = JSON.parse(upstreamCaptures[2].body);
 			assert.equal(defaultUpstreamBody.model, "gemini-3.8-flash-medium");
 
-			// Verify spend/request log accounting attributed to concrete models
 			assert.deepEqual(
 				tracking.requestLogs.map((e) => e.model),
 				["Gemini-Dynamic-Preview", "gemini-3.8-flash-low", "gemini-3.8-flash-medium"],
@@ -957,7 +953,6 @@ describe("effort-based routing endpoint e2e", () => {
 
 			assert.equal(upstreamCaptures.length, 1);
 			const upstreamBody = JSON.parse(upstreamCaptures[0].body);
-			// Native route preserves the raw model without effort routing
 			assert.equal(upstreamBody.model, "gemini-3.8-flash");
 		} finally {
 			proxy.closeAllConnections?.();
@@ -1015,7 +1010,6 @@ describe("effort-based routing endpoint e2e", () => {
 
 			assert.equal(upstreamCaptures.length, 1);
 			const upstreamBody = JSON.parse(upstreamCaptures[0].body);
-			// Native route preserves the raw model without effort routing
 			assert.equal(upstreamBody.model, "gemini-3.8-flash");
 		} finally {
 			setEffortRoutingOverride(null);

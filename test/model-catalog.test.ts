@@ -317,7 +317,6 @@ describe("effort routing catalog swap", () => {
 			},
 		});
 
-		// /v1/models
 		const openAiPayload = captureJson(serveOpenAIModels) as {
 			data: Array<{
 				id: string;
@@ -327,7 +326,6 @@ describe("effort routing catalog swap", () => {
 			}>;
 		};
 
-		// Alias is present
 		const aliasEntries = openAiPayload.data.filter((m) => m.id === "gemini-3.8-flash");
 		assert.equal(aliasEntries.length, 1);
 		assert.equal(aliasEntries[0].owned_by, "tuxevil-rotator");
@@ -335,12 +333,10 @@ describe("effort routing catalog swap", () => {
 		assert.equal(aliasEntries[0].meta.family, "gemini-3.8-flash");
 		assert.equal(aliasEntries[0].meta.quota_pool, "gemini");
 
-		// Configured targets are hidden
 		for (const target of ["gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high"]) {
 			assert.ok(!openAiPayload.data.some((m) => m.id === target), `Target ${target} should be hidden`);
 		}
 
-		// /v1beta/models (serveGeminiModels)
 		const geminiPayload = captureJson(serveGeminiModels) as {
 			models: Array<{ name: string; baseModelId: string; inputTokenLimit: number }>;
 		};
@@ -437,12 +433,9 @@ describe("effort routing catalog swap", () => {
 			data: Array<{ id: string }>;
 		};
 
-		// Alias present
 		assert.ok(openAiPayload.data.some((m) => m.id === "gemini-3.8-flash"));
-		// Configured targets hidden
 		assert.ok(!openAiPayload.data.some((m) => m.id === "gemini-3.8-flash-low"));
 		assert.ok(!openAiPayload.data.some((m) => m.id === "gemini-3.8-flash-high"));
-		// Non-target variant remains visible!
 		assert.ok(openAiPayload.data.some((m) => m.id === "gemini-3.8-flash-medium"));
 	});
 
@@ -461,9 +454,7 @@ describe("effort routing catalog swap", () => {
 			data: Array<{ id: string }>;
 		};
 
-		// Alias NOT added
 		assert.ok(!openAiPayload.data.some((m) => m.id === "my-custom-alias"));
-		// Targets NOT hidden
 		assert.ok(openAiPayload.data.some((m) => m.id === "gemini-3.8-flash-low"));
 
 		dynamicCatalog.updateFromEndpointResponse({

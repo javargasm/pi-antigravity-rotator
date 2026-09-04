@@ -307,7 +307,6 @@ describe("resolveDisplayModelKey with effort routing", () => {
 			},
 		});
 
-		// When effectiveModel differs and alias is configured:
 		assert.equal(
 			resolveDisplayModelKey("gemini-3.8-flash", "gemini-3.8-flash-high"),
 			"gemini-3.8-flash-high",
@@ -321,10 +320,8 @@ describe("resolveDisplayModelKey with effort routing", () => {
 			"gemini-3.8-flash-medium",
 		);
 
-		// Single arg still falls through:
 		assert.equal(resolveDisplayModelKey("gemini-3.8-flash"), "gemini-3-flash");
 
-		// Non-alias model with effectiveModel resolves from requestModel:
 		assert.equal(
 			resolveDisplayModelKey("other-model", "gemini-3.8-flash-high"),
 			"other-model",
@@ -591,8 +588,7 @@ describe("effortRouting config validation", () => {
 	});
 
 	it("rejects statically known non-Google model collisions on alias name", () => {
-		// Codex model
-		const r1 = validateConfig({
+		const codexResult = validateConfig({
 			...baseValidConfig,
 			effortRouting: {
 				"gpt-5.6-sol": {
@@ -600,13 +596,12 @@ describe("effortRouting config validation", () => {
 				},
 			},
 		});
-		assert.equal(r1.ok, false);
+		assert.equal(codexResult.ok, false);
 		assert.ok(
-			r1.errors.includes('config.effortRouting.gpt-5.6-sol collides with non-Antigravity model "gpt-5.6-sol"'),
+			codexResult.errors.includes('config.effortRouting.gpt-5.6-sol collides with non-Antigravity model "gpt-5.6-sol"'),
 		);
 
-		// OpenCode Zen model
-		const r2 = validateConfig({
+		const openCodeZenResult = validateConfig({
 			...baseValidConfig,
 			effortRouting: {
 				"deepseek-v4-flash-free": {
@@ -614,13 +609,12 @@ describe("effortRouting config validation", () => {
 				},
 			},
 		});
-		assert.equal(r2.ok, false);
+		assert.equal(openCodeZenResult.ok, false);
 		assert.ok(
-			r2.errors.includes('config.effortRouting.deepseek-v4-flash-free collides with non-Antigravity model "deepseek-v4-flash-free"'),
+			openCodeZenResult.errors.includes('config.effortRouting.deepseek-v4-flash-free collides with non-Antigravity model "deepseek-v4-flash-free"'),
 		);
 
-		// Ollama model
-		const r3 = validateConfig({
+		const ollamaResult = validateConfig({
 			...baseValidConfig,
 			effortRouting: {
 				"gemma4:31b": {
@@ -628,9 +622,9 @@ describe("effortRouting config validation", () => {
 				},
 			},
 		});
-		assert.equal(r3.ok, false);
+		assert.equal(ollamaResult.ok, false);
 		assert.ok(
-			r3.errors.includes('config.effortRouting.gemma4:31b collides with non-Antigravity model "gemma4:31b"'),
+			ollamaResult.errors.includes('config.effortRouting.gemma4:31b collides with non-Antigravity model "gemma4:31b"'),
 		);
 	});
 
@@ -709,7 +703,6 @@ describe("applyConfigDefaults plumbing", () => {
 			assert.deepEqual(retrieved.modelAliases, config.modelAliases);
 			assert.deepEqual(retrieved.effortRouting, config.effortRouting);
 
-			// Persistence round-trip: save -> load via db-store
 			await setCachedConfig(config as any);
 			const loaded = getCachedConfig();
 			assert.ok(loaded);
