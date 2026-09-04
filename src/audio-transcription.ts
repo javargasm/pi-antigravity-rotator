@@ -617,7 +617,9 @@ export class AntigravityAudioSession {
     if (this.streamReq) {
       try {
         this.streamReq.destroy();
-      } catch {}
+      } catch {
+        // ignore destroy error
+      }
     }
   }
 }
