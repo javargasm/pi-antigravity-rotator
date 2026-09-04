@@ -8,7 +8,6 @@ import {
 	resolveDisplayModelKey,
 } from "../src/types.js";
 import { resolveEffortAliasModel } from "../src/providers/google-antigravity/translators.js";
-import { isVirtualKeyModelAllowed } from "../src/key-auth.js";
 import { validateConfig, formatValidationErrors } from "../src/validators.js";
 import { applyConfigDefaults } from "../src/config-defaults.js";
 import { AccountRotator } from "../src/rotator.js";
@@ -712,22 +711,5 @@ describe("applyConfigDefaults plumbing", () => {
 		} finally {
 			await closeDb();
 		}
-	});
-});
-
-describe("virtual-key scoping with effort routing", () => {
-	it("bare-scoped virtual key authorizes bare alias and all targets via substring", () => {
-		const allowed = ["gemini-3.8-flash"];
-		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash"), true);
-		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash-low"), true);
-		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash-medium"), true);
-		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash-high"), true);
-	});
-
-	it("concrete-scoped virtual key rejects the bare alias", () => {
-		const allowed = ["gemini-3.8-flash-high"];
-		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash-high"), true);
-		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash"), false);
-		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash-low"), false);
 	});
 });

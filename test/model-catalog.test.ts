@@ -5,6 +5,7 @@ import { serveModelsApi } from "../src/dashboard.js";
 import { getModelSpec, setModelSpecsOverride } from "../src/compat/model-specs.js";
 import { dynamicCatalog } from "../src/providers/google-antigravity/dynamic-catalog.js";
 import { setEffortRoutingOverride } from "../src/types.js";
+import { logger } from "../src/logger.js";
 
 function captureJson(render: (res: never) => void): unknown {
 	let raw = "";
@@ -450,12 +451,30 @@ describe("effort routing catalog swap", () => {
 			},
 		});
 
-		const openAiPayload = captureJson(serveOpenAIModels) as {
-			data: Array<{ id: string }>;
+		const originalLog = logger.log;
+		const warnings: string[] = [];
+		logger.log = (level, scope, message) => {
+			if (level === "warn" && scope === "compat") warnings.push(String(message));
 		};
+		let openAiPayload: { data: Array<{ id: string }> };
+		try {
+			openAiPayload = captureJson(serveOpenAIModels) as {
+				data: Array<{ id: string }>;
+			};
+		} finally {
+			logger.log = originalLog;
+		}
 
 		assert.ok(!openAiPayload.data.some((m) => m.id === "my-custom-alias"));
 		assert.ok(openAiPayload.data.some((m) => m.id === "gemini-3.8-flash-low"));
+		assert.ok(
+			warnings.some(
+				(message) =>
+					message.includes("my-custom-alias") &&
+					message.includes("nonexistent-model-id") &&
+					message.includes("absent from catalog"),
+			),
+		);
 
 		dynamicCatalog.updateFromEndpointResponse({
 			models: {

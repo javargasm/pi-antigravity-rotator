@@ -15,21 +15,6 @@ export interface KeyAuthResult {
   statusCode?: number;
 }
 
-export function isVirtualKeyModelAllowed(
-  allowedModels: readonly string[] | undefined,
-  targetModel: string | undefined,
-): boolean {
-  if (!targetModel || !allowedModels?.length || allowedModels.includes("*")) {
-    return true;
-  }
-  const normalizedTarget = targetModel.toLowerCase();
-  return allowedModels.some(
-    (model) =>
-      model.toLowerCase() === normalizedTarget ||
-      normalizedTarget.includes(model.toLowerCase()),
-  );
-}
-
 /**
  * Extracts virtual key raw string from headers or query parameters.
  */
@@ -125,14 +110,28 @@ export async function authenticateVirtualKey(
   }
 
   // Model access restrictions
-  if (!isVirtualKeyModelAllowed(key.models, targetModel)) {
-    return {
-      authenticated: false,
-      key,
-      rawKey,
-      error: `Model '${targetModel}' is not allowed for this Virtual Key`,
-      statusCode: 403,
-    };
+  if (
+    targetModel &&
+    key.models &&
+    key.models.length > 0 &&
+    !key.models.includes("*")
+  ) {
+    const normalizedTarget = targetModel.toLowerCase();
+    const isAllowed = key.models.some(
+      (m) =>
+        m.toLowerCase() === normalizedTarget ||
+        normalizedTarget.includes(m.toLowerCase()),
+    );
+
+    if (!isAllowed) {
+      return {
+        authenticated: false,
+        key,
+        rawKey,
+        error: `Model '${targetModel}' is not allowed for this Virtual Key`,
+        statusCode: 403,
+      };
+    }
   }
 
   touchVirtualKeyLastActive(key.tokenHash);

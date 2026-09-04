@@ -2204,16 +2204,16 @@ export function getEffectiveAntigravityModels(): CompatModelEntry[] {
       );
       continue;
     }
-    const rep = result.find(
+    const representative = result.find(
       (m) => m.id.toLowerCase() === defaultTargetId.toLowerCase(),
     );
-    if (!rep) {
+    if (!representative) {
       compatLogger.warn(
         `Effort routing alias "${alias}" default target "${defaultTargetId}" absent from catalog; skipping catalog swap`,
       );
       continue;
     }
-    successfulAliases.push({ alias, representative: rep });
+    successfulAliases.push({ alias, representative });
     successfulAliasNames.add(alias.toLowerCase());
     for (const targetId of Object.values(rule.targets)) {
       hiddenTargetIds.add(targetId.toLowerCase());
