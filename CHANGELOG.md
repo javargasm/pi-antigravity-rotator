@@ -10,6 +10,7 @@
 
 - **Dynamic catalog and quota safety**: Malformed quota entries are ignored without replacing the last known-good snapshot; exhausted sibling pools, stale in-flight responses, retired/reserved model IDs, and account removal or credential changes are handled safely. Persisted cooldown, circuit-breaker, and 429 state is migrated without shortening valid deadlines or losing history. ([#30](https://github.com/tuxevil/tuxevil-rotator/pull/30) by [@javargasm](https://github.com/javargasm))
 - **Dynamic model compatibility metadata**: Effective output-token and thinking metadata now honor runtime constraints and operator overrides across Chat, Responses, and Anthropic compatibility paths, with provider- and version-aware Gemini pricing fallbacks. ([#30](https://github.com/tuxevil/tuxevil-rotator/pull/30) by [@javargasm](https://github.com/javargasm))
+- **Partial model specification overrides**: Operators can now override only selected `modelSpecs` fields while inheriting the effective runtime, static, or family defaults for omitted metadata. Overrides are retained through configuration normalization and persistence, including context-window lookups. ([#31](https://github.com/tuxevil/tuxevil-rotator/pull/31) by [@javargasm](https://github.com/javargasm))
 
 ## [3.5.0] - 2026-09-03
 
