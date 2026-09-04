@@ -1,5 +1,5 @@
 import { logger, redactSensitive } from "../../logger.js";
-import { applyModelAlias, getEffortRouting } from "../../types.js";
+import { applyModelAlias, getEffortRoutingRule } from "../../types.js";
 import type { RequestBody } from "../../proxy.js";
 import {
   isRecord,
@@ -136,7 +136,7 @@ export interface OpenAIChatCompletionRequest {
   tools?: OpenAITool[];
   tool_choice?: unknown;
   /** OpenAI-style reasoning effort. Mapped to Gemini thinkingLevel. */
-  reasoning_effort?: string;
+  reasoning_effort?: unknown;
   [key: string]: unknown;
 }
 
@@ -893,7 +893,7 @@ export function isTieredEffortModel(modelId: string): boolean {
  * semantics and never emits an invalid upstream enum.
  */
 export function mapTieredReasoningEffortToThinkingLevel(
-  effort: string | undefined,
+  effort: unknown,
   modelId: string,
 ): "LOW" | "MEDIUM" | "HIGH" | undefined {
   if (!isTieredEffortModel(modelId)) return undefined;
@@ -914,18 +914,21 @@ export function resolveEffortAliasModel(
   requestedModel: string,
   effort: unknown,
 ): string | null {
-  const rules = getEffortRouting();
-  if (!rules) return null;
-  const rule = rules[requestedModel.trim().toLowerCase()];
+  const rule = getEffortRoutingRule(requestedModel);
   if (!rule) return null;
   const key = typeof effort === "string" ? effort.trim().toLowerCase() : "";
-  if (key && rule.targets[key]) return rule.targets[key];
-  if (key && !rule.targets[key]) {
+  if (key && Object.hasOwn(rule.targets, key)) return rule.targets[key];
+  if (effort !== undefined) {
+    const supplied = typeof effort === "string"
+      ? JSON.stringify(effort.length > 40 ? `${effort.slice(0, 40)}…` : effort)
+      : `<${effort === null ? "null" : typeof effort}>`;
     compatLogger.debug(
-      `Unrecognized effort "${key}" for alias "${requestedModel}", falling back to default`,
+      `Unrecognized effort ${supplied} for alias "${requestedModel.trim().toLowerCase()}", falling back to default`,
     );
   }
-  return rule.targets[rule.defaultEffort ?? "medium"];
+  return Object.hasOwn(rule.targets, rule.defaultEffort)
+    ? rule.targets[rule.defaultEffort]
+    : null;
 }
 
 export function openAIToAntigravityBody(

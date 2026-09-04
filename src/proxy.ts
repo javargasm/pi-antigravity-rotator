@@ -12,7 +12,8 @@ import {
 } from "node:http";
 import { Readable } from "node:stream";
 import {
-  getEffortRouting,
+  classifyEffortRoutingModel,
+  getEffortRoutingRule,
   resolveQuotaModelKey,
   resolveDisplayModelKey,
 } from "./types.js";
@@ -109,6 +110,12 @@ export function providerAdapterForModel(
       ollamaModels: new Set(rotator?.getOllamaModels?.() ?? []),
       codexModels: new Set(rotator?.getCodexModels?.() ?? []),
     };
+    const effortRoutingKind = classifyEffortRoutingModel(model);
+    if (effortRoutingKind && context.ollamaModels.has(model)) {
+      proxyLogger.warn(
+        `Effort routing ${effortRoutingKind} "${model}" matches a live Ollama model; live provider dispatch wins`,
+      );
+    }
     const matched = findProviderForModel(model, context);
     if (matched) return matched;
   }
@@ -139,7 +146,7 @@ function observedModelKey(
   displayModel: string,
   effectiveModel?: string,
 ): string {
-  const rule = getEffortRouting()?.[displayModel.trim().toLowerCase()];
+  const rule = getEffortRoutingRule(displayModel);
   const observedModel = effectiveModel && rule ? effectiveModel : displayModel;
   const resolver = (rotator as unknown as {
     resolveObservedModelKey?: (value: string) => string;

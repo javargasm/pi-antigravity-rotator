@@ -174,7 +174,13 @@ const DEFAULT_MODEL_ALIASES: Record<string, string> = {
   "gpt-oss-120b": "gpt-oss-120b-medium",
 };
 let modelAliasesOverride: Record<string, string> | null = null;
-let effortRoutingOverride: Record<string, EffortRoutingRule> | null = null;
+type StoredEffortRoutingRule = {
+  defaultEffort: string;
+  targets: Record<string, string>;
+};
+type EffortRoutingModelKind = "alias" | "target";
+
+let effortRoutingOverride: Record<string, StoredEffortRoutingRule> | null = null;
 
 /**
  * Replace the bundled model-alias table with operator-provided overrides.
@@ -202,11 +208,14 @@ export function setEffortRoutingOverride(
     effortRoutingOverride = null;
     return;
   }
-  const normalized: Record<string, EffortRoutingRule> = {};
+  const normalized = Object.create(null) as Record<
+    string,
+    StoredEffortRoutingRule
+  >;
   for (const [rawAlias, rule] of Object.entries(rules)) {
     const alias = rawAlias.trim().toLowerCase();
     const defaultEffort = rule.defaultEffort?.trim().toLowerCase() || "medium";
-    const targets: Record<string, string> = {};
+    const targets = Object.create(null) as Record<string, string>;
     for (const [effortKey, targetValue] of Object.entries(rule.targets ?? {})) {
       targets[effortKey.trim().toLowerCase()] =
         typeof targetValue === "string" ? targetValue.trim() : targetValue;
@@ -219,8 +228,36 @@ export function setEffortRoutingOverride(
   effortRoutingOverride = normalized;
 }
 
-export function getEffortRouting(): Record<string, EffortRoutingRule> | null {
+export function getEffortRouting(): Record<string, StoredEffortRoutingRule> | null {
   return effortRoutingOverride;
+}
+
+export function getEffortRoutingRule(
+  requestedModel: string,
+): StoredEffortRoutingRule | undefined {
+  const rules = effortRoutingOverride;
+  if (!rules) return undefined;
+  const alias = requestedModel.trim().toLowerCase();
+  return Object.hasOwn(rules, alias) ? rules[alias] : undefined;
+}
+
+export function classifyEffortRoutingModel(
+  model: string,
+): EffortRoutingModelKind | null {
+  const rules = effortRoutingOverride;
+  if (!rules) return null;
+  const normalizedModel = model.trim().toLowerCase();
+  if (Object.hasOwn(rules, normalizedModel)) return "alias";
+  for (const rule of Object.values(rules)) {
+    if (
+      Object.values(rule.targets).some(
+        (target) => target.toLowerCase() === normalizedModel,
+      )
+    ) {
+      return "target";
+    }
+  }
+  return null;
 }
 
 function getActiveModelAliases(): Record<string, string> {
@@ -233,7 +270,7 @@ function getActiveModelAliases(): Record<string, string> {
  */
 export function applyModelAlias(model: string): string {
   const aliases = getActiveModelAliases();
-  if (model in aliases) return aliases[model];
+  if (Object.hasOwn(aliases, model)) return aliases[model];
   const lower = model.toLowerCase();
   for (const [from, to] of Object.entries(aliases)) {
     if (from.toLowerCase() === lower) return to;
@@ -382,8 +419,7 @@ export function resolveDisplayModelKey(
   if (
     effectiveModel &&
     effectiveModel !== requestModel &&
-    effortRoutingOverride &&
-    effortRoutingOverride[requestModel.trim().toLowerCase()]
+    getEffortRoutingRule(requestModel)
   ) {
     return resolveDisplayModelKey(effectiveModel);
   }

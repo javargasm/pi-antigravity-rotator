@@ -2196,7 +2196,7 @@ export function getEffectiveAntigravityModels(): CompatModelEntry[] {
   const successfulAliasNames = new Set<string>();
 
   for (const [alias, rule] of Object.entries(rules)) {
-    const defaultEffortKey = rule.defaultEffort ?? "medium";
+    const defaultEffortKey = rule.defaultEffort;
     const defaultTargetId = rule.targets[defaultEffortKey];
     if (!defaultTargetId) {
       compatLogger.warn(
