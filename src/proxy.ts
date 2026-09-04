@@ -12,6 +12,8 @@ import {
 } from "node:http";
 import { Readable } from "node:stream";
 import {
+  classifyEffortRoutingModel,
+  getEffortRoutingRule,
   resolveQuotaModelKey,
   resolveDisplayModelKey,
 } from "./types.js";
@@ -108,6 +110,12 @@ export function providerAdapterForModel(
       ollamaModels: new Set(rotator?.getOllamaModels?.() ?? []),
       codexModels: new Set(rotator?.getCodexModels?.() ?? []),
     };
+    const effortRoutingKind = classifyEffortRoutingModel(model);
+    if (effortRoutingKind && context.ollamaModels.has(model)) {
+      proxyLogger.warn(
+        `Effort routing ${effortRoutingKind} "${model}" matches a live Ollama model; live provider dispatch wins`,
+      );
+    }
     const matched = findProviderForModel(model, context);
     if (matched) return matched;
   }
@@ -133,11 +141,20 @@ function routingModelKey(rotator: AccountRotator, model: string): string {
   return resolver?.call(rotator, model) ?? resolveQuotaModelKey(model) ?? model;
 }
 
-function observedModelKey(rotator: AccountRotator, model: string): string {
+function observedModelKey(
+  rotator: AccountRotator,
+  displayModel: string,
+  effectiveModel?: string,
+): string {
+  const rule = getEffortRoutingRule(displayModel);
+  const observedModel = effectiveModel && rule ? effectiveModel : displayModel;
   const resolver = (rotator as unknown as {
     resolveObservedModelKey?: (value: string) => string;
   }).resolveObservedModelKey;
-  return resolver?.call(rotator, model) ?? resolveDisplayModelKey(model);
+  return (
+    resolver?.call(rotator, observedModel) ??
+    resolveDisplayModelKey(displayModel, effectiveModel)
+  );
 }
 import { startVersionChecker, performSelfUpdate } from "./version-check.js";
 import { startNotificationPoller } from "./notification-poller.js";
@@ -1180,7 +1197,11 @@ export async function withRotation<T>(
 
     const label = account.config.label || account.config.email;
     const modelKey = routingModelKey(rotator, model);
-    const displayModelKey = observedModelKey(rotator, body.displayModel || model);
+    const displayModelKey = observedModelKey(
+      rotator,
+      body.displayModel || model,
+      body.model,
+    );
     const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
     const requestStartMs = Date.now();
     let accountReleased = false;
