@@ -10,6 +10,7 @@
 // separately in `src/compat/model-specs.ts` via `maxOutputTokens`.
 
 import { dynamicCatalog } from "./dynamic-catalog.js";
+import { getModelSpecOverride } from "../../compat/model-specs.js";
 
 export interface AntigravityModelSpec {
   id: string;
@@ -73,16 +74,21 @@ const FALLBACK_CONTEXT_WINDOW = 128_000;
  * Resolve the upstream-published context window for an Antigravity model id.
  *
  * Lookup order:
- *   1. Exact id match in static table (lowercased).
- *   2. Dynamic catalog entry from live Antigravity endpoint.
- *   3. Substring match across the table (longest key wins via the order here).
- *   4. Family defaults: claude -> 1M, gemini -> 1M, gpt-oss -> 131_072.
- *   5. Defensive fallback: 128_000.
+ *   1. Operator exact/substring override.
+ *   2. Exact id match in static table (lowercased).
+ *   3. Dynamic catalog entry from live Antigravity endpoint.
+ *   4. Substring match across the table (longest key wins via the order here).
+ *   5. Family defaults: claude -> 1M, gemini -> 1M, gpt-oss -> 131_072.
+ *   6. Defensive fallback: 128_000.
  */
 export function getAntigravityContextWindow(model: string): number {
   if (!model) return FALLBACK_CONTEXT_WINDOW;
   const lower = model.toLowerCase().trim();
   if (!lower) return FALLBACK_CONTEXT_WINDOW;
+  const overrideCtx = getModelSpecOverride(lower)?.contextWindow;
+  if (typeof overrideCtx === "number" && Number.isFinite(overrideCtx) && overrideCtx > 0) {
+    return overrideCtx;
+  }
   const exact = ANTIGRAVITY_CONTEXT_WINDOWS[lower];
   if (typeof exact === "number") return exact;
   const dynamicCtx = dynamicCatalog.getContextWindow(lower);

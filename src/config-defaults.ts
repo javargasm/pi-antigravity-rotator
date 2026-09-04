@@ -55,7 +55,8 @@ export function applyConfigDefaults(config: Config): Config {
 		idempotencyWindowMs: config.idempotencyWindowMs ?? 2000,
 		streamRecoveryMaxRetries: safeStreamRecoveryMaxRetries(config.streamRecoveryMaxRetries),
 		compressionMode: config.compressionMode ?? "off",
-accounts: config.accounts ? config.accounts.map((account) => ({
+		modelSpecs: config.modelSpecs,
+		accounts: config.accounts ? config.accounts.map((account) => ({
 			...normalizeAccountConfig(account),
 			tier: account.tier || "unknown",
 		})) : [],
