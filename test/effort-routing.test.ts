@@ -6,9 +6,9 @@ import {
 	getEffortRouting,
 	applyModelAlias,
 	resolveDisplayModelKey,
-	type VirtualKey,
 } from "../src/types.js";
 import { resolveEffortAliasModel } from "../src/providers/google-antigravity/translators.js";
+import { isVirtualKeyModelAllowed } from "../src/key-auth.js";
 import { validateConfig, formatValidationErrors } from "../src/validators.js";
 import { applyConfigDefaults } from "../src/config-defaults.js";
 import { AccountRotator } from "../src/rotator.js";
@@ -724,51 +724,17 @@ describe("applyConfigDefaults plumbing", () => {
 
 describe("virtual-key scoping with effort routing", () => {
 	it("bare-scoped virtual key authorizes bare alias and all targets via substring", () => {
-		const key: VirtualKey = {
-			keyName: "Test",
-			keyAlias: "rk-test",
-			tokenHash: "hash",
-			models: ["gemini-3.8-flash"],
-			blocked: false,
-			createdAt: new Date().toISOString(),
-		};
-
-		const checkAccess = (targetModel: string) => {
-			const normalizedTarget = targetModel.toLowerCase();
-			return key.models!.some(
-				(m) =>
-					m.toLowerCase() === normalizedTarget ||
-					normalizedTarget.includes(m.toLowerCase()),
-			);
-		};
-
-		assert.equal(checkAccess("gemini-3.8-flash"), true);
-		assert.equal(checkAccess("gemini-3.8-flash-low"), true);
-		assert.equal(checkAccess("gemini-3.8-flash-medium"), true);
-		assert.equal(checkAccess("gemini-3.8-flash-high"), true);
+		const allowed = ["gemini-3.8-flash"];
+		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash"), true);
+		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash-low"), true);
+		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash-medium"), true);
+		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash-high"), true);
 	});
 
 	it("concrete-scoped virtual key rejects the bare alias", () => {
-		const key: VirtualKey = {
-			keyName: "Test High Only",
-			keyAlias: "rk-test",
-			tokenHash: "hash",
-			models: ["gemini-3.8-flash-high"],
-			blocked: false,
-			createdAt: new Date().toISOString(),
-		};
-
-		const checkAccess = (targetModel: string) => {
-			const normalizedTarget = targetModel.toLowerCase();
-			return key.models!.some(
-				(m) =>
-					m.toLowerCase() === normalizedTarget ||
-					normalizedTarget.includes(m.toLowerCase()),
-			);
-		};
-
-		assert.equal(checkAccess("gemini-3.8-flash-high"), true);
-		assert.equal(checkAccess("gemini-3.8-flash"), false);
-		assert.equal(checkAccess("gemini-3.8-flash-low"), false);
+		const allowed = ["gemini-3.8-flash-high"];
+		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash-high"), true);
+		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash"), false);
+		assert.equal(isVirtualKeyModelAllowed(allowed, "gemini-3.8-flash-low"), false);
 	});
 });
