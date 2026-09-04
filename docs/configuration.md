@@ -261,3 +261,24 @@ Remap model names to upstream model names via `modelAliases` in `accounts.json`:
   }
 }
 ```
+
+## Audio Transcription & Live Streaming
+
+The rotator provides OpenAI-compatible audio transcription and bidirectional live streaming powered by the local Antigravity Language Server observer model (`models/proactive-observer-v10`).
+
+### Endpoints
+
+- `POST /v1/audio/transcriptions`: OpenAI-compatible multipart audio transcription.
+  - Form fields: `file` (audio file), `model` (default: `models/proactive-observer-v10` or alias `whisper-1`), `response_format` (`json`, `text`, `verbose_json`), `prompt`, `language`.
+  - Supported audio formats: `.wav`, `.mp3`, `.m4a`, `.webm`, `.ogg`, `.flac`, `.pcm`.
+- `GET /ws`, `/ws/audio`, `/v1/listen`, `/v1/audio/transcriptions/stream`: Bidirectional WebSocket streaming endpoint (RFC 6455).
+  - Streams binary 16kHz PCM audio chunks in real-time.
+  - Emits JSON events: `system_status`, `antigravity_ready`, `antigravity_transcript` (with TTFT and interim/final text), and `antigravity_complete`.
+
+### Low-Latency Headers
+
+For real-time voice and streaming applications, client requests can bypass artificial safety jitter delays:
+
+- `X-Skip-Safety-Jitter: true`
+- `X-Live-Request: true`
+
