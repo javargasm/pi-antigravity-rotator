@@ -132,8 +132,8 @@ export async function transcribeAudioWithAntigravity(
       },
       (res) => {
         if (res.statusCode !== 200) {
-          cleanup();
-          return reject(new Error(`Antigravity StreamAudioTranscription error: HTTP ${res.statusCode}`));
+          fail(new Error(`Antigravity StreamAudioTranscription error: HTTP ${res.statusCode}`));
+          return;
         }
 
         let buf = Buffer.alloc(0);
@@ -151,7 +151,7 @@ export async function transcribeAudioWithAntigravity(
                 const msg = JSON.parse(msgBuf.toString("utf8"));
                 if (msg.ready?.sessionId) {
                   sessionId = msg.ready.sessionId;
-                  sendChunksAndEnd();
+                  void sendChunksAndEnd().catch(fail);
                 } else if (msg.transcription) {
                   const text = msg.transcription.text || "";
                   if (msg.transcription.isFinal) {
@@ -178,8 +178,7 @@ export async function transcribeAudioWithAntigravity(
     );
 
     streamReq.on("error", (err) => {
-      cleanup();
-      reject(err);
+      fail(err);
     });
 
     streamReq.write(frame);
@@ -206,6 +205,13 @@ export async function transcribeAudioWithAntigravity(
       isResolved = true;
       cleanup();
       resolve((finalText || lastInterim).trim());
+    }
+
+    function fail(error: Error) {
+      if (isResolved) return;
+      isResolved = true;
+      cleanup();
+      reject(error);
     }
 
     async function sendChunksAndEnd() {
@@ -248,8 +254,8 @@ export async function transcribeAudioWithAntigravity(
 
       // End session
       const endData = JSON.stringify({ sessionId });
-      https
-        .request(
+      await new Promise<void>((resolveEnd, rejectEnd) => {
+        const req = https.request(
           {
             hostname: "127.0.0.1",
             port: creds.port,
@@ -264,9 +270,13 @@ export async function transcribeAudioWithAntigravity(
           },
           (resp) => {
             resp.resume();
+            resp.on("end", resolveEnd);
+            resp.on("error", rejectEnd);
           },
-        )
-        .end(endData);
+        );
+        req.on("error", rejectEnd);
+        req.end(endData);
+      });
     }
   });
 }
@@ -493,8 +503,9 @@ export class AntigravityAudioSession {
   private queue: Buffer[] = [];
   private queuedAudioBytes = 0;
   private isProcessingQueue = false;
-  private pendingEnd = false;
-  private state: "idle" | "starting" | "ready" | "failed" | "destroyed" = "idle";
+  private pendingEnd: { promise: Promise<void>; resolve: () => void } | null = null;
+  private state: "idle" | "starting" | "ready" | "ending" | "ended" | "failed" | "destroyed" =
+    "idle";
   private startTimer: ReturnType<typeof setTimeout> | null = null;
   private startReject: ((error: Error) => void) | null = null;
   private readonly startTimeoutMs: number;
@@ -628,6 +639,7 @@ export class AntigravityAudioSession {
   public sendChunk(pcmBuffer: Buffer): boolean {
     if (
       (this.state !== "starting" && this.state !== "ready") ||
+      this.pendingEnd !== null ||
       pcmBuffer.length === 0 ||
       pcmBuffer.length > MAX_AUDIO_FRAME_BYTES ||
       this.queue.length >= MAX_QUEUED_AUDIO_CHUNKS ||
@@ -642,10 +654,19 @@ export class AntigravityAudioSession {
   }
 
   private async processQueue(): Promise<void> {
-    if (this.isProcessingQueue || this.state !== "ready" || !this.sessionId) return;
+    if (
+      this.isProcessingQueue ||
+      (this.state !== "ready" && this.state !== "ending") ||
+      !this.sessionId
+    )
+      return;
     this.isProcessingQueue = true;
 
-    while (this.queue.length > 0 && this.state === "ready" && this.sessionId) {
+    while (
+      this.queue.length > 0 &&
+      (this.state === "ready" || this.state === "ending") &&
+      this.sessionId
+    ) {
       const chunk = this.queue.shift();
       if (chunk) {
         this.queuedAudioBytes -= chunk.length;
@@ -655,8 +676,8 @@ export class AntigravityAudioSession {
 
     this.isProcessingQueue = false;
 
-    if (this.pendingEnd && this.state === "ready") {
-      this.pendingEnd = false;
+    if (this.pendingEnd && (this.state === "ready" || this.state === "ending")) {
+      this.state = "ending";
       await this.executeEndSession();
     }
   }
@@ -707,22 +728,38 @@ export class AntigravityAudioSession {
   }
 
   public endSession(): Promise<void> {
-    if (this.isProcessingQueue || this.queue.length > 0 || !this.sessionId) {
-      this.pendingEnd = true;
+    if (this.state === "ended" || this.state === "failed" || this.state === "destroyed") {
       return Promise.resolve();
     }
-    return this.executeEndSession();
+    if (this.pendingEnd) return this.pendingEnd.promise;
+
+    let resolveEnd!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      resolveEnd = resolve;
+    });
+    this.pendingEnd = { promise, resolve: resolveEnd };
+    if (this.state === "ready") this.state = "ending";
+    if (!this.isProcessingQueue && this.queue.length === 0 && this.sessionId) {
+      void this.executeEndSession();
+    }
+    return promise;
   }
 
   private executeEndSession(): Promise<void> {
     if (!this.sessionId) return Promise.resolve();
-    const data = JSON.stringify({ sessionId: this.sessionId });
+    const sessionId = this.sessionId;
+    const data = JSON.stringify({ sessionId });
     return new Promise((resolve) => {
       let settled = false;
       const finish = (): void => {
         if (settled) return;
         settled = true;
         this.pendingRequests.delete(req);
+        if (this.sessionId === sessionId) this.sessionId = null;
+        if (this.state !== "destroyed") this.state = "ended";
+        const pendingEnd = this.pendingEnd;
+        this.pendingEnd = null;
+        pendingEnd?.resolve();
         resolve();
       };
       const req = https.request(
@@ -745,7 +782,10 @@ export class AntigravityAudioSession {
         },
       );
       this.pendingRequests.set(req, finish);
-      req.on("error", finish);
+      req.on("error", (error) => {
+        audioLogger.warn(`EndAudioSession error: ${error.message}`);
+        finish();
+      });
       req.write(data);
       req.end();
     });
@@ -758,7 +798,9 @@ export class AntigravityAudioSession {
     this.clearStartWait();
     this.queue = [];
     this.queuedAudioBytes = 0;
-    this.pendingEnd = false;
+    const pendingEnd = this.pendingEnd;
+    this.pendingEnd = null;
+    pendingEnd?.resolve();
     this.sessionId = null;
     this.streamBuffer = Buffer.alloc(0);
     for (const [request, finish] of [...this.pendingRequests]) {
@@ -793,6 +835,9 @@ export class AntigravityAudioSession {
     this.clearStartWait();
     this.queue = [];
     this.queuedAudioBytes = 0;
+    const pendingEnd = this.pendingEnd;
+    this.pendingEnd = null;
+    pendingEnd?.resolve();
     this.streamBuffer = Buffer.alloc(0);
     if (this.streamReq) {
       try {
@@ -886,7 +931,9 @@ function closeClient(client: AudioWsClient, code: number, reason: string): void 
 }
 
 async function authorizeClientModel(client: AudioWsClient, model: string): Promise<boolean> {
+  if (client.closed) return false;
   const auth = await client.authorizeModel(model);
+  if (client.closed) return false;
   if (auth.authenticated) return true;
   client.send({
     type: "antigravity_error",
@@ -951,6 +998,7 @@ function createClientSession(
 }
 
 async function handleClientCommand(client: AudioWsClient, cmd: any): Promise<void> {
+  if (client.closed) return;
   if (cmd.type === "start") {
     const model = String(cmd.antigravityModel || cmd.model || "models/proactive-observer-v10");
     if (!(await authorizeClientModel(client, model))) return;
@@ -998,8 +1046,12 @@ async function handleClientCommand(client: AudioWsClient, cmd: any): Promise<voi
     });
 
     if (client.antigravity) {
-      await client.antigravity.endSession();
-      finishClientSpend(client, "success");
+      const session = client.antigravity;
+      await session.endSession();
+      if (client.antigravity === session) {
+        finishClientSpend(client, "success");
+        destroyClientSession(client);
+      }
     }
   } else if (cmd.type === "test_sample") {
     await runTestSample(client, cmd.sample || "es");
@@ -1007,6 +1059,7 @@ async function handleClientCommand(client: AudioWsClient, cmd: any): Promise<voi
 }
 
 async function handleAudioChunk(client: AudioWsClient, pcmBuffer: Buffer): Promise<void> {
+  if (client.closed) return;
   if (pcmBuffer.length > MAX_AUDIO_FRAME_BYTES) {
     closeClient(client, 1009, "Audio frame is too large");
     return;
@@ -1170,7 +1223,7 @@ export async function handleAudioWebSocket(req: IncomingMessage, socket: Duplex)
     if (processing || client.closed) return;
     processing = true;
     try {
-      while (incomingBuffer.length >= 2) {
+      while (incomingBuffer.length >= 2 && !client.closed) {
       const firstByte = incomingBuffer[0];
       const secondByte = incomingBuffer[1];
       const opcode = firstByte & 0x0f;
@@ -1245,6 +1298,10 @@ export async function handleAudioWebSocket(req: IncomingMessage, socket: Duplex)
       } else if (opcode === 2) {
         // Binary frame (Audio PCM 16kHz Chunk)
         await handleAudioChunk(client, payload);
+      }
+      if (client.closed) {
+        incomingBuffer = Buffer.alloc(0);
+        return;
       }
       }
     } finally {

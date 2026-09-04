@@ -342,6 +342,36 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     }
   });
 
+  it("rejects and cleans up when EndAudioSession transport fails", async () => {
+    const requests: FakeRequest[] = [];
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            const response = new FakeResponse();
+            callback?.(response);
+            queueMicrotask(() => {
+              response.emit("data", connectFrame({ ready: { sessionId: "session-end-error" } }));
+            });
+          } else if (String(options.path).endsWith("/EndAudioSession")) {
+            queueMicrotask(() => request.emit("error", new Error("connect ECONNREFUSED")));
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+
+    try {
+      await assert.rejects(transcribeAudioWithAntigravity(Buffer.alloc(0)), /ECONNREFUSED/);
+      assert.equal(requests[0].destroyed, true);
+    } finally {
+      requestMock.mock.restore();
+    }
+  });
+
   it("reports verbose metadata only when supplied or derivable from WAV data", async () => {
     const languageServer = mockSuccessfulLanguageServer();
     const { server, url } = await listenServer((req, res) => {
@@ -466,6 +496,58 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
       while (requests.length < 2) await new Promise((resolve) => setTimeout(resolve, 1));
       session.destroy();
       assert.equal(requests[1].destroyed, true);
+    } finally {
+      session.destroy();
+      requestMock.mock.restore();
+    }
+  });
+
+  it("waits for queued audio before terminalizing an ended session", async () => {
+    const requests: FakeRequest[] = [];
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            const response = new FakeResponse();
+            callback?.(response);
+            queueMicrotask(() => {
+              response.emit("data", connectFrame({ ready: { sessionId: "session-ending" } }));
+            });
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    const session = new AntigravityAudioSession({ port: 1, csrf: "test" });
+
+    try {
+      await session.start();
+      assert.equal(session.sendChunk(Buffer.alloc(32)), true);
+      const ending = session.endSession();
+      let ended = false;
+      void ending.then(() => {
+        ended = true;
+      });
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      assert.equal(ended, false);
+
+      const sendResponse = new FakeResponse();
+      requests[1].callback?.(sendResponse);
+      sendResponse.emit("end");
+      while (requests.length < 3) await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(String(requests[2].options.path).endsWith("/EndAudioSession"), true);
+      assert.equal(ended, false);
+
+      const endResponse = new FakeResponse();
+      requests[2].callback?.(endResponse);
+      endResponse.emit("end");
+      await ending;
+
+      assert.equal(session.sessionId, null);
+      assert.equal(session.sendChunk(Buffer.alloc(32)), false);
     } finally {
       session.destroy();
       requestMock.mock.restore();

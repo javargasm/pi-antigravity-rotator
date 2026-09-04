@@ -96,6 +96,7 @@ function mockLanguageServer(mode: "success" | "failure" | "pending" = "success")
   restore: () => void;
 } {
   const requests: FakeRequest[] = [];
+  let sessionNumber = 0;
   const requestMock = mock.method(
     https,
     "request",
@@ -106,8 +107,9 @@ function mockLanguageServer(mode: "success" | "failure" | "pending" = "success")
         request.respond(response);
         if (mode === "failure") return;
         if (String(options.path).endsWith("/StreamAudioTranscription")) {
+          const sessionId = `audio-session-${++sessionNumber}`;
           queueMicrotask(() => {
-            response.emit("data", connectFrame({ ready: { sessionId: "audio-session" } }));
+            response.emit("data", connectFrame({ ready: { sessionId } }));
             response.emit("data", connectFrame({ transcription: { text: "hello", isFinal: true } }));
             response.emit("data", connectFrame({ complete: true }));
           });
@@ -209,6 +211,35 @@ function waitForWebSocketEvent<T extends Event>(
       { once: true },
     );
   });
+}
+
+function waitForWebSocketMessage(
+  ws: WebSocket,
+  predicate: (message: Record<string, unknown>) => boolean,
+  timeoutMs = 500,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.removeEventListener("message", onMessage);
+      reject(new Error("message timeout"));
+    }, timeoutMs);
+    const onMessage = (event: MessageEvent): void => {
+      const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+      if (!predicate(message)) return;
+      clearTimeout(timer);
+      ws.removeEventListener("message", onMessage);
+      resolve(message);
+    };
+    ws.addEventListener("message", onMessage);
+  });
+}
+
+async function waitForCondition(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition timeout");
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
+  }
 }
 
 function installUpgradeHandler(server: ReturnType<typeof createServer>): void {
@@ -403,8 +434,9 @@ describe("audio WebSocket security boundary", () => {
 
     try {
       await waitForWebSocketEvent(ws, "open");
+      const errorMessage = waitForWebSocketMessage(ws, (message) => message.type === "antigravity_error");
       ws.send(JSON.stringify({ type: "start", model: "models/proactive-observer-v10" }));
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      await errorMessage;
       assert.equal(messages.some((message) => message.type === "antigravity_error"), true);
       assert.equal(messages.some((message) => message.type === "ready_to_receive_audio"), false);
       assert.equal(languageServer.requests[0]?.destroyed, true);
@@ -455,6 +487,90 @@ describe("audio WebSocket security boundary", () => {
       assert.equal(close.code, 1009);
     } finally {
       ws.close();
+      languageServer.restore();
+      await closeServer(server);
+    }
+  });
+
+  it("does not reuse an ended session after stop or explicit restart", async () => {
+    const rawKey = "rk-ws-stop-session";
+    addVirtualKey(rawKey, ["*"]);
+    const languageServer = mockLanguageServer();
+    const { server, port } = await listenServer((_req, res) => res.end());
+    installUpgradeHandler(server);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?key=${rawKey}`);
+
+    try {
+      await waitForWebSocketEvent(ws, "open");
+      let ready = waitForWebSocketMessage(ws, (message) => message.type === "ready_to_receive_audio");
+      ws.send(JSON.stringify({ type: "start", model: "models/proactive-observer-v10" }));
+      await ready;
+
+      ws.send(Buffer.alloc(1, 1));
+      ws.send(JSON.stringify({ type: "stop" }));
+      await waitForWebSocketMessage(ws, (message) => message.type === "audio_stopped");
+
+      const antigravityReady = waitForWebSocketMessage(
+        ws,
+        (message) => message.type === "antigravity_ready" && message.sessionId === "audio-session-2",
+      );
+      ws.send(Buffer.alloc(1, 2));
+      await antigravityReady;
+      await waitForCondition(
+        () =>
+          languageServer.requests.filter((request) =>
+            String(request.options.path).endsWith("/SendAudioChunk"),
+          ).length >= 2,
+      );
+
+      ready = waitForWebSocketMessage(ws, (message) => message.type === "ready_to_receive_audio");
+      ws.send(JSON.stringify({ type: "start", model: "models/proactive-observer-v10" }));
+      await ready;
+      ws.send(Buffer.alloc(1, 3));
+      await waitForCondition(
+        () =>
+          languageServer.requests.filter((request) =>
+            String(request.options.path).endsWith("/SendAudioChunk"),
+          ).length >= 3,
+      );
+
+      const sentSessionIds = languageServer.requests
+        .filter((request) => String(request.options.path).endsWith("/SendAudioChunk"))
+        .map((request) => JSON.parse(Buffer.concat(request.chunks).toString("utf8")).sessionId);
+      assert.deepEqual(sentSessionIds, ["audio-session-1", "audio-session-2", "audio-session-3"]);
+    } finally {
+      ws.close();
+      languageServer.restore();
+      await closeServer(server);
+    }
+  });
+
+  it("stops processing buffered frames after closing the client", async () => {
+    const rawKey = "rk-ws-buffered-close";
+    addVirtualKey(rawKey, ["*"]);
+    const languageServer = mockLanguageServer("pending");
+    const { server, port } = await listenServer((_req, res) => res.end());
+    installUpgradeHandler(server);
+    let socket: Socket | undefined;
+
+    try {
+      const upgrade = await rawUpgrade(port, `/ws?key=${rawKey}`);
+      socket = upgrade.socket;
+      const closed = once(socket, "close");
+      socket.resume();
+      socket.write(Buffer.from([0x82, 0, 0x82, 1, 1]));
+      await Promise.race([
+        closed,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("close timeout")), 500)),
+      ]);
+      assert.equal(
+        languageServer.requests.filter((request) =>
+          String(request.options.path).endsWith("/StreamAudioTranscription"),
+        ).length,
+        1,
+      );
+    } finally {
+      socket?.destroy();
       languageServer.restore();
       await closeServer(server);
     }
