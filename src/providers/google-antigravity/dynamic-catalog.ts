@@ -7,6 +7,7 @@ import {
 import {
   QUOTA_MODEL_KEYS,
   type GoogleQuotaResponse,
+  type PersistedDynamicModelOwnership,
 } from "../../types.js";
 
 export interface DynamicModelEntry {
@@ -31,6 +32,10 @@ const RESERVED_QUOTA_MODEL_IDS = new Set(
 
 type GoogleModelInfo = GoogleQuotaResponse["models"][string];
 type ActiveAccount = string | { id: string; generation: string };
+type PersistedOwnershipAccount = {
+  id: string;
+  credentialGenerationFingerprint: string;
+};
 interface ActiveAccountGeneration {
   credentialGeneration: string | null;
   epoch: number;
@@ -47,6 +52,16 @@ function isSafeModelId(value: string): boolean {
     lower !== "__proto__" &&
     lower !== "prototype" &&
     lower !== "constructor";
+}
+
+function isDiscoverableModelId(value: string): boolean {
+  const id = value.trim();
+  const lower = id.toLowerCase();
+  return isSafeModelId(id) &&
+    !RESERVED_QUOTA_MODEL_IDS.has(lower) &&
+    !lower.startsWith("chat_") &&
+    !lower.startsWith("tab_") &&
+    !lower.startsWith("gemini-3.5-");
 }
 
 /** Validate and sanitize the untrusted runtime catalog response. */
@@ -203,7 +218,8 @@ export class DynamicModelRegistry {
     string,
     Pick<DynamicModelEntry, "id" | "quotaPool">
   >();
-  private liveCatalogHydrated = false;
+  private accountModelOwnership = new Map<string, Set<string>>();
+  private ownershipScopedModels = new Set<string>();
   private activeAccountGenerations: Map<
     string,
     ActiveAccountGeneration
@@ -220,7 +236,8 @@ export class DynamicModelRegistry {
     this.accountModels.clear();
     this.defaultAgentModelIds.clear();
     this.discoveredModels.clear();
-    this.liveCatalogHydrated = false;
+    this.accountModelOwnership.clear();
+    this.ownershipScopedModels.clear();
     this.activeAccountGenerations = null;
     this.nextAccountEpoch = 0;
   }
@@ -260,7 +277,6 @@ export class DynamicModelRegistry {
         accountEpoch,
       )
     ) return 0;
-    this.liveCatalogHydrated = true;
     const previous = this.accountModels.get(key);
     const knownBefore = new Set(this.getAllModels().map((model) => model.id.toLowerCase()));
     const next = new Map<string, DynamicModelEntry>();
@@ -279,13 +295,7 @@ export class DynamicModelRegistry {
     for (const [rawId, info] of Object.entries(data.models)) {
       const normalizedId = rawId.trim();
       const lowerId = normalizedId.toLowerCase();
-      if (
-        !lowerId ||
-        RESERVED_QUOTA_MODEL_IDS.has(lowerId) ||
-        lowerId.startsWith("chat_") ||
-        lowerId.startsWith("tab_") ||
-        lowerId.startsWith("gemini-3.5-")
-      ) continue;
+      if (!isDiscoverableModelId(normalizedId)) continue;
 
       const { family, quotaPool } = DynamicModelRegistry.inferFamilyAndPool(normalizedId);
       const familySpec = familyDefaults(family);
@@ -342,10 +352,12 @@ export class DynamicModelRegistry {
         displayName: info.displayName ?? previous?.get(lowerId)?.displayName ?? normalizedId,
       });
       this.discoveredModels.set(lowerId, { id: normalizedId, quotaPool });
+      this.ownershipScopedModels.add(lowerId);
       if (!knownBefore.has(lowerId)) newModelsCount++;
     }
 
     this.accountModels.set(key, next);
+    this.accountModelOwnership.set(key, new Set(next.keys()));
     return newModelsCount;
   }
 
@@ -374,6 +386,16 @@ export class DynamicModelRegistry {
         (previousGeneration !== undefined && previousGeneration !== nextGeneration)
       ) {
         this.accountModels.delete(key);
+      }
+    }
+    for (const key of this.accountModelOwnership.keys()) {
+      const nextGeneration = active.get(key)?.credentialGeneration;
+      const previousGeneration = previous?.get(key)?.credentialGeneration;
+      if (
+        !active.has(key) ||
+        (previousGeneration !== undefined && previousGeneration !== nextGeneration)
+      ) {
+        this.accountModelOwnership.delete(key);
       }
     }
     for (const key of this.defaultAgentModelIds.keys()) {
@@ -431,13 +453,13 @@ export class DynamicModelRegistry {
   }
 
   hasModelForAccount(accountId: string, id: string): boolean {
-    return this.accountModels
+    return this.accountModelOwnership
       .get(accountKey(accountId))
       ?.has(id.trim().toLowerCase()) ?? false;
   }
 
-  hasLiveCatalogSnapshot(): boolean {
-    return this.liveCatalogHydrated;
+  hasOwnershipForModel(id: string): boolean {
+    return this.ownershipScopedModels.has(id.trim().toLowerCase());
   }
 
   wasDiscovered(id: string): boolean {
@@ -457,6 +479,77 @@ export class DynamicModelRegistry {
     return pools;
   }
 
+  getPersistedModelOwnership(
+    accounts: Iterable<PersistedOwnershipAccount>,
+  ): PersistedDynamicModelOwnership {
+    const persistedAccounts = Object.create(null) as PersistedDynamicModelOwnership["accounts"];
+    for (const account of accounts) {
+      const id = accountKey(account.id);
+      const models = this.accountModelOwnership.get(id);
+      if (!models) continue;
+      persistedAccounts[id] = {
+        credentialGenerationFingerprint:
+          account.credentialGenerationFingerprint,
+        models: Array.from(models).sort(),
+      };
+    }
+    return {
+      scopedModels: Array.from(this.ownershipScopedModels).sort(),
+      accounts: persistedAccounts,
+    };
+  }
+
+  restorePersistedModelOwnership(
+    value: unknown,
+    accounts: Iterable<PersistedOwnershipAccount>,
+  ): void {
+    if (
+      !isRecord(value) ||
+      !Array.isArray(value.scopedModels) ||
+      !isRecord(value.accounts)
+    ) return;
+
+    const expectedGenerations = new Map(
+      Array.from(accounts, (account) => [
+        accountKey(account.id),
+        account.credentialGenerationFingerprint,
+      ]),
+    );
+    const scopedModels = new Set<string>();
+    for (const rawModel of value.scopedModels) {
+      if (typeof rawModel !== "string") continue;
+      const model = rawModel.trim().toLowerCase();
+      if (
+        isDiscoverableModelId(model) &&
+        this.discoveredModels.has(model)
+      ) scopedModels.add(model);
+    }
+
+    const restoredAccounts = new Map<string, Set<string>>();
+    for (const [rawAccountId, rawSnapshot] of Object.entries(value.accounts)) {
+      const accountId = accountKey(rawAccountId);
+      const expectedGeneration = expectedGenerations.get(accountId);
+      if (
+        !expectedGeneration ||
+        !isRecord(rawSnapshot) ||
+        rawSnapshot.credentialGenerationFingerprint !== expectedGeneration ||
+        !Array.isArray(rawSnapshot.models)
+      ) continue;
+      const models = new Set<string>();
+      for (const rawModel of rawSnapshot.models) {
+        if (typeof rawModel !== "string") continue;
+        const model = rawModel.trim().toLowerCase();
+        if (scopedModels.has(model)) models.add(model);
+      }
+      restoredAccounts.set(accountId, models);
+    }
+
+    for (const model of scopedModels) this.ownershipScopedModels.add(model);
+    for (const [accountId, models] of restoredAccounts) {
+      this.accountModelOwnership.set(accountId, models);
+    }
+  }
+
   restoreDiscoveredQuotaPools(value: unknown): void {
     if (!isRecord(value)) return;
     for (const [rawId, rawPool] of Object.entries(value)) {
@@ -465,7 +558,7 @@ export class DynamicModelRegistry {
         ? rawPool.trim().toLowerCase()
         : "";
       if (
-        !isSafeModelId(id) ||
+        !isDiscoverableModelId(id) ||
         (quotaPool !== "gemini" && quotaPool !== "claude")
       ) continue;
       this.discoveredModels.set(id.toLowerCase(), { id, quotaPool });

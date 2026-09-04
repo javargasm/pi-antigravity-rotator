@@ -91,6 +91,7 @@ import {
 import {
   getAccountIdentity,
   getCredentialGeneration,
+  getCredentialGenerationFingerprint,
   getProviderCredentialDetails,
 } from "./account-identity.js";
 
@@ -494,6 +495,16 @@ export class AccountRotator {
 
     try {
       dynamicCatalog.restoreDiscoveredQuotaPools(state.dynamicModelQuotaPools);
+      dynamicCatalog.restorePersistedModelOwnership(
+        state.dynamicModelOwnership,
+        this.accounts
+          .filter((account) => hasCredential(account.config, DEFAULT_PROVIDER))
+          .map((account) => ({
+            id: getAccountIdentity(account),
+            credentialGenerationFingerprint:
+              getCredentialGenerationFingerprint(account, DEFAULT_PROVIDER),
+          })),
+      );
       // Load per-model account assignments
       if (state.modelAccounts) {
         for (const [model, idx] of Object.entries(state.modelAccounts)) {
@@ -669,6 +680,21 @@ export class AccountRotator {
 
     const state: PersistedState = {
       dynamicModelQuotaPools: dynamicCatalog.getDiscoveredQuotaPools(),
+      dynamicModelOwnership: dynamicCatalog.getPersistedModelOwnership(
+        this.accounts
+          .filter(
+            (account) =>
+              !account.disabled &&
+              !account.flagged &&
+              !account.invalidProviders?.[DEFAULT_PROVIDER] &&
+              hasCredential(account.config, DEFAULT_PROVIDER),
+          )
+          .map((account) => ({
+            id: getAccountIdentity(account),
+            credentialGenerationFingerprint:
+              getCredentialGenerationFingerprint(account, DEFAULT_PROVIDER),
+          })),
+      ),
       modelAccounts,
       modelRequestCounts,
       modelStickyAccounts,
@@ -3556,8 +3582,7 @@ export class AccountRotator {
     const accountId = getAccountIdentity(account);
     if (
       !isStaticAntigravityModel(modelKey) &&
-      dynamicCatalog.wasDiscovered(modelKey) &&
-      dynamicCatalog.hasLiveCatalogSnapshot() &&
+      dynamicCatalog.hasOwnershipForModel(modelKey) &&
       !dynamicCatalog.hasModelForAccount(accountId, modelKey)
     ) {
       return false;

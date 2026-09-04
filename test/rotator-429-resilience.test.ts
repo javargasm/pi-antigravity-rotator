@@ -28,10 +28,13 @@ let AccountRotator: typeof import("../src/rotator.js").AccountRotator;
 let initDb: typeof import("../src/db-store.js").initDb;
 let closeDb: typeof import("../src/db-store.js").closeDb;
 let isDbConfigured: typeof import("../src/db-store.js").isDbConfigured;
+let getCachedState: typeof import("../src/db-store.js").getCachedState;
 let setCachedState: typeof import("../src/db-store.js").setCachedState;
 let getAccountsPath: typeof import("../src/paths.js").getAccountsPath;
 let getProviderAdapter: typeof import("../src/providers/registry.js").getProviderAdapter;
 let dynamicCatalog: typeof import("../src/providers/google-antigravity/dynamic-catalog.js").dynamicCatalog;
+let getAccountIdentity: typeof import("../src/rotator.js").getAccountIdentity;
+let getCredentialGeneration: typeof import("../src/rotator.js").getCredentialGeneration;
 type AccountRuntime = import("../src/types.js").AccountRuntime;
 
 before(async () => {
@@ -44,8 +47,11 @@ before(async () => {
   initDb = dbStore.initDb;
   closeDb = dbStore.closeDb;
   isDbConfigured = dbStore.isDbConfigured;
+  getCachedState = dbStore.getCachedState;
   setCachedState = dbStore.setCachedState;
   AccountRotator = rotatorMod.AccountRotator;
+  getAccountIdentity = rotatorMod.getAccountIdentity;
+  getCredentialGeneration = rotatorMod.getCredentialGeneration;
   getAccountsPath = pathsMod.getAccountsPath;
   getProviderAdapter = regMod.getProviderAdapter;
   dynamicCatalog = catalogMod.dynamicCatalog;
@@ -369,6 +375,144 @@ describe("429 RESOURCE_EXHAUSTED resilience and in-flight lifecycle", () => {
       secondRotator?.stopQuotaPolling();
       dynamicCatalog.reset();
       globalThis.fetch = originalFetch;
+      await setCachedState({ modelAccounts: {}, accounts: {} });
+    }
+  });
+
+  it("restores dynamic model ownership by complete account identity", async () => {
+    const modelA = "future-a-only";
+    const modelB = "future-b-only";
+    const sharedEmail = "restored-ownership@example.com";
+    const accounts = [
+      {
+        email: sharedEmail,
+        credentials: [{
+          provider: "google-antigravity" as const,
+          projectId: "restored-project-a",
+          refreshToken: "restored-secret-a",
+        }],
+      },
+      {
+        email: sharedEmail,
+        credentials: [{
+          provider: "google-antigravity" as const,
+          projectId: "restored-project-b",
+          refreshToken: "restored-secret-b",
+        }],
+      },
+    ];
+    const config = {
+      proxyPort: 51224,
+      rotateOnQuotaDrop: 20,
+      quotaPollIntervalMs: 300000,
+      requestsPerRotation: 5,
+      accounts,
+    };
+    let firstRotator: InstanceType<typeof AccountRotator> | undefined;
+    let secondRotator: InstanceType<typeof AccountRotator> | undefined;
+    let changedRotator: InstanceType<typeof AccountRotator> | undefined;
+
+    dynamicCatalog.reset();
+    await setCachedState({ modelAccounts: {}, accounts: {} });
+
+    try {
+      firstRotator = new AccountRotator(config);
+      firstRotator.stopQuotaPolling();
+      const firstAccounts = (firstRotator as any).accounts as AccountRuntime[];
+      const accountAId = getAccountIdentity(firstAccounts[0]);
+      const accountBId = getAccountIdentity(firstAccounts[1]);
+      assert.notEqual(accountAId, accountBId);
+
+      dynamicCatalog.updateFromEndpointResponse({
+        models: { [modelA]: { quotaInfo: { remainingFraction: 1 } } },
+      }, accountAId);
+      dynamicCatalog.updateFromEndpointResponse({
+        models: { [modelB]: { quotaInfo: { remainingFraction: 1 } } },
+      }, accountBId);
+      (firstRotator as any).modelState.set(modelA, {
+        activeAccountIndex: 1,
+        quotaAtRotationStart: -1,
+        requestsOnActiveAccount: 0,
+      });
+      (firstRotator as any).modelState.set(modelB, {
+        activeAccountIndex: 0,
+        quotaAtRotationStart: -1,
+        requestsOnActiveAccount: 0,
+      });
+      await firstRotator.saveState();
+      const persisted = getCachedState();
+
+      dynamicCatalog.reset();
+      secondRotator = new AccountRotator(config);
+      secondRotator.stopQuotaPolling();
+      const secondAccounts = (secondRotator as any).accounts as AccountRuntime[];
+      for (const [index, account] of secondAccounts.entries()) {
+        account.accessToken = `second-access-${index}`;
+        account.tokenExpires = Date.now() + 60_000;
+      }
+
+      const selectedA = await (secondRotator as any).tryGetActiveAccount(modelA);
+      assert.equal(selectedA, secondAccounts[0]);
+      secondRotator.finishRequest(selectedA, modelA);
+
+      const ownership = (persisted as any)?.dynamicModelOwnership;
+      assert.deepEqual(
+        Object.keys(ownership.accounts).sort(),
+        [accountAId, accountBId].sort(),
+      );
+      const serializedOwnership = JSON.stringify(ownership);
+      assert.equal(serializedOwnership.includes("restored-secret-a"), false);
+      assert.equal(serializedOwnership.includes("restored-secret-b"), false);
+
+      dynamicCatalog.updateFromEndpointResponse({
+        models: { [modelA]: { quotaInfo: { remainingFraction: 1 } } },
+      }, accountAId, getCredentialGeneration(secondAccounts[0], "google-antigravity"));
+      const selectedB = await (secondRotator as any).tryGetActiveAccount(modelB);
+      assert.equal(selectedB, secondAccounts[1]);
+      secondRotator.finishRequest(selectedB, modelB);
+
+      dynamicCatalog.updateFromEndpointResponse(
+        { models: {} },
+        accountAId,
+        getCredentialGeneration(secondAccounts[0], "google-antigravity"),
+      );
+      assert.equal(
+        await (secondRotator as any).tryGetActiveAccount(modelA),
+        null,
+      );
+
+      dynamicCatalog.reset();
+      changedRotator = new AccountRotator({
+        ...config,
+        accounts: [
+          {
+            ...accounts[0],
+            credentials: [{
+              ...accounts[0].credentials[0],
+              refreshToken: "replacement-secret-a",
+            }],
+          },
+          accounts[1],
+        ],
+      });
+      changedRotator.stopQuotaPolling();
+      const changedAccounts = (changedRotator as any).accounts as AccountRuntime[];
+      for (const [index, account] of changedAccounts.entries()) {
+        account.accessToken = `changed-access-${index}`;
+        account.tokenExpires = Date.now() + 60_000;
+      }
+      assert.equal(
+        await (changedRotator as any).tryGetActiveAccount(modelA),
+        null,
+      );
+      const unchangedB = await (changedRotator as any).tryGetActiveAccount(modelB);
+      assert.equal(unchangedB, changedAccounts[1]);
+      changedRotator.finishRequest(unchangedB, modelB);
+    } finally {
+      firstRotator?.stopQuotaPolling();
+      secondRotator?.stopQuotaPolling();
+      changedRotator?.stopQuotaPolling();
+      dynamicCatalog.reset();
       await setCachedState({ modelAccounts: {}, accounts: {} });
     }
   });

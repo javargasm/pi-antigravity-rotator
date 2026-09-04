@@ -84,3 +84,13 @@ export function getCredentialGeneration(
   if (!cred && !details.secret) return "none";
   return `${providerId}:${details.projectId}:${details.providerAccountId}:${details.secret}`;
 }
+
+/** Persist a credential revision without exposing its raw secret. */
+export function getCredentialGenerationFingerprint(
+  account: AccountRuntime | AccountConfig,
+  providerId: string,
+): string {
+  return createHash("sha256")
+    .update(getCredentialGeneration(account, providerId))
+    .digest("hex");
+}

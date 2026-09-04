@@ -455,9 +455,22 @@ export interface PersistedSafetyState {
   }>;
 }
 
+export interface PersistedDynamicModelOwnership {
+  scopedModels: string[];
+  accounts: Record<
+    string,
+    {
+      credentialGenerationFingerprint: string;
+      models: string[];
+    }
+  >;
+}
+
 export interface PersistedState {
   // Historical dynamic model IDs mapped to their shared quota pools.
   dynamicModelQuotaPools?: Record<string, string>;
+  // Exact account ownership for dynamically discovered model IDs.
+  dynamicModelOwnership?: PersistedDynamicModelOwnership;
   // Per-model active account index
   modelAccounts: Record<string, number>;
   // Per-model request count on the active account
