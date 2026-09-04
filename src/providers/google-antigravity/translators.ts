@@ -1,5 +1,5 @@
 import { logger, redactSensitive } from "../../logger.js";
-import { applyModelAlias } from "../../types.js";
+import { applyModelAlias, getEffortRouting } from "../../types.js";
 import type { RequestBody } from "../../proxy.js";
 import {
   isRecord,
@@ -910,9 +910,32 @@ export function mapTieredReasoningEffortToThinkingLevel(
   }
 }
 
+export function resolveEffortAliasModel(
+  requestedModel: string,
+  effort: unknown,
+): string | null {
+  const rules = getEffortRouting();
+  if (!rules) return null;
+  const rule = rules[requestedModel.trim().toLowerCase()];
+  if (!rule) return null;
+  const key = typeof effort === "string" ? effort.trim().toLowerCase() : "";
+  if (key && rule.targets[key]) return rule.targets[key];
+  if (key && !rule.targets[key]) {
+    compatLogger.debug(
+      `Unrecognized effort "${key}" for alias "${requestedModel}", falling back to default`,
+    );
+  }
+  return rule.targets[rule.defaultEffort ?? "medium"];
+}
+
 export function openAIToAntigravityBody(
   input: OpenAIChatCompletionRequest,
 ): RequestBody {
+  const requestedModel = input.model;
+  const effortTarget =
+    resolveEffortAliasModel(requestedModel, input.reasoning_effort) ??
+    requestedModel;
+
   const systemParts: string[] = [];
   const conversationMessages = input.messages.filter((msg) => {
     if (msg.role === "system" || msg.role === "developer") {
@@ -926,8 +949,8 @@ export function openAIToAntigravityBody(
     return true;
   });
 
-  const isClaude = /^claude-/i.test(input.model);
-  const isThinking = isThinkingModel(input.model);
+  const isClaude = /^claude-/i.test(effortTarget);
+  const isThinking = isThinkingModel(effortTarget);
   const isGeminiThinking = !isClaude && isThinking;
 
   const contents: GeminiContent[] = [];
@@ -1206,13 +1229,13 @@ export function openAIToAntigravityBody(
       ? convertToolChoiceToGemini(input.tool_choice)
       : undefined;
 
-  const modelSpec = getModelSpec(input.model);
-  const modelFamily = getModelFamily(input.model);
+  const modelSpec = getModelSpec(effortTarget);
+  const modelFamily = getModelFamily(effortTarget);
   let maxOutputTokens =
     typeof input.max_tokens === "number" ? input.max_tokens : undefined;
   if (maxOutputTokens && maxOutputTokens > modelSpec.maxOutputTokens) {
     compatLogger.debug(
-      `Capping ${input.model} maxOutputTokens ${maxOutputTokens} → ${modelSpec.maxOutputTokens}`,
+      `Capping ${effortTarget} maxOutputTokens ${maxOutputTokens} → ${modelSpec.maxOutputTokens}`,
     );
     maxOutputTokens = modelSpec.maxOutputTokens;
   }
@@ -1247,7 +1270,7 @@ export function openAIToAntigravityBody(
       tb === -1
         ? mapTieredReasoningEffortToThinkingLevel(
             input.reasoning_effort,
-            input.model,
+            effortTarget,
           )
         : undefined;
     if (tieredThinkingLevel) {
@@ -1324,12 +1347,12 @@ export function openAIToAntigravityBody(
   if (geminiTools.length > 0) request.tools = geminiTools;
   if (geminiToolConfig) request.toolConfig = geminiToolConfig;
 
-  const mappedModel = applyModelAlias(input.model);
+  const mappedModel = applyModelAlias(effortTarget);
 
   return {
     project: "compat-placeholder",
     model: mappedModel,
-    displayModel: input.model,
+    displayModel: requestedModel,
     userAgent: "antigravity",
     requestType: "agent",
     request,

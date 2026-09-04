@@ -19,5 +19,15 @@
       "label": "Account 2",
       "type": "pro"
     }
-  ]
+  ],
+  "effortRouting": {
+    "gemini-3.8-flash": {
+      "defaultEffort": "medium",
+      "targets": {
+        "low": "gemini-3.8-flash-low",
+        "medium": "gemini-3.8-flash-medium",
+        "high": "gemini-3.8-flash-high"
+      }
+    }
+  }
 }

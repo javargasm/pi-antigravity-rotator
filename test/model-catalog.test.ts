@@ -1,8 +1,9 @@
-import { describe, it } from "node:test";
+import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { serveGeminiModels, serveOpenAIModels } from "../src/compat.js";
 import { getModelSpec, setModelSpecsOverride } from "../src/compat/model-specs.js";
 import { dynamicCatalog } from "../src/providers/google-antigravity/dynamic-catalog.js";
+import { setEffortRoutingOverride } from "../src/types.js";
 
 function captureJson(render: (res: never) => void): unknown {
 	let raw = "";
@@ -294,5 +295,135 @@ describe("model discovery", () => {
 				contextWindow: 1_000_000,
 			});
 		}
+	});
+});
+
+describe("effort routing catalog swap", () => {
+	afterEach(() => {
+		setEffortRoutingOverride(null);
+		dynamicCatalog.reset();
+	});
+
+	it("swaps targets for alias in /v1/models and /v1beta/models when configured", () => {
+		setEffortRoutingOverride({
+			"gemini-3.8-flash": {
+				defaultEffort: "medium",
+				targets: {
+					low: "gemini-3.8-flash-low",
+					medium: "gemini-3.8-flash-medium",
+					high: "gemini-3.8-flash-high",
+				},
+			},
+		});
+
+		// /v1/models
+		const openAiPayload = captureJson(serveOpenAIModels) as {
+			data: Array<{
+				id: string;
+				owned_by: string;
+				context_window: number;
+				meta: Record<string, unknown>;
+			}>;
+		};
+
+		// Alias is present
+		const aliasEntries = openAiPayload.data.filter((m) => m.id === "gemini-3.8-flash");
+		assert.equal(aliasEntries.length, 1);
+		assert.equal(aliasEntries[0].owned_by, "tuxevil-rotator");
+		assert.equal(aliasEntries[0].context_window, 1048576);
+		assert.equal(aliasEntries[0].meta.family, "gemini-3.8-flash");
+		assert.equal(aliasEntries[0].meta.quota_pool, "gemini");
+
+		// Configured targets are hidden
+		for (const target of ["gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high"]) {
+			assert.ok(!openAiPayload.data.some((m) => m.id === target), `Target ${target} should be hidden`);
+		}
+
+		// /v1beta/models (serveGeminiModels)
+		const geminiPayload = captureJson(serveGeminiModels) as {
+			models: Array<{ name: string; baseModelId: string; inputTokenLimit: number }>;
+		};
+		const geminiAliasEntries = geminiPayload.models.filter(
+			(m) => m.name === "models/gemini-3.8-flash",
+		);
+		assert.equal(geminiAliasEntries.length, 1);
+		assert.equal(geminiAliasEntries[0].baseModelId, "gemini-3.8-flash");
+
+		for (const target of ["gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high"]) {
+			assert.ok(!geminiPayload.models.some((m) => m.name === `models/${target}`));
+		}
+	});
+
+	it("keeps unmapped variants visible when only partial targets are configured", () => {
+		setEffortRoutingOverride({
+			"gemini-3.8-flash": {
+				defaultEffort: "high",
+				targets: {
+					low: "gemini-3.8-flash-low",
+					high: "gemini-3.8-flash-high",
+				},
+			},
+		});
+
+		const openAiPayload = captureJson(serveOpenAIModels) as {
+			data: Array<{ id: string }>;
+		};
+
+		// Alias present
+		assert.ok(openAiPayload.data.some((m) => m.id === "gemini-3.8-flash"));
+		// Configured targets hidden
+		assert.ok(!openAiPayload.data.some((m) => m.id === "gemini-3.8-flash-low"));
+		assert.ok(!openAiPayload.data.some((m) => m.id === "gemini-3.8-flash-high"));
+		// Non-target variant remains visible!
+		assert.ok(openAiPayload.data.some((m) => m.id === "gemini-3.8-flash-medium"));
+	});
+
+	it("fails soft when default target is absent (alias not added, targets not hidden)", () => {
+		setEffortRoutingOverride({
+			"my-custom-alias": {
+				defaultEffort: "medium",
+				targets: {
+					medium: "nonexistent-model-id",
+					low: "gemini-3.8-flash-low",
+				},
+			},
+		});
+
+		const openAiPayload = captureJson(serveOpenAIModels) as {
+			data: Array<{ id: string }>;
+		};
+
+		// Alias NOT added
+		assert.ok(!openAiPayload.data.some((m) => m.id === "my-custom-alias"));
+		// Targets NOT hidden
+		assert.ok(openAiPayload.data.some((m) => m.id === "gemini-3.8-flash-low"));
+	});
+
+	it("hides dynamically discovered targets as well", () => {
+		dynamicCatalog.updateFromEndpointResponse({
+			models: {
+				"gemini-3.8-flash-dynamic-target": {
+					quotaInfo: { remainingFraction: 1 },
+					displayName: "Gemini 3.8 Flash Dynamic",
+				},
+			},
+		});
+
+		setEffortRoutingOverride({
+			"gemini-3.8-flash": {
+				defaultEffort: "medium",
+				targets: {
+					medium: "gemini-3.8-flash-medium",
+					custom: "gemini-3.8-flash-dynamic-target",
+				},
+			},
+		});
+
+		const openAiPayload = captureJson(serveOpenAIModels) as {
+			data: Array<{ id: string }>;
+		};
+
+		assert.ok(openAiPayload.data.some((m) => m.id === "gemini-3.8-flash"));
+		assert.ok(!openAiPayload.data.some((m) => m.id === "gemini-3.8-flash-dynamic-target"));
 	});
 });

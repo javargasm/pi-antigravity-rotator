@@ -1,10 +1,13 @@
 import {
 	MAX_QUOTA_POLL_INTERVAL_MS,
 	MIN_QUOTA_POLL_INTERVAL_MS,
+	MODEL_TIER_ACCESS,
 	type AccountConfig,
 	type Config,
 } from "./types.js";
 import { getProxyConfigurationError } from "./providers/proxy-dispatcher.js";
+import { isCodexRequestModel } from "./providers/openai-codex/catalog.js";
+import { isOpenCodeZenModel } from "./providers/opencode-zen/catalog.js";
 
 export interface ValidationResult<T> {
 	ok: boolean;
@@ -38,6 +41,15 @@ function isNonNegativeNumber(value: unknown): value is number {
 
 function isNonNegativeInteger(value: unknown): value is number {
 	return isNonNegativeNumber(value) && Number.isInteger(value);
+}
+
+function isKnownNonGoogleModel(model: string): boolean {
+	const trimmed = model.trim();
+	if (!trimmed) return false;
+	const lower = trimmed.toLowerCase();
+	if (isCodexRequestModel(trimmed)) return true;
+	if (isOpenCodeZenModel(trimmed) || isOpenCodeZenModel(lower)) return true;
+	return Object.keys(MODEL_TIER_ACCESS).some((k) => k.toLowerCase() === lower);
 }
 
 export function validateAccountConfig(value: unknown, path = "account"): ValidationResult<AccountConfig> {
@@ -196,6 +208,98 @@ export function validateConfig(value: unknown): ValidationResult<Config> {
 				}
 				if (typeof to !== "string" || to.length === 0) {
 					errors.push(`config.modelAliases.${from} must be a non-empty string`);
+				}
+			}
+		}
+	}
+	if (value.effortRouting !== undefined && value.effortRouting !== null) {
+		if (!isRecord(value.effortRouting)) {
+			errors.push("config.effortRouting must be an object or null when provided");
+		} else {
+			const seenAliasKeys = new Map<string, string>();
+			for (const rawAlias of Object.keys(value.effortRouting)) {
+				if (typeof rawAlias !== "string" || rawAlias.trim().length === 0) {
+					errors.push("config.effortRouting keys must be non-empty strings");
+					continue;
+				}
+				const lowerAlias = rawAlias.trim().toLowerCase();
+				const prev = seenAliasKeys.get(lowerAlias);
+				if (prev !== undefined) {
+					errors.push(`config.effortRouting keys collide case-insensitively: "${prev}" / "${rawAlias}"`);
+				} else {
+					seenAliasKeys.set(lowerAlias, rawAlias);
+				}
+			}
+
+			const modelAliasesRecord = isRecord(value.modelAliases) ? value.modelAliases : null;
+
+			for (const [rawAlias, rule] of Object.entries(value.effortRouting)) {
+				if (typeof rawAlias !== "string" || rawAlias.trim().length === 0) {
+					continue;
+				}
+				const lowerAlias = rawAlias.trim().toLowerCase();
+
+				if (isKnownNonGoogleModel(rawAlias)) {
+					errors.push(`config.effortRouting.${rawAlias} collides with non-Antigravity model "${rawAlias}"`);
+				}
+
+				if (modelAliasesRecord) {
+					for (const maKey of Object.keys(modelAliasesRecord)) {
+						if (maKey.trim().toLowerCase() === lowerAlias) {
+							errors.push(`config.effortRouting.${rawAlias} conflicts with config.modelAliases entry of the same name`);
+							break;
+						}
+					}
+				}
+
+				if (!isRecord(rule)) {
+					errors.push(`config.effortRouting.${rawAlias} must be an object`);
+					continue;
+				}
+
+				if (rule.defaultEffort !== undefined && typeof rule.defaultEffort !== "string") {
+					errors.push(`config.effortRouting.${rawAlias}.defaultEffort must be a string when provided`);
+				}
+
+				if (!("targets" in rule) || !isRecord(rule.targets)) {
+					errors.push(`config.effortRouting.${rawAlias}.targets must be an object`);
+					continue;
+				}
+
+				const seenEffortKeys = new Map<string, string>();
+				for (const [rawEffort, targetValue] of Object.entries(rule.targets)) {
+					if (typeof rawEffort !== "string" || rawEffort.trim().length === 0) {
+						errors.push(`config.effortRouting.${rawAlias}.targets keys must be non-empty strings`);
+					} else {
+						const lowerEffort = rawEffort.trim().toLowerCase();
+						const prevEffort = seenEffortKeys.get(lowerEffort);
+						if (prevEffort !== undefined) {
+							errors.push(`config.effortRouting.${rawAlias}.targets keys collide case-insensitively: "${prevEffort}" / "${rawEffort}"`);
+						} else {
+							seenEffortKeys.set(lowerEffort, rawEffort);
+						}
+					}
+
+					if (typeof targetValue !== "string" || targetValue.trim().length === 0) {
+						errors.push(`config.effortRouting.${rawAlias}.targets.${rawEffort} must be a non-empty string`);
+					} else {
+						if (seenAliasKeys.has(targetValue.trim().toLowerCase())) {
+							errors.push(`config.effortRouting.${rawAlias}.targets.${rawEffort} chains into effort-routing alias "${targetValue}" (not supported)`);
+						}
+						if (isKnownNonGoogleModel(targetValue)) {
+							errors.push(`config.effortRouting.${rawAlias} collides with non-Antigravity model "${targetValue}"`);
+						}
+					}
+				}
+
+				if (rule.defaultEffort === undefined || typeof rule.defaultEffort === "string") {
+					const effectiveDefault = rule.defaultEffort !== undefined ? rule.defaultEffort : "medium";
+					const hasEffectiveDefault = Object.keys(rule.targets).some(
+						(k) => k.trim().toLowerCase() === effectiveDefault.trim().toLowerCase(),
+					);
+					if (!hasEffectiveDefault) {
+						errors.push(`config.effortRouting.${rawAlias} default effort "${effectiveDefault}" has no matching target`);
+					}
 				}
 			}
 		}

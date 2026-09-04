@@ -10,6 +10,7 @@ import {
 } from "../src/providers/google-antigravity/translators.js";
 import { setModelSpecsOverride } from "../src/compat/model-specs.js";
 import { dynamicCatalog } from "../src/providers/google-antigravity/dynamic-catalog.js";
+import { setEffortRoutingOverride, setModelAliasesOverride } from "../src/types.js";
 
 type AntigravityBodyWithRequest = ReturnType<typeof openAIToAntigravityBody> & {
 	request: {
@@ -413,5 +414,137 @@ describe("dynamic thinking constraints", () => {
 		const budget = generation.thinkingConfig?.thinkingBudget as number;
 		assert.ok(Number.isFinite(budget) && budget > 0);
 		assert.ok(budget < generation.maxOutputTokens!);
+	});
+});
+
+describe("effort-based routing in openAIToAntigravityBody", () => {
+	afterEach(() => {
+		setEffortRoutingOverride(null);
+		setModelAliasesOverride(null);
+		setModelSpecsOverride(null);
+	});
+
+	it("routes alias + effort to upstream model with displayModel = alias and adaptive thinking", () => {
+		setEffortRoutingOverride({
+			"gemini-3.8-flash": {
+				defaultEffort: "medium",
+				targets: {
+					low: "gemini-3.8-flash-low",
+					medium: "gemini-3.8-flash-medium",
+					high: "gemini-3.8-flash-high",
+				},
+			},
+		});
+
+		const body = openAIToAntigravityBody({
+			model: "gemini-3.8-flash",
+			messages: [{ role: "user", content: "ping" }],
+			reasoning_effort: "high",
+		}) as AntigravityBodyWithRequest;
+
+		assert.equal(body.model, "gemini-3.8-flash-high");
+		assert.equal(body.displayModel, "gemini-3.8-flash");
+		assert.deepEqual(body.request.generationConfig?.thinkingConfig, {
+			includeThoughts: true,
+		});
+	});
+
+	it("keeps explicit suffixed ID unchanged even with conflicting reasoning_effort", () => {
+		setEffortRoutingOverride({
+			"gemini-3.8-flash": {
+				defaultEffort: "medium",
+				targets: {
+					low: "gemini-3.8-flash-low",
+					medium: "gemini-3.8-flash-medium",
+					high: "gemini-3.8-flash-high",
+				},
+			},
+		});
+
+		const body = openAIToAntigravityBody({
+			model: "gemini-3.8-flash-low",
+			messages: [{ role: "user", content: "ping" }],
+			reasoning_effort: "high",
+		}) as AntigravityBodyWithRequest;
+
+		assert.equal(body.model, "gemini-3.8-flash-low");
+		assert.equal(body.displayModel, "gemini-3.8-flash-low");
+	});
+
+	it("modelSpecs override still wins on the resolved target", () => {
+		setEffortRoutingOverride({
+			"gemini-3.8-flash": {
+				defaultEffort: "medium",
+				targets: {
+					low: "gemini-3.8-flash-low",
+					high: "gemini-3.8-flash-high",
+				},
+			},
+		});
+		setModelSpecsOverride({
+			"gemini-3.8-flash-high": {
+				maxOutputTokens: 4096,
+				thinkingBudget: 2048,
+				isThinking: true,
+			},
+		});
+
+		const body = openAIToAntigravityBody({
+			model: "gemini-3.8-flash",
+			messages: [{ role: "user", content: "ping" }],
+			reasoning_effort: "high",
+		}) as AntigravityBodyWithRequest;
+
+		assert.equal(body.model, "gemini-3.8-flash-high");
+		assert.equal(body.displayModel, "gemini-3.8-flash");
+		assert.deepEqual(body.request.generationConfig?.thinkingConfig, {
+			includeThoughts: true,
+			thinkingBudget: 2048,
+		});
+		assert.equal(body.request.generationConfig?.maxOutputTokens, 4096);
+	});
+
+	it("remaps configured target via operator modelAliases", () => {
+		setEffortRoutingOverride({
+			"gemini-3.8-flash": {
+				defaultEffort: "medium",
+				targets: {
+					medium: "gemini-3.8-flash-medium",
+					high: "gemini-3.8-flash-high",
+				},
+			},
+		});
+		setModelAliasesOverride({
+			"gemini-3.8-flash-high": "gemini-custom-upstream",
+		});
+
+		const body = openAIToAntigravityBody({
+			model: "gemini-3.8-flash",
+			messages: [{ role: "user", content: "ping" }],
+			reasoning_effort: "high",
+		}) as AntigravityBodyWithRequest;
+
+		assert.equal(body.model, "gemini-custom-upstream");
+		assert.equal(body.displayModel, "gemini-3.8-flash");
+	});
+
+	it("guarantees input.model is not mutated after openAIToAntigravityBody", () => {
+		setEffortRoutingOverride({
+			"gemini-3.8-flash": {
+				defaultEffort: "medium",
+				targets: {
+					high: "gemini-3.8-flash-high",
+				},
+			},
+		});
+
+		const req = {
+			model: "gemini-3.8-flash",
+			messages: [{ role: "user" as const, content: "ping" }],
+			reasoning_effort: "high",
+		};
+
+		openAIToAntigravityBody(req);
+		assert.equal(req.model, "gemini-3.8-flash");
 	});
 });

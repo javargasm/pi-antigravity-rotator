@@ -19,7 +19,7 @@ import {
   loadResponsesStore,
   flushResponsesStore,
 } from "./compat.js";
-import { setModelAliasesOverride } from "./types.js";
+import { setModelAliasesOverride, setEffortRoutingOverride } from "./types.js";
 import { readTextFile, writeTextFileAtomic } from "./storage.js";
 import { initDb, isDbConfigured } from "./db-store.js";
 import { runKeyMigrations } from "./key-migrations.js";
@@ -211,6 +211,7 @@ export async function main(): Promise<void> {
   warnIfInsecureTelemetryEndpoint();
   setModelSpecsOverride(config.modelSpecs ?? null);
   setModelAliasesOverride(config.modelAliases ?? null);
+  setEffortRoutingOverride(config.effortRouting ?? null);
   void loadResponsesStore();
 
   const rotator = new AccountRotator(config);

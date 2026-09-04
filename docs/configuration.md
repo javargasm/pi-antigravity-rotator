@@ -261,3 +261,32 @@ Remap model names to upstream model names via `modelAliases` in `accounts.json`:
   }
 }
 ```
+
+## Effort-Based Model Routing
+
+Route a client-facing alias model (such as `gemini-3.8-flash`) to concrete Antigravity target models based on the request's `reasoning_effort` via `effortRouting` in `accounts.json`:
+
+```json
+{
+  "effortRouting": {
+    "gemini-3.8-flash": {
+      "defaultEffort": "medium",
+      "targets": {
+        "low": "gemini-3.8-flash-low",
+        "medium": "gemini-3.8-flash-medium",
+        "high": "gemini-3.8-flash-high"
+      }
+    }
+  }
+}
+```
+
+### Matching and Default Semantics
+
+- **Opt-in**: if `effortRouting` is absent, `null`, or `{}`, no effort routing occurs and models behave as standard.
+- **Alias matching**: client request models match configured aliases case-insensitively.
+- **Effort selection**: requests with a recognized effort value (matched case-insensitively against `targets` keys) dispatch to the mapped concrete target. Requests without effort, with empty/unrecognized effort, or from surfaces that do not pass effort (such as `/v1/messages`) route to `defaultEffort` (defaults to `"medium"` if omitted). The effective default effort must exist in `targets`.
+- **Precedence**: `effortRouting` takes precedence for its configured alias names. After effort resolution to a concrete target, operator `modelAliases` and `modelSpecs` overrides continue to apply to that resolved target. An alias name cannot be defined in both `modelAliases` and `effortRouting` simultaneously. Chaining (an effort routing target equaling another effort routing alias) is not supported.
+- **Non-Google provider collision constraint**: aliases and targets must be Google Antigravity-dispatchable models. Statically known Codex, OpenCode Zen, or Ollama catalog IDs may not be used as effort-routing aliases or targets.
+- **Catalog visibility**: when configured, `/v1/models` and `/v1beta/models` advertise the alias and soft-hide its configured concrete targets. The alias inherits catalog metadata from its default effort target. Direct requests to concrete targets remain functional.
+- **Virtual key scoping**: virtual key authorization runs on the raw request model pre-translation. A virtual key scoped to `gemini-3.8-flash` authorizes the bare alias and all suffixed concrete variants (via substring matching). A key scoped specifically to a concrete variant (e.g. `gemini-3.8-flash-high`) will reject requests specifying the bare alias. Note that once an alias is configured, the dashboard picker hides concrete targets—virtual keys scoped to concrete targets can be created or updated via the API.

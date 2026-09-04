@@ -149,6 +149,16 @@ export interface Config {
   // (e.g. "gemini-3.1-pro-high") to the upstream Antigravity name
   // (e.g. "gemini-pro-agent"). When set, replaces the bundled defaults.
   modelAliases?: Record<string, string>;
+  // Config-driven alias routing based on reasoning_effort.
+  // Absent, null, or empty object = disabled.
+  effortRouting?: Record<string, EffortRoutingRule> | null;
+}
+
+export interface EffortRoutingRule {
+  /** Effort key used when the request carries no recognizable effort. Defaults to "medium". */
+  defaultEffort?: string;
+  /** Effort key (lowercase) -> concrete Antigravity model ID. */
+  targets: Record<string, string>;
 }
 
 export const DEFAULT_QUOTA_POLL_INTERVAL_MS = 300_000;
@@ -164,6 +174,7 @@ const DEFAULT_MODEL_ALIASES: Record<string, string> = {
   "gpt-oss-120b": "gpt-oss-120b-medium",
 };
 let modelAliasesOverride: Record<string, string> | null = null;
+let effortRoutingOverride: Record<string, EffortRoutingRule> | null = null;
 
 /**
  * Replace the bundled model-alias table with operator-provided overrides.
@@ -178,6 +189,38 @@ export function setModelAliasesOverride(
 ): void {
   modelAliasesOverride =
     aliases && Object.keys(aliases).length > 0 ? aliases : null;
+}
+
+/**
+ * Configure effort-based model routing rules. Pass `null` or undefined or an
+ * empty object to disable effort routing.
+ */
+export function setEffortRoutingOverride(
+  rules: Record<string, EffortRoutingRule> | null | undefined,
+): void {
+  if (!rules || Object.keys(rules).length === 0) {
+    effortRoutingOverride = null;
+    return;
+  }
+  const normalized: Record<string, EffortRoutingRule> = {};
+  for (const [rawAlias, rule] of Object.entries(rules)) {
+    const alias = rawAlias.trim().toLowerCase();
+    const defaultEffort = rule.defaultEffort?.trim().toLowerCase() || "medium";
+    const targets: Record<string, string> = {};
+    for (const [effortKey, targetValue] of Object.entries(rule.targets ?? {})) {
+      targets[effortKey.trim().toLowerCase()] =
+        typeof targetValue === "string" ? targetValue.trim() : targetValue;
+    }
+    normalized[alias] = {
+      defaultEffort,
+      targets,
+    };
+  }
+  effortRoutingOverride = normalized;
+}
+
+export function getEffortRouting(): Record<string, EffortRoutingRule> | null {
+  return effortRoutingOverride;
 }
 
 function getActiveModelAliases(): Record<string, string> {
@@ -332,7 +375,18 @@ export function resolveQuotaModelKey(requestModel: string): string | null {
  * - gemini-3.1-pro-low vs gemini-3.1-pro-high (same quota pool, different display)
  * - claude-sonnet-4-6 vs claude-opus-4-6-thinking (different pricing)
  */
-export function resolveDisplayModelKey(requestModel: string): string {
+export function resolveDisplayModelKey(
+  requestModel: string,
+  effectiveModel?: string,
+): string {
+  if (
+    effectiveModel &&
+    effectiveModel !== requestModel &&
+    effortRoutingOverride &&
+    effortRoutingOverride[requestModel.trim().toLowerCase()]
+  ) {
+    return resolveDisplayModelKey(effectiveModel);
+  }
   const lower = requestModel.toLowerCase();
   // Explicit agent and gpt-oss overrides
   if (lower.includes("gemini-3-flash-agent")) return "gemini-3-flash";
