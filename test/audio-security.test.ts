@@ -97,9 +97,18 @@ function connectFrame(message: unknown, flag = 0): Buffer {
   return frame;
 }
 
-function mockLanguageServer(
-  mode: "success" | "failure" | "pending" | "eof-before-ready" | "flag2-error-null" = "success",
-): {
+type LanguageServerMode =
+  | "success"
+  | "failure"
+  | "pending"
+  | "eof-before-ready"
+  | "flag2-error-object"
+  | "flag2-error-null"
+  | "flag2-error-false"
+  | "flag2-error-malformed"
+  | "flag2-success";
+
+function mockLanguageServer(mode: LanguageServerMode = "success"): {
   requests: FakeRequest[];
   restore: () => void;
 } {
@@ -122,8 +131,20 @@ function mockLanguageServer(
           const sessionId = `audio-session-${++sessionNumber}`;
           queueMicrotask(() => {
             response.emit("data", connectFrame({ ready: { sessionId } }));
-            if (mode === "flag2-error-null") {
-              response.emit("data", connectFrame({ error: null }, 2));
+            const endStreamMessage =
+              mode === "flag2-error-object"
+                ? { error: { code: "internal", message: "upstream failed" } }
+                : mode === "flag2-error-null"
+                  ? { error: null }
+                  : mode === "flag2-error-false"
+                    ? { error: false }
+                    : mode === "flag2-error-malformed"
+                      ? { error: {} }
+                      : mode === "flag2-success"
+                        ? {}
+                        : null;
+            if (endStreamMessage !== null) {
+              response.emit("data", connectFrame(endStreamMessage, 2));
               return;
             }
             response.emit("data", connectFrame({ transcription: { text: "hello", isFinal: true } }));
@@ -518,6 +539,113 @@ describe("audio WebSocket security boundary", () => {
       assert.equal(messages.some((message) => message.type === "antigravity_error"), true);
       assert.equal(messages.some((message) => message.type === "ready_to_receive_audio"), false);
       assert.equal(languageServer.requests[0]?.destroyed, true);
+    } finally {
+      ws.close();
+      languageServer.restore();
+      await closeServer(server);
+    }
+  });
+
+  for (const testCase of [
+    {
+      label: "an upstream error object",
+      mode: "flag2-error-object",
+      expectedMessage: /upstream failed/,
+    },
+    {
+      label: "a present null error",
+      mode: "flag2-error-null",
+      expectedMessage: /invalid error envelope/,
+    },
+    {
+      label: "a present false error",
+      mode: "flag2-error-false",
+      expectedMessage: /invalid error envelope/,
+    },
+    {
+      label: "a malformed error object",
+      mode: "flag2-error-malformed",
+      expectedMessage: /invalid error envelope/,
+    },
+  ] as const) {
+    it(`terminalizes a live session for ${testCase.label} and logs one failed spend`, async () => {
+      const rawKey = `rk-ws-connect-${testCase.mode}`;
+      const tokenHash = addVirtualKey(rawKey, ["*"]);
+      const languageServer = mockLanguageServer(testCase.mode);
+      const { server, port } = await listenServer((_req, res) => res.end());
+      installUpgradeHandler(server);
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?key=${rawKey}`);
+      const messages: Array<Record<string, unknown>> = [];
+      ws.onmessage = (event) =>
+        messages.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+
+      try {
+        await waitForWebSocketEvent(ws, "open");
+        const error = waitForWebSocketMessage(
+          ws,
+          (message) => message.type === "antigravity_error",
+        );
+        const close = waitForWebSocketEvent<CloseEvent>(ws, "close");
+        void close.catch(() => {});
+        ws.send(JSON.stringify({ type: "start", model: "models/proactive-observer-v10" }));
+
+        const errorMessage = await error;
+        assert.match(String(errorMessage.message), testCase.expectedMessage);
+        assert.equal((await close).code, 1011);
+        assert.equal(
+          messages.filter((message) => message.type === "antigravity_error").length,
+          1,
+        );
+        assert.equal(messages.some((message) => message.type === "antigravity_complete"), false);
+        assert.equal(languageServer.requests[0]?.destroyed, true);
+        assert.deepEqual(
+          spendLogger.getSpendQueueItemsForTests().map((entry) => ({
+            apiKeyHash: entry.apiKeyHash,
+            status: entry.status,
+          })),
+          [{ apiKeyHash: tokenHash, status: "failure" }],
+        );
+      } finally {
+        ws.close();
+        languageServer.restore();
+        await closeServer(server);
+      }
+    });
+  }
+
+  it("accepts a live Connect end-stream envelope when error is omitted", async () => {
+    const rawKey = "rk-ws-connect-success";
+    const tokenHash = addVirtualKey(rawKey, ["*"]);
+    const languageServer = mockLanguageServer("flag2-success");
+    const { server, port } = await listenServer((_req, res) => res.end());
+    installUpgradeHandler(server);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?key=${rawKey}`);
+    const messages: Array<Record<string, unknown>> = [];
+    ws.onmessage = (event) =>
+      messages.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+
+    try {
+      await waitForWebSocketEvent(ws, "open");
+      const complete = waitForWebSocketMessage(
+        ws,
+        (message) => message.type === "antigravity_complete",
+      );
+      const ready = waitForWebSocketMessage(
+        ws,
+        (message) => message.type === "ready_to_receive_audio",
+      );
+      ws.send(JSON.stringify({ type: "start", model: "models/proactive-observer-v10" }));
+      await Promise.all([complete, ready]);
+
+      assert.equal(messages.some((message) => message.type === "antigravity_error"), false);
+      assert.equal(languageServer.requests[0]?.destroyed, false);
+      assert.deepEqual(
+        spendLogger.getSpendQueueItemsForTests().map((entry) => ({
+          apiKeyHash: entry.apiKeyHash,
+          status: entry.status,
+        })),
+        [{ apiKeyHash: tokenHash, status: "success" }],
+      );
     } finally {
       ws.close();
       languageServer.restore();

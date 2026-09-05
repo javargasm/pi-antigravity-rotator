@@ -86,6 +86,23 @@ export interface TranscribeOptions {
   language?: string;
 }
 
+function parseConnectEndStreamError(payload: Buffer): Error | null {
+  const endStream = JSON.parse(payload.toString("utf8"));
+  if (!endStream || typeof endStream !== "object" || Array.isArray(endStream)) {
+    throw new Error("expected a JSON object");
+  }
+  if (!Object.hasOwn(endStream, "error")) return null;
+
+  const upstreamError = endStream.error;
+  const message =
+    upstreamError && typeof upstreamError === "object"
+      ? String(upstreamError.message || upstreamError.code || "invalid error envelope")
+      : typeof upstreamError === "string" && upstreamError
+        ? upstreamError
+        : "invalid error envelope";
+  return new Error(`Antigravity StreamAudioTranscription error: ${message}`);
+}
+
 /**
  * Transcribes an audio buffer using Antigravity models/proactive-observer-v10.
  */
@@ -185,22 +202,9 @@ export async function transcribeAudioWithAntigravity(
               }
             } else if (flag === 2) {
               try {
-                const endStream = JSON.parse(msgBuf.toString("utf8"));
-                if (!endStream || typeof endStream !== "object" || Array.isArray(endStream)) {
-                  throw new Error("expected a JSON object");
-                }
-                if (Object.hasOwn(endStream, "error")) {
-                  const upstreamError = endStream.error;
-                  const message =
-                    upstreamError && typeof upstreamError === "object"
-                      ? String(upstreamError.message || upstreamError.code || "invalid error envelope")
-                      : typeof upstreamError === "string" && upstreamError
-                        ? upstreamError
-                        : "invalid error envelope";
-                  fail(new Error(`Antigravity StreamAudioTranscription error: ${message}`));
-                } else {
-                  completeProtocol();
-                }
+                const error = parseConnectEndStreamError(msgBuf);
+                if (error) fail(error);
+                else completeProtocol();
               } catch (err: unknown) {
                 fail(new Error(`Invalid Antigravity end-stream message: ${String(err)}`));
               }
@@ -719,7 +723,15 @@ export class AntigravityAudioSession {
                   audioLogger.error(`Antigravity JSON parse error: ${e}`);
                 }
               } else if (flag === 2) {
-                this.onEvent({ complete: true });
+                try {
+                  const error = parseConnectEndStreamError(msgBuf);
+                  if (error) this.handleStreamError(error);
+                  else this.onEvent({ complete: true });
+                } catch (error: unknown) {
+                  this.handleStreamError(
+                    new Error(`Invalid Antigravity end-stream message: ${String(error)}`),
+                  );
+                }
               }
             }
           });
@@ -980,7 +992,7 @@ export class AntigravityAudioSession {
       this.failStart(error);
       return;
     }
-    if (this.state === "ready") {
+    if (this.state === "ready" || this.state === "ending") {
       this.failSession(error);
     }
   }

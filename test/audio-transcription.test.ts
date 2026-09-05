@@ -794,6 +794,59 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     }
   });
 
+  it("terminalizes a live Connect error while EndAudioSession is pending", async () => {
+    const requests: FakeRequest[] = [];
+    let streamResponse: FakeResponse | null = null;
+    const errors: Error[] = [];
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (!String(options.path).endsWith("/StreamAudioTranscription")) return;
+          streamResponse = new FakeResponse();
+          callback?.(streamResponse);
+          queueMicrotask(() =>
+            streamResponse?.emit(
+              "data",
+              connectFrame({ ready: { sessionId: "live-ending-error" } }),
+            ),
+          );
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      { onError: (error: Error) => errors.push(error) },
+    );
+
+    try {
+      await session.start();
+      const ending = session.endSession();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal((session as unknown as { state: string }).state, "ending");
+
+      (streamResponse as FakeResponse | null)?.emit(
+        "data",
+        connectFrame({ error: { message: "late upstream failure" } }, 2),
+      );
+      await ending;
+
+      assert.deepEqual(errors.map((error) => error.message), [
+        "Antigravity StreamAudioTranscription error: late upstream failure",
+      ]);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal(requests.length, 2);
+      assert.equal(requests.every((request) => request.destroyed), true);
+    } finally {
+      session.destroy();
+      requestMock.mock.restore();
+    }
+  });
+
   it("rejects a non-ready Language Server start and never accepts queued audio", async () => {
     const requests: FakeRequest[] = [];
     let streamResponse!: FakeResponse;
