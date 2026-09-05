@@ -106,6 +106,7 @@ type LanguageServerMode =
   | "flag2-error-null"
   | "flag2-error-false"
   | "flag2-error-malformed"
+  | "flag2-success-before-ready"
   | "flag2-success";
 
 function mockLanguageServer(mode: LanguageServerMode = "success"): {
@@ -128,9 +129,17 @@ function mockLanguageServer(mode: LanguageServerMode = "success"): {
             queueMicrotask(() => response.emit("end"));
             return;
           }
+          if (mode === "flag2-success-before-ready") {
+            queueMicrotask(() => {
+              response.emit("data", connectFrame({}, 2));
+              response.emit("end");
+            });
+            return;
+          }
           const sessionId = `audio-session-${++sessionNumber}`;
           queueMicrotask(() => {
             response.emit("data", connectFrame({ ready: { sessionId } }));
+            if (mode === "flag2-success" && sessionNumber > 1) return;
             const endStreamMessage =
               mode === "flag2-error-object"
                 ? { error: { code: "internal", message: "upstream failed" } }
@@ -145,6 +154,7 @@ function mockLanguageServer(mode: LanguageServerMode = "success"): {
                         : null;
             if (endStreamMessage !== null) {
               response.emit("data", connectFrame(endStreamMessage, 2));
+              if (mode === "flag2-success") response.emit("end");
               return;
             }
             response.emit("data", connectFrame({ transcription: { text: "hello", isFinal: true } }));
@@ -546,6 +556,50 @@ describe("audio WebSocket security boundary", () => {
     }
   });
 
+  it("rejects Connect completion before ready and logs one failed spend", async () => {
+    const rawKey = "rk-ws-connect-before-ready";
+    const tokenHash = addVirtualKey(rawKey, ["*"]);
+    const languageServer = mockLanguageServer("flag2-success-before-ready");
+    const { server, port } = await listenServer((_req, res) => res.end());
+    installUpgradeHandler(server);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?key=${rawKey}`);
+    const messages: Array<Record<string, unknown>> = [];
+    ws.onmessage = (event) =>
+      messages.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+
+    try {
+      await waitForWebSocketEvent(ws, "open");
+      const error = waitForWebSocketMessage(
+        ws,
+        (message) => message.type === "antigravity_error",
+      );
+      ws.send(JSON.stringify({ type: "start", model: "models/proactive-observer-v10" }));
+      const errorMessage = await error;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      assert.match(String(errorMessage.message), /completed before becoming ready/i);
+      assert.equal(
+        messages.filter((message) => message.type === "antigravity_error").length,
+        1,
+      );
+      assert.equal(messages.some((message) => message.type === "antigravity_complete"), false);
+      assert.equal(messages.some((message) => message.type === "ready_to_receive_audio"), false);
+      assert.equal(languageServer.requests[0]?.destroyed, true);
+      assert.equal(ws.readyState, WebSocket.OPEN);
+      assert.deepEqual(
+        spendLogger.getSpendQueueItemsForTests().map((entry) => ({
+          apiKeyHash: entry.apiKeyHash,
+          status: entry.status,
+        })),
+        [{ apiKeyHash: tokenHash, status: "failure" }],
+      );
+    } finally {
+      ws.close();
+      languageServer.restore();
+      await closeServer(server);
+    }
+  });
+
   for (const testCase of [
     {
       label: "an upstream error object",
@@ -613,7 +667,7 @@ describe("audio WebSocket security boundary", () => {
     });
   }
 
-  it("accepts a live Connect end-stream envelope when error is omitted", async () => {
+  it("terminalizes a successful live Connect stream before EOF and keeps the socket reusable", async () => {
     const rawKey = "rk-ws-connect-success";
     const tokenHash = addVirtualKey(rawKey, ["*"]);
     const languageServer = mockLanguageServer("flag2-success");
@@ -630,15 +684,17 @@ describe("audio WebSocket security boundary", () => {
         ws,
         (message) => message.type === "antigravity_complete",
       );
-      const ready = waitForWebSocketMessage(
-        ws,
-        (message) => message.type === "ready_to_receive_audio",
-      );
       ws.send(JSON.stringify({ type: "start", model: "models/proactive-observer-v10" }));
-      await Promise.all([complete, ready]);
+      await complete;
+      await new Promise<void>((resolve) => setImmediate(resolve));
 
+      assert.equal(
+        messages.filter((message) => message.type === "antigravity_complete").length,
+        1,
+      );
       assert.equal(messages.some((message) => message.type === "antigravity_error"), false);
-      assert.equal(languageServer.requests[0]?.destroyed, false);
+      assert.equal(languageServer.requests[0]?.destroyed, true);
+      assert.equal(ws.readyState, WebSocket.OPEN);
       assert.deepEqual(
         spendLogger.getSpendQueueItemsForTests().map((entry) => ({
           apiKeyHash: entry.apiKeyHash,
@@ -646,8 +702,33 @@ describe("audio WebSocket security boundary", () => {
         })),
         [{ apiKeyHash: tokenHash, status: "success" }],
       );
+
+      const nextReady = waitForWebSocketMessage(
+        ws,
+        (message) =>
+          message.type === "antigravity_ready" && message.sessionId === "audio-session-2",
+      );
+      ws.send(Buffer.alloc(1));
+      await nextReady;
+      await waitForCondition(
+        () =>
+          languageServer.requests.filter((request) =>
+            String(request.options.path).endsWith("/SendAudioChunk"),
+          ).length === 1,
+      );
+      assert.equal(
+        languageServer.requests.filter((request) =>
+          String(request.options.path).endsWith("/StreamAudioTranscription"),
+        ).length,
+        2,
+      );
+      assert.equal(spendLogger.getSpendQueueItemsForTests().length, 1);
     } finally {
-      ws.close();
+      if (ws.readyState === WebSocket.OPEN) {
+        const closed = waitForWebSocketEvent(ws, "close");
+        ws.close();
+        await closed;
+      }
       languageServer.restore();
       await closeServer(server);
     }
@@ -809,7 +890,7 @@ describe("audio WebSocket security boundary", () => {
     }
   });
 
-  it("does not report a stream error while a client session is ending normally", async () => {
+  it("resolves a stopped client when Connect completion is followed by EOF", async () => {
     const rawKey = "rk-ws-normal-stream-end";
     addVirtualKey(rawKey, ["*"]);
     const requests: FakeRequest[] = [];
@@ -849,14 +930,22 @@ describe("audio WebSocket security boundary", () => {
       ws.send(JSON.stringify({ type: "stop" }));
       await waitForWebSocketMessage(ws, (message) => message.type === "audio_stopped");
       await waitForCondition(() => endRequest !== null);
+      const complete = waitForWebSocketMessage(
+        ws,
+        (message) => message.type === "antigravity_complete",
+      );
+      (streamResponse as FakeResponse | null)?.emit("data", connectFrame({}, 2));
       (streamResponse as FakeResponse | null)?.emit("end");
+      await complete;
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.equal(messages.some((message) => message.type === "antigravity_error"), false);
-
-      const endResponse = new FakeResponse();
-      (endRequest as FakeRequest | null)?.respond(endResponse);
-      endResponse.emit("end");
-      await waitForCondition(() => spendLogger.getSpendQueueItemsForTests().length === 1);
+      assert.equal(
+        messages.filter((message) => message.type === "antigravity_complete").length,
+        1,
+      );
+      assert.equal((endRequest as FakeRequest | null)?.destroyed, true);
+      assert.equal(ws.readyState, WebSocket.OPEN);
+      assert.equal(spendLogger.getSpendQueueItemsForTests().length, 1);
       assert.equal(spendLogger.getSpendQueueItemsForTests()[0].status, "success");
     } finally {
       ws.close();

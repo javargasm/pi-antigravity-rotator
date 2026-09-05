@@ -726,7 +726,7 @@ export class AntigravityAudioSession {
                 try {
                   const error = parseConnectEndStreamError(msgBuf);
                   if (error) this.handleStreamError(error);
-                  else this.onEvent({ complete: true });
+                  else this.completeStream();
                 } catch (error: unknown) {
                   this.handleStreamError(
                     new Error(`Invalid Antigravity end-stream message: ${String(error)}`),
@@ -741,7 +741,7 @@ export class AntigravityAudioSession {
               this.failStart(new Error("Antigravity audio stream ended before becoming ready"));
               return;
             }
-            if (this.state === "ready") {
+            if (this.state === "ready" || this.state === "ending") {
               this.handleStreamError(new Error("Antigravity audio stream ended unexpectedly"));
             }
           });
@@ -987,6 +987,16 @@ export class AntigravityAudioSession {
     this.destroy();
   }
 
+  private completeStream(): void {
+    if (this.state === "starting") {
+      this.failStart(new Error("Antigravity audio stream completed before becoming ready"));
+      return;
+    }
+    if (this.state !== "ready" && this.state !== "ending") return;
+    this.destroy();
+    this.onEvent({ complete: true });
+  }
+
   private handleStreamError(error: Error): void {
     if (this.state === "starting") {
       this.failStart(error);
@@ -1122,6 +1132,9 @@ function createClientSession(
           timestamp: now,
         });
         finishClientSpend(client, "success");
+        if (client.antigravity === session && session.sessionId === null) {
+          client.antigravity = null;
+        }
       }
     },
     onError: (err) => {

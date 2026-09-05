@@ -130,6 +130,37 @@ function mockOneShotProtocol(options: {
   return { requests, restore: () => requestMock.mock.restore() };
 }
 
+function mockLiveProtocol(): {
+  requests: FakeRequest[];
+  streamResponse: Promise<FakeResponse>;
+  restore: () => void;
+} {
+  const requests: FakeRequest[] = [];
+  let resolveStreamResponse!: (response: FakeResponse) => void;
+  const streamResponse = new Promise<FakeResponse>((resolve) => {
+    resolveStreamResponse = resolve;
+  });
+  const requestMock = mock.method(
+    https,
+    "request",
+    ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+      const request = new FakeRequest(options, callback, () => {
+        if (!String(options.path).endsWith("/StreamAudioTranscription")) return;
+        const response = new FakeResponse();
+        callback?.(response);
+        resolveStreamResponse(response);
+      });
+      requests.push(request);
+      return request;
+    }) as unknown as typeof https.request,
+  );
+  return {
+    requests,
+    streamResponse,
+    restore: () => requestMock.mock.restore(),
+  };
+}
+
 function makeWav(seconds: number): Buffer {
   const byteRate = 32_000;
   const dataLength = Math.round(seconds * byteRate);
@@ -791,6 +822,180 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     } finally {
       languageServer.restore();
       await closeServer(server);
+    }
+  });
+
+  it("rejects live Connect completion before ready without emitting complete", async () => {
+    const upstream = mockLiveProtocol();
+    const events: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      {
+        onEvent: (event: Record<string, unknown>) => events.push(event),
+        onError: (error: Error) => errors.push(error),
+      },
+    );
+    const start = session.start();
+    const rejected = assert.rejects(start, /completed before becoming ready/i);
+
+    try {
+      const response = await upstream.streamResponse;
+      response.emit("data", connectFrame({}, 2));
+      response.emit("end");
+      await rejected;
+
+      assert.equal(events.some((event) => event.complete === true), false);
+      assert.deepEqual(errors, []);
+      assert.equal((session as unknown as { state: string }).state, "failed");
+      assert.equal(session.sessionId, null);
+      assert.equal(session.sendChunk(Buffer.alloc(1)), false);
+      assert.equal(upstream.requests[0].destroyed, true);
+    } finally {
+      session.destroy();
+      upstream.restore();
+    }
+  });
+
+  it("terminalizes live Connect completion before its normal EOF", async () => {
+    const upstream = mockLiveProtocol();
+    const events: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      {
+        onEvent: (event: Record<string, unknown>) => events.push(event),
+        onError: (error: Error) => errors.push(error),
+      },
+    );
+    const start = session.start();
+
+    try {
+      const response = await upstream.streamResponse;
+      response.emit("data", connectFrame({ ready: { sessionId: "live-complete" } }));
+      await start;
+      response.emit("data", connectFrame({}, 2));
+      response.emit("end");
+
+      assert.equal(events.filter((event) => event.complete === true).length, 1);
+      assert.deepEqual(errors, []);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal(session.sendChunk(Buffer.alloc(1)), false);
+      assert.equal(upstream.requests[0].destroyed, true);
+    } finally {
+      session.destroy();
+      upstream.restore();
+    }
+  });
+
+  it("resolves live stop when Connect completion is followed by EOF", async () => {
+    const upstream = mockLiveProtocol();
+    const events: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      {
+        onEvent: (event: Record<string, unknown>) => events.push(event),
+        onError: (error: Error) => errors.push(error),
+      },
+    );
+    const start = session.start();
+
+    try {
+      const response = await upstream.streamResponse;
+      response.emit("data", connectFrame({ ready: { sessionId: "live-ending-complete" } }));
+      await start;
+      const ending = session.endSession();
+      response.emit("data", connectFrame({}, 2));
+      response.emit("end");
+      await Promise.race([
+        ending,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("stop remained pending")), 100),
+        ),
+      ]);
+
+      assert.equal(events.filter((event) => event.complete === true).length, 1);
+      assert.deepEqual(errors, []);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal(upstream.requests.length, 2);
+      assert.equal(upstream.requests.every((request) => request.destroyed), true);
+    } finally {
+      session.destroy();
+      upstream.restore();
+    }
+  });
+
+  it("fails live stop when EOF arrives without Connect completion", async () => {
+    const upstream = mockLiveProtocol();
+    const events: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      {
+        onEvent: (event: Record<string, unknown>) => events.push(event),
+        onError: (error: Error) => errors.push(error),
+      },
+    );
+    const start = session.start();
+
+    try {
+      const response = await upstream.streamResponse;
+      response.emit("data", connectFrame({ ready: { sessionId: "live-ending-eof" } }));
+      await start;
+      const ending = session.endSession();
+      response.emit("end");
+      await Promise.race([
+        ending,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("stop remained pending")), 100),
+        ),
+      ]);
+
+      assert.equal(events.some((event) => event.complete === true), false);
+      assert.deepEqual(errors.map((error) => error.message), [
+        "Antigravity audio stream ended unexpectedly",
+      ]);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal(upstream.requests.every((request) => request.destroyed), true);
+    } finally {
+      session.destroy();
+      upstream.restore();
+    }
+  });
+
+  it("keeps raw EOF after ready as a terminal live-session failure", async () => {
+    const upstream = mockLiveProtocol();
+    const events: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      {
+        onEvent: (event: Record<string, unknown>) => events.push(event),
+        onError: (error: Error) => errors.push(error),
+      },
+    );
+    const start = session.start();
+
+    try {
+      const response = await upstream.streamResponse;
+      response.emit("data", connectFrame({ ready: { sessionId: "live-raw-eof" } }));
+      await start;
+      response.emit("end");
+
+      assert.equal(events.some((event) => event.complete === true), false);
+      assert.deepEqual(errors.map((error) => error.message), [
+        "Antigravity audio stream ended unexpectedly",
+      ]);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal(upstream.requests[0].destroyed, true);
+    } finally {
+      session.destroy();
+      upstream.restore();
     }
   });
 
