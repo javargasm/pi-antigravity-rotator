@@ -723,8 +723,11 @@ export class AntigravityAudioSession {
                   }
                   if (msg.complete) this.completeStream();
                   else this.onEvent(msg);
-                } catch (e) {
-                  audioLogger.error(`Antigravity JSON parse error: ${e}`);
+                } catch (error: unknown) {
+                  this.handleStreamError(
+                    new Error(`Invalid Antigravity JSON stream message: ${String(error)}`),
+                  );
+                  return;
                 }
               } else if (flag === 2) {
                 try {

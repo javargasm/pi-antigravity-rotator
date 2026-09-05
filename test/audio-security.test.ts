@@ -88,13 +88,17 @@ class FakeRequest extends EventEmitter {
   }
 }
 
-function connectFrame(message: unknown, flag = 0): Buffer {
-  const payload = Buffer.from(JSON.stringify(message));
+function connectRawFrame(message: string, flag = 0): Buffer {
+  const payload = Buffer.from(message);
   const frame = Buffer.alloc(5 + payload.length);
   frame.writeUInt8(flag, 0);
   frame.writeUInt32BE(payload.length, 1);
   payload.copy(frame, 5);
   return frame;
+}
+
+function connectFrame(message: unknown, flag = 0): Buffer {
+  return connectRawFrame(JSON.stringify(message), flag);
 }
 
 type LanguageServerMode =
@@ -723,6 +727,101 @@ describe("audio WebSocket security boundary", () => {
       }
     });
   }
+
+  it("terminalizes a live session after malformed Connect data and ignores later input", async () => {
+    const rawKey = "rk-ws-malformed-connect-data";
+    const tokenHash = addVirtualKey(rawKey, ["*"]);
+    const requests: FakeRequest[] = [];
+    let streamResponse: FakeResponse | null = null;
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          const response = new FakeResponse();
+          request.respond(response);
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            streamResponse = response;
+            queueMicrotask(() =>
+              response.emit(
+                "data",
+                connectFrame({ ready: { sessionId: "malformed-connect-data" } }),
+              ),
+            );
+          } else {
+            queueMicrotask(() => response.emit("end"));
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    const { server, port } = await listenServer((_req, res) => res.end());
+    installUpgradeHandler(server);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?key=${rawKey}`);
+    const messages: Array<Record<string, unknown>> = [];
+    ws.onmessage = (event) =>
+      messages.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+
+    try {
+      await waitForWebSocketEvent(ws, "open");
+      const ready = waitForWebSocketMessage(
+        ws,
+        (message) => message.type === "ready_to_receive_audio",
+      );
+      ws.send(JSON.stringify({ type: "start", model: "models/proactive-observer-v10" }));
+      await ready;
+
+      const error = waitForWebSocketMessage(
+        ws,
+        (message) => message.type === "antigravity_error",
+      );
+      const closed = waitForWebSocketEvent<CloseEvent>(ws, "close");
+      void closed.catch(() => {});
+      (streamResponse as FakeResponse | null)?.emit(
+        "data",
+        Buffer.concat([
+          connectRawFrame("{"),
+          connectFrame({ transcription: { text: "discarded", isFinal: true } }),
+          connectFrame({ complete: {} }),
+          connectFrame({}, 2),
+        ]),
+      );
+      ws.send(Buffer.alloc(1));
+      (streamResponse as FakeResponse | null)?.emit("end");
+
+      const [errorMessage, close] = await Promise.all([error, closed]);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.match(String(errorMessage.message), /invalid .*JSON/i);
+      assert.equal(close.code, 1011);
+      assert.equal(
+        messages.filter((message) => message.type === "antigravity_error").length,
+        1,
+      );
+      assert.equal(messages.some((message) => message.type === "antigravity_transcript"), false);
+      assert.equal(messages.some((message) => message.type === "antigravity_complete"), false);
+      assert.equal(requests[0]?.destroyed, true);
+      assert.equal(
+        requests.some((request) => String(request.options.path).endsWith("/SendAudioChunk")),
+        false,
+      );
+      assert.deepEqual(
+        spendLogger.getSpendQueueItemsForTests().map((entry) => ({
+          apiKeyHash: entry.apiKeyHash,
+          status: entry.status,
+        })),
+        [{ apiKeyHash: tokenHash, status: "failure" }],
+      );
+    } finally {
+      if (ws.readyState === WebSocket.OPEN) {
+        const closed = waitForWebSocketEvent(ws, "close");
+        ws.close();
+        await closed;
+      }
+      requestMock.mock.restore();
+      await closeServer(server);
+    }
+  });
 
   it("terminalizes a successful live Connect stream before EOF and keeps the socket reusable", async () => {
     const rawKey = "rk-ws-connect-success";
