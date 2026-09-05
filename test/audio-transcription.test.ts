@@ -492,12 +492,14 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
 
   it("rejects a non-ready Language Server start and never accepts queued audio", async () => {
     const requests: FakeRequest[] = [];
+    let streamResponse!: FakeResponse;
     const requestMock = mock.method(
       https,
       "request",
       ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
         const request = new FakeRequest(options, callback, () => {
-          callback?.(new FakeResponse(503));
+          streamResponse = new FakeResponse(503);
+          callback?.(streamResponse);
         });
         requests.push(request);
         return request;
@@ -507,6 +509,7 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
 
     try {
       await assert.rejects(session.start(), /status: 503/);
+      assert.doesNotThrow(() => streamResponse.emit("error", new Error("stream ECONNRESET")));
       assert.equal((session as unknown as { sendChunk: (chunk: Buffer) => boolean }).sendChunk(Buffer.alloc(1)), false);
       assert.equal(requests[0].destroyed, true);
     } finally {

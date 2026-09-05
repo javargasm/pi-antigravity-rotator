@@ -594,6 +594,7 @@ export class AntigravityAudioSession {
           },
         },
         (res) => {
+          res.on("error", (err) => this.handleStreamError(err));
           if (res.statusCode !== 200) {
             const err = new Error(`Antigravity stream error status: ${res.statusCode}`);
             res.resume();
@@ -638,7 +639,6 @@ export class AntigravityAudioSession {
             }
             this.onEvent({ streamEnded: true });
           });
-          res.on("error", (err) => this.handleStreamError(err));
         },
       );
 
