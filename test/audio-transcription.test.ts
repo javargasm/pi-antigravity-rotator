@@ -720,6 +720,140 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     }
   });
 
+  it("terminalizes a live session when SendAudioChunk stops responding", async () => {
+    const requests: FakeRequest[] = [];
+    let chunkResponse: FakeResponse | null = null;
+    const errors: Error[] = [];
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            const response = new FakeResponse();
+            callback?.(response);
+            queueMicrotask(() =>
+              response.emit("data", connectFrame({ ready: { sessionId: "silent-chunk" } })),
+            );
+          } else if (String(options.path).endsWith("/SendAudioChunk")) {
+            chunkResponse = new FakeResponse();
+            callback?.(chunkResponse);
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      { onError: (error: Error) => errors.push(error) },
+    );
+
+    try {
+      await session.start();
+      assert.equal(session.sendChunk(Buffer.alloc(1, 1)), true);
+      assert.equal(session.sendChunk(Buffer.alloc(1, 2)), true);
+      const ending = session.endSession();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const chunkRequest = requests.find((request) =>
+        String(request.options.path).endsWith("/SendAudioChunk"),
+      );
+      assert.ok(chunkRequest);
+      assert.ok(chunkResponse);
+      assert.ok(chunkRequest.timeoutCallback);
+      chunkRequest.timeoutCallback();
+      await ending;
+
+      assert.equal(chunkRequest.destroyed, true);
+      assert.equal(requests[0].destroyed, true);
+      assert.equal(
+        requests.filter((request) => String(request.options.path).endsWith("/SendAudioChunk"))
+          .length,
+        1,
+      );
+      assert.equal(
+        requests.some((request) => String(request.options.path).endsWith("/EndAudioSession")),
+        false,
+      );
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal((session as unknown as { queue: Buffer[] }).queue.length, 0);
+      assert.equal((session as unknown as { pendingRequests: Map<unknown, unknown> }).pendingRequests.size, 0);
+      assert.deepEqual(errors.map((error) => error.message), ["SendAudioChunk timed out"]);
+
+      (chunkResponse as FakeResponse | null)?.emit("end");
+      chunkRequest.emit("error", new Error("late chunk failure"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(errors.length, 1);
+    } finally {
+      session.destroy();
+      requestMock.mock.restore();
+    }
+  });
+
+  it("terminalizes a live session when EndAudioSession stops responding", async () => {
+    const requests: FakeRequest[] = [];
+    let endResponse: FakeResponse | null = null;
+    const errors: Error[] = [];
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            const response = new FakeResponse();
+            callback?.(response);
+            queueMicrotask(() =>
+              response.emit("data", connectFrame({ ready: { sessionId: "silent-end" } })),
+            );
+          } else if (String(options.path).endsWith("/EndAudioSession")) {
+            endResponse = new FakeResponse();
+            callback?.(endResponse);
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      { onError: (error: Error) => errors.push(error) },
+    );
+
+    try {
+      await session.start();
+      const ending = session.endSession();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const endRequest = requests.find((request) =>
+        String(request.options.path).endsWith("/EndAudioSession"),
+      );
+      assert.ok(endRequest);
+      assert.ok(endResponse);
+      assert.ok(endRequest.timeoutCallback);
+      endRequest.timeoutCallback();
+      await ending;
+
+      assert.equal(endRequest.destroyed, true);
+      assert.equal(requests[0].destroyed, true);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal((session as unknown as { pendingEnd: unknown }).pendingEnd, null);
+      assert.equal((session as unknown as { pendingRequests: Map<unknown, unknown> }).pendingRequests.size, 0);
+      assert.deepEqual(errors.map((error) => error.message), ["EndAudioSession timed out"]);
+
+      (endResponse as FakeResponse | null)?.emit("end");
+      endRequest.emit("error", new Error("late end failure"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(errors.length, 1);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+    } finally {
+      session.destroy();
+      requestMock.mock.restore();
+    }
+  });
+
   it("waits for queued audio before terminalizing an ended session", async () => {
     const requests: FakeRequest[] = [];
     const requestMock = mock.method(

@@ -52,6 +52,7 @@ class FakeResponse extends EventEmitter {
 class FakeRequest extends EventEmitter {
   readonly chunks: Buffer[] = [];
   destroyed = false;
+  timeoutCallback: (() => void) | null = null;
 
   constructor(
     readonly options: Record<string, unknown>,
@@ -72,7 +73,8 @@ class FakeRequest extends EventEmitter {
     return this;
   }
 
-  setTimeout(_timeout: number, _callback: () => void): this {
+  setTimeout(_timeout: number, callback: () => void): this {
+    this.timeoutCallback = callback;
     return this;
   }
 
@@ -656,6 +658,87 @@ describe("audio WebSocket security boundary", () => {
       endResponse.emit("end");
       await waitForCondition(() => spendLogger.getSpendQueueItemsForTests().length === 1);
       assert.equal(spendLogger.getSpendQueueItemsForTests()[0].status, "success");
+    } finally {
+      ws.close();
+      requestMock.mock.restore();
+      await closeServer(server);
+    }
+  });
+
+  it("fails a stopped client when EndAudioSession stops responding", async () => {
+    const rawKey = "rk-ws-silent-end";
+    const tokenHash = addVirtualKey(rawKey, ["*"]);
+    const requests: FakeRequest[] = [];
+    let sessionNumber = 0;
+    let endResponse: FakeResponse | null = null;
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            const response = new FakeResponse();
+            request.respond(response);
+            const sessionId = `silent-end-${++sessionNumber}`;
+            queueMicrotask(() => response.emit("data", connectFrame({ ready: { sessionId } })));
+          } else if (String(options.path).endsWith("/EndAudioSession")) {
+            endResponse = new FakeResponse();
+            request.respond(endResponse);
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    const { server, port } = await listenServer((_req, res) => res.end());
+    installUpgradeHandler(server);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?key=${rawKey}`);
+    const messages: Array<Record<string, unknown>> = [];
+    ws.onmessage = (event) => messages.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+
+    try {
+      await waitForWebSocketEvent(ws, "open");
+      const ready = waitForWebSocketMessage(ws, (message) => message.type === "ready_to_receive_audio");
+      ws.send(JSON.stringify({ type: "start", model: "models/proactive-observer-v10" }));
+      await ready;
+
+      const close = waitForWebSocketEvent<CloseEvent>(ws, "close");
+      void close.catch(() => {});
+      ws.send(JSON.stringify({ type: "stop" }));
+      await waitForCondition(() =>
+        requests.some((request) => String(request.options.path).endsWith("/EndAudioSession")),
+      );
+      ws.send(JSON.stringify({ type: "start", model: "models/proactive-observer-v10" }));
+
+      const endRequest = requests.find((request) =>
+        String(request.options.path).endsWith("/EndAudioSession"),
+      );
+      assert.ok(endRequest);
+      assert.ok(endResponse);
+      assert.ok(endRequest.timeoutCallback);
+      endRequest.timeoutCallback();
+
+      assert.equal((await close).code, 1011);
+      assert.equal(endRequest.destroyed, true);
+      assert.equal(
+        requests.filter((request) =>
+          String(request.options.path).endsWith("/StreamAudioTranscription"),
+        ).length,
+        1,
+      );
+      assert.equal(messages.filter((message) => message.type === "ready_to_receive_audio").length, 1);
+      assert.deepEqual(
+        spendLogger.getSpendQueueItemsForTests().map((entry) => ({
+          apiKeyHash: entry.apiKeyHash,
+          status: entry.status,
+        })),
+        [{ apiKeyHash: tokenHash, status: "failure" }],
+      );
+
+      (endResponse as FakeResponse | null)?.emit("end");
+      endRequest.emit("error", new Error("late end failure"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(spendLogger.getSpendQueueItemsForTests().length, 1);
     } finally {
       ws.close();
       requestMock.mock.restore();

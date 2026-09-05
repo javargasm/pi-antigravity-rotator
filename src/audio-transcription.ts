@@ -786,6 +786,11 @@ export class AntigravityAudioSession {
         },
       );
       this.pendingRequests.set(req, finish);
+      req.setTimeout(AUDIO_UNARY_REQUEST_TIMEOUT_MS, () => {
+        const error = new Error("SendAudioChunk timed out");
+        audioLogger.warn(error.message);
+        this.failSession(error);
+      });
       req.on("error", (e) => {
         audioLogger.warn(`SendAudioChunk error: ${e.message}`);
         finish();
@@ -850,6 +855,11 @@ export class AntigravityAudioSession {
         },
       );
       this.pendingRequests.set(req, finish);
+      req.setTimeout(AUDIO_UNARY_REQUEST_TIMEOUT_MS, () => {
+        const error = new Error("EndAudioSession timed out");
+        audioLogger.warn(error.message);
+        this.failSession(error);
+      });
       req.on("error", (error) => {
         audioLogger.warn(`EndAudioSession error: ${error.message}`);
         finish();
@@ -918,14 +928,19 @@ export class AntigravityAudioSession {
     reject?.(error);
   }
 
+  private failSession(error: Error): void {
+    if (this.state !== "ready" && this.state !== "ending") return;
+    this.onError(error);
+    this.destroy();
+  }
+
   private handleStreamError(error: Error): void {
     if (this.state === "starting") {
       this.failStart(error);
       return;
     }
     if (this.state === "ready") {
-      this.onError(error);
-      this.destroy();
+      this.failSession(error);
     }
   }
 }
