@@ -102,6 +102,9 @@ export async function transcribeAudioWithAntigravity(
     let finalText = "";
     let lastInterim = "";
     let isResolved = false;
+    let endStarted = false;
+    let endComplete = false;
+    let streamFinished = false;
 
     const payload = JSON.stringify({
       mimeType,
@@ -131,6 +134,7 @@ export async function transcribeAudioWithAntigravity(
         },
       },
       (res) => {
+        res.on("error", fail);
         if (res.statusCode !== 200) {
           fail(new Error(`Antigravity StreamAudioTranscription error: HTTP ${res.statusCode}`));
           return;
@@ -149,9 +153,13 @@ export async function transcribeAudioWithAntigravity(
             if (flag === 0) {
               try {
                 const msg = JSON.parse(msgBuf.toString("utf8"));
-                if (msg.ready?.sessionId) {
+                if (msg.ready?.sessionId && !endStarted) {
                   sessionId = msg.ready.sessionId;
-                  void sendChunksAndEnd().catch(fail);
+                  endStarted = true;
+                  void sendChunksAndEnd().then(() => {
+                    endComplete = true;
+                    maybeFinish();
+                  }, fail);
                 } else if (msg.transcription) {
                   const text = msg.transcription.text || "";
                   if (msg.transcription.isFinal) {
@@ -160,19 +168,19 @@ export async function transcribeAudioWithAntigravity(
                     lastInterim = text;
                   }
                 } else if (msg.complete) {
-                  finish();
+                  finishStream();
                 }
               } catch (err: unknown) {
                 audioLogger.warn(`Failed to parse transcription message: ${err}`);
               }
             } else if (flag === 2) {
-              finish();
+              finishStream();
             }
           }
         });
 
         res.on("end", () => {
-          finish();
+          finishStream();
         });
       },
     );
@@ -185,10 +193,7 @@ export async function transcribeAudioWithAntigravity(
     streamReq.end();
 
     const timeout = setTimeout(() => {
-      cleanup();
-      if (!isResolved) {
-        resolve(finalText || lastInterim);
-      }
+      succeed(finalText || lastInterim);
     }, 30_000);
 
     function cleanup() {
@@ -200,11 +205,20 @@ export async function transcribeAudioWithAntigravity(
       }
     }
 
-    function finish() {
+    function succeed(text = (finalText || lastInterim).trim()) {
       if (isResolved) return;
       isResolved = true;
       cleanup();
-      resolve((finalText || lastInterim).trim());
+      resolve(text);
+    }
+
+    function finishStream() {
+      streamFinished = true;
+      maybeFinish();
+    }
+
+    function maybeFinish() {
+      if (streamFinished && (!endStarted || endComplete)) succeed();
     }
 
     function fail(error: Error) {

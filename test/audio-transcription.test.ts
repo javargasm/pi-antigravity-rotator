@@ -342,8 +342,9 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     }
   });
 
-  it("rejects and cleans up when EndAudioSession transport fails", async () => {
+  it("handles concurrent stream and EndAudioSession transport failures", async () => {
     const requests: FakeRequest[] = [];
+    let streamResponse: FakeResponse | null = null;
     const requestMock = mock.method(
       https,
       "request",
@@ -351,11 +352,49 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
         const request = new FakeRequest(options, callback, () => {
           if (String(options.path).endsWith("/StreamAudioTranscription")) {
             const response = new FakeResponse();
+            streamResponse = response;
             callback?.(response);
             queueMicrotask(() => {
               response.emit("data", connectFrame({ ready: { sessionId: "session-end-error" } }));
             });
           } else if (String(options.path).endsWith("/EndAudioSession")) {
+            queueMicrotask(() => streamResponse?.emit("error", new Error("stream ECONNRESET")));
+            queueMicrotask(() => request.emit("error", new Error("connect ECONNREFUSED")));
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+
+    try {
+      await assert.rejects(
+        transcribeAudioWithAntigravity(Buffer.alloc(0)),
+        /ECONNRESET|ECONNREFUSED/,
+      );
+      assert.equal(requests[0].destroyed, true);
+    } finally {
+      requestMock.mock.restore();
+    }
+  });
+
+  it("does not let stream end mask a pending EndAudioSession failure", async () => {
+    const requests: FakeRequest[] = [];
+    let streamResponse: FakeResponse | null = null;
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            const response = new FakeResponse();
+            streamResponse = response;
+            callback?.(response);
+            queueMicrotask(() => {
+              response.emit("data", connectFrame({ ready: { sessionId: "session-end-race" } }));
+            });
+          } else if (String(options.path).endsWith("/EndAudioSession")) {
+            queueMicrotask(() => streamResponse?.emit("end"));
             queueMicrotask(() => request.emit("error", new Error("connect ECONNREFUSED")));
           }
         });
