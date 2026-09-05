@@ -368,7 +368,7 @@ export async function transcribeAudioWithAntigravity(
           (resp) => {
             resp.on("error", finish);
             resp.resume();
-            if (resp.statusCode !== 200) {
+            if (resp.statusCode === undefined || resp.statusCode < 200 || resp.statusCode >= 300) {
               finish(new Error(`Antigravity EndAudioSession error: HTTP ${resp.statusCode}`));
               return;
             }

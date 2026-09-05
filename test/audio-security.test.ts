@@ -110,7 +110,7 @@ type LanguageServerMode =
   | "flag2-success"
   | "stop-success";
 
-function mockLanguageServer(mode: LanguageServerMode = "success"): {
+function mockLanguageServer(mode: LanguageServerMode = "success", endStatusCode = 200): {
   requests: FakeRequest[];
   restore: () => void;
 } {
@@ -123,7 +123,13 @@ function mockLanguageServer(mode: LanguageServerMode = "success"): {
     ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
       const request = new FakeRequest(options, callback, () => {
         if (mode === "pending") return;
-        const response = new FakeResponse(mode === "failure" ? 503 : 200);
+        const response = new FakeResponse(
+          mode === "failure"
+            ? 503
+            : String(options.path).endsWith("/EndAudioSession")
+              ? endStatusCode
+              : 200,
+        );
         request.respond(response);
         if (mode === "failure") return;
         if (String(options.path).endsWith("/StreamAudioTranscription")) {
@@ -416,6 +422,39 @@ describe("audio virtual-key security boundary", () => {
       await closeServer(server);
     }
   });
+
+  for (const endStatusCode of [201, 204, 299]) {
+    it(`accepts EndAudioSession HTTP ${endStatusCode} and logs one successful spend`, async () => {
+      const rawKey = `rk-audio-end-${endStatusCode}`;
+      const tokenHash = addVirtualKey(rawKey, ["*"]);
+      const languageServer = mockLanguageServer("success", endStatusCode);
+      const { server, url } = await listenServer((req, res) => {
+        void audio.handleOpenAIAudioTranscriptions(req, res);
+      });
+      const formData = new FormData();
+      formData.append("file", new File([Buffer.alloc(44)], "sample.wav", { type: "audio/wav" }));
+
+      try {
+        const response = await fetch(`${url}/v1/audio/transcriptions`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${rawKey}` },
+          body: formData,
+        });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { text: "hello" });
+        assert.deepEqual(
+          spendLogger.getSpendQueueItemsForTests().map((entry) => ({
+            apiKeyHash: entry.apiKeyHash,
+            status: entry.status,
+          })),
+          [{ apiKeyHash: tokenHash, status: "success" }],
+        );
+      } finally {
+        languageServer.restore();
+        await closeServer(server);
+      }
+    });
+  }
 
   it("returns failure and logs one failed spend when the upstream stream ends before ready", async () => {
     const rawKey = "rk-audio-incomplete-stream";
