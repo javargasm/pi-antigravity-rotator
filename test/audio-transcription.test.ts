@@ -55,10 +55,10 @@ class FakeRequest extends EventEmitter {
   }
 }
 
-function connectFrame(message: unknown): Buffer {
+function connectFrame(message: unknown, flag = 0): Buffer {
   const payload = Buffer.from(JSON.stringify(message));
   const frame = Buffer.alloc(5 + payload.length);
-  frame.writeUInt8(0, 0);
+  frame.writeUInt8(flag, 0);
   frame.writeUInt32BE(payload.length, 1);
   payload.copy(frame, 5);
   return frame;
@@ -84,6 +84,43 @@ function mockSuccessfulLanguageServer(): {
           });
         } else {
           queueMicrotask(() => response.emit("end"));
+        }
+      });
+      requests.push(request);
+      return request;
+    }) as unknown as typeof https.request,
+  );
+  return { requests, restore: () => requestMock.mock.restore() };
+}
+
+function mockOneShotProtocol(options: {
+  streamFrames?: Buffer[];
+  eofAfterFrames?: boolean;
+  eofAfterEnd?: boolean;
+  endStatusCode?: number;
+}): { requests: FakeRequest[]; restore: () => void } {
+  const requests: FakeRequest[] = [];
+  let streamResponse: FakeResponse | null = null;
+  const requestMock = mock.method(
+    https,
+    "request",
+    ((requestOptions: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+      const request = new FakeRequest(requestOptions, callback, () => {
+        if (String(requestOptions.path).endsWith("/StreamAudioTranscription")) {
+          const response = new FakeResponse();
+          streamResponse = response;
+          callback?.(response);
+          queueMicrotask(() => {
+            for (const frame of options.streamFrames ?? []) response.emit("data", frame);
+            if (options.eofAfterFrames) response.emit("end");
+          });
+        } else if (String(requestOptions.path).endsWith("/EndAudioSession")) {
+          const response = new FakeResponse(options.endStatusCode);
+          callback?.(response);
+          queueMicrotask(() => {
+            response.emit("end");
+            if (options.eofAfterEnd) streamResponse?.emit("end");
+          });
         }
       });
       requests.push(request);
@@ -348,6 +385,116 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     }
   });
 
+  it("rejects upstream EOF before a ready session", async () => {
+    const languageServer = mockOneShotProtocol({ eofAfterFrames: true });
+    try {
+      await assert.rejects(
+        transcribeAudioWithAntigravity(Buffer.alloc(0)),
+        /ended before .*ready|incomplete/i,
+      );
+    } finally {
+      languageServer.restore();
+    }
+  });
+
+  it("rejects upstream EOF after finalization without protocol completion", async () => {
+    const languageServer = mockOneShotProtocol({
+      streamFrames: [connectFrame({ ready: { sessionId: "session-no-complete" } })],
+      eofAfterEnd: true,
+    });
+    try {
+      await assert.rejects(
+        transcribeAudioWithAntigravity(Buffer.alloc(0)),
+        /ended before .*complet|incomplete/i,
+      );
+      assert.ok(
+        languageServer.requests.some((request) =>
+          String(request.options.path).endsWith("/EndAudioSession"),
+        ),
+      );
+    } finally {
+      languageServer.restore();
+    }
+  });
+
+  it("rejects protocol completion before a ready session", async () => {
+    const languageServer = mockOneShotProtocol({
+      streamFrames: [connectFrame({ complete: true })],
+    });
+    try {
+      await assert.rejects(
+        transcribeAudioWithAntigravity(Buffer.alloc(0)),
+        /complete.*before .*ready/i,
+      );
+    } finally {
+      languageServer.restore();
+    }
+  });
+
+  it("rejects a Connect end-stream error envelope", async () => {
+    const languageServer = mockOneShotProtocol({
+      streamFrames: [
+        connectFrame({ error: { code: "internal", message: "upstream failed" } }, 2),
+      ],
+    });
+    try {
+      await assert.rejects(
+        transcribeAudioWithAntigravity(Buffer.alloc(0)),
+        /upstream failed/,
+      );
+    } finally {
+      languageServer.restore();
+    }
+  });
+
+  it("accepts a successful Connect end-stream envelope after ready", async () => {
+    const languageServer = mockOneShotProtocol({
+      streamFrames: [
+        connectFrame({ ready: { sessionId: "session-connect-complete" } }),
+        connectFrame({ transcription: { text: "hello", isFinal: true } }),
+        connectFrame({}, 2),
+      ],
+    });
+    try {
+      assert.equal(await transcribeAudioWithAntigravity(Buffer.alloc(0)), "hello");
+    } finally {
+      languageServer.restore();
+    }
+  });
+
+  it("rejects a truncated upstream frame at EOF", async () => {
+    const languageServer = mockOneShotProtocol({
+      streamFrames: [Buffer.from([0, 0, 0])],
+      eofAfterFrames: true,
+    });
+    try {
+      await assert.rejects(
+        transcribeAudioWithAntigravity(Buffer.alloc(0)),
+        /truncated|incomplete/i,
+      );
+    } finally {
+      languageServer.restore();
+    }
+  });
+
+  it("rejects a non-successful EndAudioSession response", async () => {
+    const languageServer = mockOneShotProtocol({
+      streamFrames: [
+        connectFrame({ ready: { sessionId: "session-end-status" } }),
+        connectFrame({ complete: true }),
+      ],
+      endStatusCode: 503,
+    });
+    try {
+      await assert.rejects(
+        transcribeAudioWithAntigravity(Buffer.alloc(0)),
+        /EndAudioSession.*HTTP 503/,
+      );
+    } finally {
+      languageServer.restore();
+    }
+  });
+
   it("handles concurrent stream and EndAudioSession transport failures", async () => {
     const requests: FakeRequest[] = [];
     let streamResponse: FakeResponse | null = null;
@@ -410,7 +557,10 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     );
 
     try {
-      await assert.rejects(transcribeAudioWithAntigravity(Buffer.alloc(0)), /ECONNREFUSED/);
+      await assert.rejects(
+        transcribeAudioWithAntigravity(Buffer.alloc(0)),
+        /ECONNREFUSED|ended before protocol completion/,
+      );
       assert.equal(requests[0].destroyed, true);
     } finally {
       requestMock.mock.restore();
@@ -484,11 +634,12 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
 
     try {
       const transcription = transcribeAudioWithAntigravity(Buffer.alloc(1));
+      void transcription.catch(() => {});
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.ok(chunkRequest);
 
       mock.timers.tick(30_000);
-      assert.equal(await transcription, "");
+      await assert.rejects(transcription, /transcription timed out/i);
       assert.equal((chunkRequest as FakeRequest | null)?.destroyed, true);
       (chunkRequest as FakeRequest | null)?.emit("error", new Error("late chunk cancellation"));
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -575,11 +726,12 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
 
     try {
       const transcription = transcribeAudioWithAntigravity(Buffer.alloc(0));
+      void transcription.catch(() => {});
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.ok(endRequest);
 
       mock.timers.tick(30_000);
-      assert.equal(await transcription, "");
+      await assert.rejects(transcription, /transcription timed out/i);
       assert.equal((endRequest as FakeRequest | null)?.destroyed, true);
     } finally {
       mock.timers.reset();

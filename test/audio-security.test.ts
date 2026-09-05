@@ -97,7 +97,7 @@ function connectFrame(message: unknown): Buffer {
   return frame;
 }
 
-function mockLanguageServer(mode: "success" | "failure" | "pending" = "success"): {
+function mockLanguageServer(mode: "success" | "failure" | "pending" | "eof-before-ready" = "success"): {
   requests: FakeRequest[];
   restore: () => void;
 } {
@@ -113,6 +113,10 @@ function mockLanguageServer(mode: "success" | "failure" | "pending" = "success")
         request.respond(response);
         if (mode === "failure") return;
         if (String(options.path).endsWith("/StreamAudioTranscription")) {
+          if (mode === "eof-before-ready") {
+            queueMicrotask(() => response.emit("end"));
+            return;
+          }
           const sessionId = `audio-session-${++sessionNumber}`;
           queueMicrotask(() => {
             response.emit("data", connectFrame({ ready: { sessionId } }));
@@ -356,6 +360,37 @@ describe("audio virtual-key security boundary", () => {
       assert.equal(logs[1].apiKeyHash, tokenHash);
       assert.equal(logs[1].model, "models/proactive-observer-v10");
       assert.equal(logs[1].callType, "audio_transcription");
+    } finally {
+      languageServer.restore();
+      await closeServer(server);
+    }
+  });
+
+  it("returns failure and logs one failed spend when the upstream stream ends before ready", async () => {
+    const rawKey = "rk-audio-incomplete-stream";
+    const tokenHash = addVirtualKey(rawKey, ["*"]);
+    const languageServer = mockLanguageServer("eof-before-ready");
+    const { server, url } = await listenServer((req, res) => {
+      void audio.handleOpenAIAudioTranscriptions(req, res);
+    });
+    const formData = new FormData();
+    formData.append("file", new File([Buffer.alloc(44)], "sample.wav", { type: "audio/wav" }));
+
+    try {
+      const response = await fetch(`${url}/v1/audio/transcriptions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${rawKey}` },
+        body: formData,
+      });
+      assert.equal(response.status, 500);
+      assert.match(await response.text(), /ended before .*ready|incomplete/i);
+      assert.deepEqual(
+        spendLogger.getSpendQueueItemsForTests().map((entry) => ({
+          apiKeyHash: entry.apiKeyHash,
+          status: entry.status,
+        })),
+        [{ apiKeyHash: tokenHash, status: "failure" }],
+      );
     } finally {
       languageServer.restore();
       await closeServer(server);

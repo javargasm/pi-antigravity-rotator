@@ -106,7 +106,7 @@ export async function transcribeAudioWithAntigravity(
     let isResolved = false;
     let endStarted = false;
     let endComplete = false;
-    let streamFinished = false;
+    let protocolComplete = false;
     const pendingUnaryRequests = new Map<ClientRequest, () => void>();
 
     const payload = JSON.stringify({
@@ -145,8 +145,10 @@ export async function transcribeAudioWithAntigravity(
 
         let buf = Buffer.alloc(0);
         res.on("data", (chunk: Buffer) => {
+          if (isResolved) return;
           buf = Buffer.concat([buf, chunk]);
           while (buf.length >= 5) {
+            if (isResolved) return;
             const flag = buf.readUInt8(0);
             const len = buf.readUInt32BE(1);
             if (buf.length < 5 + len) break;
@@ -156,13 +158,18 @@ export async function transcribeAudioWithAntigravity(
             if (flag === 0) {
               try {
                 const msg = JSON.parse(msgBuf.toString("utf8"));
-                if (msg.ready?.sessionId && !endStarted) {
-                  sessionId = msg.ready.sessionId;
-                  endStarted = true;
-                  void sendChunksAndEnd().then(() => {
-                    endComplete = true;
-                    maybeFinish();
-                  }, fail);
+                if (msg.ready) {
+                  const readySessionId = msg.ready.sessionId;
+                  if (typeof readySessionId !== "string" || readySessionId.trim().length === 0) {
+                    fail(new Error("Antigravity stream returned an invalid ready sessionId"));
+                  } else if (!endStarted) {
+                    sessionId = readySessionId;
+                    endStarted = true;
+                    void sendChunksAndEnd().then(() => {
+                      endComplete = true;
+                      maybeFinish();
+                    }, fail);
+                  }
                 } else if (msg.transcription) {
                   const text = msg.transcription.text || "";
                   if (msg.transcription.isFinal) {
@@ -171,19 +178,41 @@ export async function transcribeAudioWithAntigravity(
                     lastInterim = text;
                   }
                 } else if (msg.complete) {
-                  finishStream();
+                  completeProtocol();
                 }
               } catch (err: unknown) {
-                audioLogger.warn(`Failed to parse transcription message: ${err}`);
+                fail(new Error(`Invalid Antigravity transcription message: ${String(err)}`));
               }
             } else if (flag === 2) {
-              finishStream();
+              try {
+                const endStream = JSON.parse(msgBuf.toString("utf8"));
+                if (!endStream || typeof endStream !== "object" || Array.isArray(endStream)) {
+                  throw new Error("expected a JSON object");
+                }
+                if (endStream.error) {
+                  const message = String(
+                    endStream.error.message || endStream.error.code || "unknown upstream error",
+                  );
+                  fail(new Error(`Antigravity StreamAudioTranscription error: ${message}`));
+                } else {
+                  completeProtocol();
+                }
+              } catch (err: unknown) {
+                fail(new Error(`Invalid Antigravity end-stream message: ${String(err)}`));
+              }
             }
           }
         });
 
         res.on("end", () => {
-          finishStream();
+          if (isResolved) return;
+          if (buf.length > 0) {
+            fail(new Error("Antigravity stream ended with a truncated frame"));
+          } else if (!sessionId) {
+            fail(new Error("Antigravity stream ended before a ready session"));
+          } else if (!protocolComplete) {
+            fail(new Error("Antigravity stream ended before protocol completion"));
+          }
         });
       },
     );
@@ -196,7 +225,7 @@ export async function transcribeAudioWithAntigravity(
     streamReq.end();
 
     const timeout = setTimeout(() => {
-      succeed(finalText || lastInterim);
+      fail(new Error("Antigravity audio transcription timed out"));
     }, AUDIO_TRANSCRIPTION_TIMEOUT_MS);
 
     function cleanup() {
@@ -223,13 +252,17 @@ export async function transcribeAudioWithAntigravity(
       resolve(text);
     }
 
-    function finishStream() {
-      streamFinished = true;
+    function completeProtocol() {
+      if (!sessionId || !endStarted) {
+        fail(new Error("Antigravity stream completed before a ready session"));
+        return;
+      }
+      protocolComplete = true;
       maybeFinish();
     }
 
     function maybeFinish() {
-      if (streamFinished && (!endStarted || endComplete)) succeed();
+      if (sessionId && protocolComplete && endStarted && endComplete) succeed();
     }
 
     function fail(error: Error) {
@@ -325,9 +358,13 @@ export async function transcribeAudioWithAntigravity(
             },
           },
           (resp) => {
-            resp.resume();
-            resp.on("end", finish);
             resp.on("error", finish);
+            resp.resume();
+            if (resp.statusCode !== 200) {
+              finish(new Error(`Antigravity EndAudioSession error: HTTP ${resp.statusCode}`));
+              return;
+            }
+            resp.on("end", finish);
           },
         );
         pendingUnaryRequests.set(req, () => finish());
