@@ -411,6 +411,49 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     }
   });
 
+  it("treats a SendAudioChunk response error as best-effort completion", async () => {
+    let streamResponse: FakeResponse | null = null;
+    let chunkResponse: FakeResponse | null = null;
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) =>
+        new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            const response = new FakeResponse();
+            streamResponse = response;
+            callback?.(response);
+            queueMicrotask(() => {
+              response.emit("data", connectFrame({ ready: { sessionId: "session-chunk-error" } }));
+              response.emit("data", connectFrame({ transcription: { text: "hello", isFinal: true } }));
+            });
+          } else if (String(options.path).endsWith("/SendAudioChunk")) {
+            chunkResponse = new FakeResponse();
+            callback?.(chunkResponse);
+          } else if (String(options.path).endsWith("/EndAudioSession")) {
+            const response = new FakeResponse();
+            callback?.(response);
+            queueMicrotask(() => {
+              response.emit("end");
+              streamResponse?.emit("data", connectFrame({ complete: true }));
+            });
+          }
+        })) as unknown as typeof https.request,
+    );
+    const transcription = transcribeAudioWithAntigravity(Buffer.alloc(1));
+    void transcription.catch(() => {});
+
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.ok(chunkResponse);
+      assert.doesNotThrow(() => chunkResponse?.emit("error", new Error("chunk ECONNRESET")));
+      assert.equal(await transcription, "hello");
+    } finally {
+      (streamResponse as FakeResponse | null)?.emit("error", new Error("test cleanup"));
+      requestMock.mock.restore();
+    }
+  });
+
   it("reports verbose metadata only when supplied or derivable from WAV data", async () => {
     const languageServer = mockSuccessfulLanguageServer();
     const { server, url } = await listenServer((req, res) => {

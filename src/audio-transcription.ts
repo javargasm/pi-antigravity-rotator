@@ -258,6 +258,7 @@ export async function transcribeAudioWithAntigravity(
             (resp) => {
               resp.resume();
               resp.on("end", () => r());
+              resp.on("error", () => r());
             },
           );
           req.on("error", () => r());
