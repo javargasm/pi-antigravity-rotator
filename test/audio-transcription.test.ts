@@ -889,7 +889,7 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     }
   });
 
-  it("resolves live stop when Connect completion is followed by EOF", async () => {
+  it("waits for EndAudioSession acknowledgement after application completion", async () => {
     const upstream = mockLiveProtocol();
     const events: Array<Record<string, unknown>> = [];
     const errors: Error[] = [];
@@ -907,21 +907,270 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
       response.emit("data", connectFrame({ ready: { sessionId: "live-ending-complete" } }));
       await start;
       const ending = session.endSession();
-      response.emit("data", connectFrame({}, 2));
-      response.emit("end");
+      let stopped = false;
+      void ending.then(() => {
+        stopped = true;
+      });
+      response.emit("data", connectFrame({ complete: {} }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      assert.equal(stopped, false);
+      assert.equal(events.some((event) => event.complete), false);
+      const endRequest = upstream.requests[1];
+      assert.ok(endRequest);
+      const endResponse = new FakeResponse();
+      endRequest.callback?.(endResponse);
+      endResponse.emit("end");
       await Promise.race([
         ending,
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("stop remained pending")), 100),
         ),
       ]);
+      response.emit("data", connectFrame({}, 2));
+      response.emit("end");
 
       assert.equal(events.filter((event) => event.complete === true).length, 1);
       assert.deepEqual(errors, []);
       assert.equal((session as unknown as { state: string }).state, "destroyed");
       assert.equal(session.sessionId, null);
       assert.equal(upstream.requests.length, 2);
-      assert.equal(upstream.requests.every((request) => request.destroyed), true);
+      assert.equal(upstream.requests[0].destroyed, true);
+    } finally {
+      session.destroy();
+      upstream.restore();
+    }
+  });
+
+  it("waits for EndAudioSession acknowledgement after Connect completion", async () => {
+    const upstream = mockLiveProtocol();
+    const events: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      {
+        onEvent: (event: Record<string, unknown>) => events.push(event),
+        onError: (error: Error) => errors.push(error),
+      },
+    );
+    const start = session.start();
+
+    try {
+      const response = await upstream.streamResponse;
+      response.emit("data", connectFrame({ ready: { sessionId: "connect-first" } }));
+      await start;
+      const ending = session.endSession();
+      let stopped = false;
+      void ending.then(() => {
+        stopped = true;
+      });
+      response.emit("data", connectFrame({}, 2));
+      response.emit("end");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      assert.equal(stopped, false);
+      assert.equal(events.some((event) => event.complete), false);
+      assert.deepEqual(errors, []);
+
+      const endRequest = upstream.requests[1];
+      assert.ok(endRequest);
+      const endResponse = new FakeResponse();
+      endRequest.callback?.(endResponse);
+      endResponse.emit("end");
+      await ending;
+
+      assert.equal(events.filter((event) => event.complete === true).length, 1);
+      assert.deepEqual(errors, []);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal(upstream.requests[0].destroyed, true);
+    } finally {
+      session.destroy();
+      upstream.restore();
+    }
+  });
+
+  it("preserves final transcription when EndAudioSession is acknowledged first", async () => {
+    const upstream = mockLiveProtocol();
+    const events: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      {
+        onEvent: (event: Record<string, unknown>) => events.push(event),
+        onError: (error: Error) => errors.push(error),
+      },
+    );
+    const start = session.start();
+
+    try {
+      const response = await upstream.streamResponse;
+      response.emit("data", connectFrame({ ready: { sessionId: "ack-first" } }));
+      await start;
+      const ending = session.endSession();
+      let stopped = false;
+      void ending.then(() => {
+        stopped = true;
+      });
+
+      const endRequest = upstream.requests[1];
+      assert.ok(endRequest);
+      const endResponse = new FakeResponse();
+      endRequest.callback?.(endResponse);
+      endResponse.emit("end");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      assert.equal(stopped, false);
+      assert.equal((session as unknown as { state: string }).state, "ending");
+      assert.equal(session.sessionId, "ack-first");
+      assert.equal(upstream.requests[0].destroyed, false);
+
+      response.emit(
+        "data",
+        connectFrame({ transcription: { text: "preserved final", isFinal: true } }),
+      );
+      response.emit("data", connectFrame({ complete: {} }));
+      response.emit("data", connectFrame({}, 2));
+      response.emit("end");
+      await ending;
+
+      assert.deepEqual(
+        events
+          .filter((event) => event.transcription)
+          .map((event) => (event.transcription as { text: string }).text),
+        ["preserved final"],
+      );
+      assert.equal(events.filter((event) => event.complete === true).length, 1);
+      assert.deepEqual(errors, []);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal(session.sendChunk(Buffer.alloc(1)), false);
+      assert.equal(upstream.requests[0].destroyed, true);
+    } finally {
+      session.destroy();
+      upstream.restore();
+    }
+  });
+
+  it("terminalizes application completion while ready and ignores later terminal events", async () => {
+    const upstream = mockLiveProtocol();
+    const events: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      {
+        onEvent: (event: Record<string, unknown>) => events.push(event),
+        onError: (error: Error) => errors.push(error),
+      },
+    );
+    const start = session.start();
+
+    try {
+      const response = await upstream.streamResponse;
+      response.emit("data", connectFrame({ ready: { sessionId: "application-complete" } }));
+      await start;
+      response.emit("data", connectFrame({ complete: {} }));
+
+      assert.equal(events.filter((event) => event.complete).length, 1);
+      assert.deepEqual(errors, []);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal(session.sendChunk(Buffer.alloc(1)), false);
+      assert.equal(upstream.requests[0].destroyed, true);
+
+      response.emit("data", connectFrame({ complete: {} }));
+      response.emit("data", connectFrame({}, 2));
+      response.emit("end");
+
+      assert.equal(events.filter((event) => event.complete).length, 1);
+      assert.deepEqual(errors, []);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal(session.sendChunk(Buffer.alloc(1)), false);
+      assert.equal(upstream.requests[0].destroyed, true);
+    } finally {
+      session.destroy();
+      upstream.restore();
+    }
+  });
+
+  it("times out after EndAudioSession acknowledgement without protocol completion", async () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    const upstream = mockLiveProtocol();
+    const events: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      {
+        onEvent: (event: Record<string, unknown>) => events.push(event),
+        onError: (error: Error) => errors.push(error),
+      },
+    );
+    const start = session.start();
+
+    try {
+      const response = await upstream.streamResponse;
+      response.emit("data", connectFrame({ ready: { sessionId: "missing-completion" } }));
+      await start;
+      const ending = session.endSession();
+      const endRequest = upstream.requests[1];
+      assert.ok(endRequest);
+      const endResponse = new FakeResponse();
+      endRequest.callback?.(endResponse);
+      endResponse.emit("end");
+
+      mock.timers.tick(10_000);
+      await ending;
+
+      assert.equal(events.some((event) => event.complete), false);
+      assert.deepEqual(errors.map((error) => error.message), [
+        "Antigravity audio stream completion timed out after EndAudioSession",
+      ]);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal(upstream.requests[0].destroyed, true);
+    } finally {
+      session.destroy();
+      upstream.restore();
+      mock.timers.reset();
+    }
+  });
+
+  it("rejects a non-successful live EndAudioSession response", async () => {
+    const upstream = mockLiveProtocol();
+    const events: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
+    const session = new AntigravityAudioSession(
+      { port: 1, csrf: "test" },
+      {
+        onEvent: (event: Record<string, unknown>) => events.push(event),
+        onError: (error: Error) => errors.push(error),
+      },
+    );
+    const start = session.start();
+
+    try {
+      const response = await upstream.streamResponse;
+      response.emit("data", connectFrame({ ready: { sessionId: "bad-end-status" } }));
+      await start;
+      const ending = session.endSession();
+      const endRequest = upstream.requests[1];
+      assert.ok(endRequest);
+      const endResponse = new FakeResponse(503);
+      endRequest.callback?.(endResponse);
+      await ending;
+
+      endResponse.emit("end");
+      response.emit("data", connectFrame({ complete: {} }));
+      response.emit("data", connectFrame({}, 2));
+      response.emit("end");
+      assert.equal(events.some((event) => event.complete), false);
+      assert.deepEqual(errors.map((error) => error.message), [
+        "Antigravity EndAudioSession error: HTTP 503",
+      ]);
+      assert.equal((session as unknown as { state: string }).state, "destroyed");
+      assert.equal(session.sessionId, null);
+      assert.equal(upstream.requests[0].destroyed, true);
     } finally {
       session.destroy();
       upstream.restore();
@@ -1285,6 +1534,7 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
 
   it("waits for queued audio before terminalizing an ended session", async () => {
     const requests: FakeRequest[] = [];
+    let streamResponse: FakeResponse | null = null;
     const requestMock = mock.method(
       https,
       "request",
@@ -1292,6 +1542,7 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
         const request = new FakeRequest(options, callback, () => {
           if (String(options.path).endsWith("/StreamAudioTranscription")) {
             const response = new FakeResponse();
+            streamResponse = response;
             callback?.(response);
             queueMicrotask(() => {
               response.emit("data", connectFrame({ ready: { sessionId: "session-ending" } }));
@@ -1325,6 +1576,11 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
       const endResponse = new FakeResponse();
       requests[2].callback?.(endResponse);
       endResponse.emit("end");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(ended, false);
+      assert.equal(session.sessionId, "session-ending");
+
+      (streamResponse as FakeResponse | null)?.emit("data", connectFrame({ complete: {} }));
       await ending;
 
       assert.equal(session.sessionId, null);

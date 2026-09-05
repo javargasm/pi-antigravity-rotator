@@ -615,6 +615,9 @@ export class AntigravityAudioSession {
   private queuedAudioBytes = 0;
   private isProcessingQueue = false;
   private pendingEnd: { promise: Promise<void>; resolve: () => void } | null = null;
+  private endAcknowledged = false;
+  private protocolComplete = false;
+  private completionTimer: ReturnType<typeof setTimeout> | null = null;
   private state: "idle" | "starting" | "ready" | "ending" | "ended" | "failed" | "destroyed" =
     "idle";
   private startTimer: ReturnType<typeof setTimeout> | null = null;
@@ -718,7 +721,8 @@ export class AntigravityAudioSession {
                     resolve(sessionId);
                     void this.processQueue();
                   }
-                  this.onEvent(msg);
+                  if (msg.complete) this.completeStream();
+                  else this.onEvent(msg);
                 } catch (e) {
                   audioLogger.error(`Antigravity JSON parse error: ${e}`);
                 }
@@ -741,7 +745,10 @@ export class AntigravityAudioSession {
               this.failStart(new Error("Antigravity audio stream ended before becoming ready"));
               return;
             }
-            if (this.state === "ready" || this.state === "ending") {
+            if (
+              !this.protocolComplete &&
+              (this.state === "ready" || this.state === "ending")
+            ) {
               this.handleStreamError(new Error("Antigravity audio stream ended unexpectedly"));
             }
           });
@@ -877,16 +884,18 @@ export class AntigravityAudioSession {
     const data = JSON.stringify({ sessionId });
     return new Promise((resolve) => {
       let settled = false;
-      const finish = (): void => {
-        if (settled) return;
+      const settle = (): boolean => {
+        if (settled) return false;
         settled = true;
         this.pendingRequests.delete(req);
-        if (this.sessionId === sessionId) this.sessionId = null;
-        if (this.state !== "destroyed") this.state = "ended";
-        const pendingEnd = this.pendingEnd;
-        this.pendingEnd = null;
-        pendingEnd?.resolve();
         resolve();
+        return true;
+      };
+      const acknowledge = (): void => {
+        if (!settle() || this.state !== "ending" || this.sessionId !== sessionId) return;
+        this.endAcknowledged = true;
+        if (this.protocolComplete) this.finishCompletedStream();
+        else this.waitForProtocolCompletion();
       };
       const req = https.request(
         {
@@ -903,19 +912,31 @@ export class AntigravityAudioSession {
         },
         (res) => {
           res.resume();
-          res.on("end", finish);
-          res.on("error", finish);
+          res.on("error", (error) => {
+            if (!settled) this.failSession(error);
+          });
+          if (res.statusCode === undefined || res.statusCode < 200 || res.statusCode >= 300) {
+            this.failSession(
+              new Error(`Antigravity EndAudioSession error: HTTP ${res.statusCode}`),
+            );
+            return;
+          }
+          res.on("end", acknowledge);
         },
       );
-      this.pendingRequests.set(req, finish);
+      this.pendingRequests.set(req, () => {
+        settle();
+      });
       req.setTimeout(AUDIO_UNARY_REQUEST_TIMEOUT_MS, () => {
+        if (settled) return;
         const error = new Error("EndAudioSession timed out");
         audioLogger.warn(error.message);
         this.failSession(error);
       });
       req.on("error", (error) => {
+        if (settled) return;
         audioLogger.warn(`EndAudioSession error: ${error.message}`);
-        finish();
+        this.failSession(error);
       });
       req.write(data);
       req.end();
@@ -925,6 +946,7 @@ export class AntigravityAudioSession {
   public destroy(): void {
     if (this.state === "destroyed") return;
     const rejectStart = this.startReject;
+    this.clearCompletionWait();
     this.state = "destroyed";
     this.clearStartWait();
     this.queue = [];
@@ -957,6 +979,11 @@ export class AntigravityAudioSession {
     if (this.startTimer) clearTimeout(this.startTimer);
     this.startTimer = null;
     this.startReject = null;
+  }
+
+  private clearCompletionWait(): void {
+    if (this.completionTimer) clearTimeout(this.completionTimer);
+    this.completionTimer = null;
   }
 
   private failStart(error: Error): void {
@@ -993,8 +1020,26 @@ export class AntigravityAudioSession {
       return;
     }
     if (this.state !== "ready" && this.state !== "ending") return;
+    this.protocolComplete = true;
+    if (this.state === "ending" && !this.endAcknowledged) return;
+    this.finishCompletedStream();
+  }
+
+  private finishCompletedStream(): void {
+    if (this.state !== "ready" && this.state !== "ending") return;
     this.destroy();
     this.onEvent({ complete: true });
+  }
+
+  private waitForProtocolCompletion(): void {
+    if (this.completionTimer || this.protocolComplete || this.state !== "ending") return;
+    this.completionTimer = setTimeout(() => {
+      this.completionTimer = null;
+      this.failSession(
+        new Error("Antigravity audio stream completion timed out after EndAudioSession"),
+      );
+    }, AUDIO_UNARY_REQUEST_TIMEOUT_MS);
+    this.completionTimer.unref?.();
   }
 
   private handleStreamError(error: Error): void {
