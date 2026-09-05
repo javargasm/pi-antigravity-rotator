@@ -23,6 +23,7 @@ class FakeResponse extends EventEmitter {
 class FakeRequest extends EventEmitter {
   readonly chunks: Buffer[] = [];
   destroyed = false;
+  timeoutCallback: (() => void) | null = null;
 
   constructor(
     readonly options: Record<string, unknown>,
@@ -40,6 +41,11 @@ class FakeRequest extends EventEmitter {
   end(data?: string | Buffer): this {
     if (data !== undefined) this.write(data);
     queueMicrotask(() => this.onEnd(this));
+    return this;
+  }
+
+  setTimeout(_timeout: number, callback: () => void): this {
+    this.timeoutCallback = callback;
     return this;
   }
 
@@ -450,6 +456,84 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
       assert.equal(await transcription, "hello");
     } finally {
       (streamResponse as FakeResponse | null)?.emit("error", new Error("test cleanup"));
+      requestMock.mock.restore();
+    }
+  });
+
+  it("cancels a hanging audio chunk on transcription timeout without starting finalization", async () => {
+    const requests: FakeRequest[] = [];
+    let chunkRequest: FakeRequest | null = null;
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            const response = new FakeResponse();
+            callback?.(response);
+            queueMicrotask(() => response.emit("data", connectFrame({ ready: { sessionId: "timeout-chunk" } })));
+          } else if (String(options.path).endsWith("/SendAudioChunk")) {
+            chunkRequest = request;
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    mock.timers.enable({ apis: ["setTimeout"] });
+
+    try {
+      const transcription = transcribeAudioWithAntigravity(Buffer.alloc(1));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.ok(chunkRequest);
+
+      mock.timers.tick(30_000);
+      assert.equal(await transcription, "");
+      assert.equal((chunkRequest as FakeRequest | null)?.destroyed, true);
+      (chunkRequest as FakeRequest | null)?.emit("error", new Error("late chunk cancellation"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(
+        requests.some((request) => String(request.options.path).endsWith("/EndAudioSession")),
+        false,
+      );
+    } finally {
+      mock.timers.reset();
+      requestMock.mock.restore();
+    }
+  });
+
+  it("cancels a hanging EndAudioSession request on transcription timeout", async () => {
+    const requests: FakeRequest[] = [];
+    let endRequest: FakeRequest | null = null;
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            const response = new FakeResponse();
+            callback?.(response);
+            queueMicrotask(() => response.emit("data", connectFrame({ ready: { sessionId: "timeout-end" } })));
+          } else if (String(options.path).endsWith("/EndAudioSession")) {
+            endRequest = request;
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    mock.timers.enable({ apis: ["setTimeout"] });
+
+    try {
+      const transcription = transcribeAudioWithAntigravity(Buffer.alloc(0));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.ok(endRequest);
+
+      mock.timers.tick(30_000);
+      assert.equal(await transcription, "");
+      assert.equal((endRequest as FakeRequest | null)?.destroyed, true);
+    } finally {
+      mock.timers.reset();
       requestMock.mock.restore();
     }
   });

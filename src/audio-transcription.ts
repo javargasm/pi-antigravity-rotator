@@ -13,6 +13,8 @@ import { hashKey } from "./virtual-keys.js";
 
 const audioLogger = logger.child("audio-transcription");
 const AUDIO_SESSION_START_TIMEOUT_MS = 10_000;
+const AUDIO_TRANSCRIPTION_TIMEOUT_MS = 30_000;
+const AUDIO_UNARY_REQUEST_TIMEOUT_MS = 10_000;
 export const MAX_AUDIO_FRAME_BYTES = 256 * 1024;
 export const MAX_QUEUED_AUDIO_BYTES = 1024 * 1024;
 const MAX_QUEUED_AUDIO_CHUNKS = 1024;
@@ -105,6 +107,7 @@ export async function transcribeAudioWithAntigravity(
     let endStarted = false;
     let endComplete = false;
     let streamFinished = false;
+    const pendingUnaryRequests = new Map<ClientRequest, () => void>();
 
     const payload = JSON.stringify({
       mimeType,
@@ -194,10 +197,18 @@ export async function transcribeAudioWithAntigravity(
 
     const timeout = setTimeout(() => {
       succeed(finalText || lastInterim);
-    }, 30_000);
+    }, AUDIO_TRANSCRIPTION_TIMEOUT_MS);
 
     function cleanup() {
       clearTimeout(timeout);
+      for (const [request, finish] of pendingUnaryRequests) {
+        try {
+          request.destroy();
+        } catch {
+          // ignore cleanup error
+        }
+        finish();
+      }
       try {
         streamReq.destroy();
       } catch {
@@ -229,11 +240,12 @@ export async function transcribeAudioWithAntigravity(
     }
 
     async function sendChunksAndEnd() {
-      if (!sessionId) return;
+      if (!sessionId || isResolved) return;
       const chunkSize = 3200; // 100ms at 16kHz
       let seq = 0;
 
       for (let i = 0; i < audioBuffer.length; i += chunkSize) {
+        if (isResolved) return;
         const chunk = audioBuffer.subarray(i, Math.min(i + chunkSize, audioBuffer.length));
         const data = JSON.stringify({
           sessionId,
@@ -241,7 +253,14 @@ export async function transcribeAudioWithAntigravity(
           sequenceNumber: String(seq++),
         });
 
-        await new Promise<void>((r) => {
+        await new Promise<void>((resolveChunk) => {
+          let settled = false;
+          function finish(): void {
+            if (settled) return;
+            settled = true;
+            pendingUnaryRequests.delete(req);
+            resolveChunk();
+          }
           const req = https.request(
             {
               hostname: "127.0.0.1",
@@ -257,19 +276,39 @@ export async function transcribeAudioWithAntigravity(
             },
             (resp) => {
               resp.resume();
-              resp.on("end", () => r());
-              resp.on("error", () => r());
+              resp.on("end", finish);
+              resp.on("error", finish);
             },
           );
-          req.on("error", () => r());
+          pendingUnaryRequests.set(req, finish);
+          req.setTimeout(AUDIO_UNARY_REQUEST_TIMEOUT_MS, () => {
+            audioLogger.warn("SendAudioChunk timed out");
+            try {
+              req.destroy();
+            } catch {
+              // ignore cleanup error
+            }
+            finish();
+          });
+          req.on("error", finish);
           req.write(data);
           req.end();
         });
+        if (isResolved) return;
       }
 
       // End session
+      if (isResolved) return;
       const endData = JSON.stringify({ sessionId });
       await new Promise<void>((resolveEnd, rejectEnd) => {
+        let settled = false;
+        function finish(error?: Error): void {
+          if (settled) return;
+          settled = true;
+          pendingUnaryRequests.delete(req);
+          if (error) rejectEnd(error);
+          else resolveEnd();
+        }
         const req = https.request(
           {
             hostname: "127.0.0.1",
@@ -285,11 +324,21 @@ export async function transcribeAudioWithAntigravity(
           },
           (resp) => {
             resp.resume();
-            resp.on("end", resolveEnd);
-            resp.on("error", rejectEnd);
+            resp.on("end", finish);
+            resp.on("error", finish);
           },
         );
-        req.on("error", rejectEnd);
+        pendingUnaryRequests.set(req, () => finish());
+        req.setTimeout(AUDIO_UNARY_REQUEST_TIMEOUT_MS, () => {
+          const error = new Error("EndAudioSession timed out");
+          try {
+            req.destroy();
+          } catch {
+            // ignore cleanup error
+          }
+          finish(error);
+        });
+        req.on("error", finish);
         req.end(endData);
       });
     }
@@ -637,7 +686,9 @@ export class AntigravityAudioSession {
               this.failStart(new Error("Antigravity audio stream ended before becoming ready"));
               return;
             }
-            this.onEvent({ streamEnded: true });
+            if (this.state === "ready") {
+              this.handleStreamError(new Error("Antigravity audio stream ended unexpectedly"));
+            }
           });
         },
       );
@@ -1006,7 +1057,7 @@ function createClientSession(
     onError: (err) => {
       if (client.antigravity !== session || client.closed) return;
       client.send({ type: "antigravity_error", event: "error", message: err.message });
-      finishClientSpend(client, "failure");
+      closeClient(client, 1011, "Antigravity audio stream failed");
     },
   });
   return session;

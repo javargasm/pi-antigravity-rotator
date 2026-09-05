@@ -72,6 +72,10 @@ class FakeRequest extends EventEmitter {
     return this;
   }
 
+  setTimeout(_timeout: number, _callback: () => void): this {
+    return this;
+  }
+
   respond(response: FakeResponse): void {
     this.callback?.(response);
   }
@@ -541,6 +545,120 @@ describe("audio WebSocket security boundary", () => {
     } finally {
       ws.close();
       languageServer.restore();
+      await closeServer(server);
+    }
+  });
+
+  it("terminalizes a ready client when its upstream stream ends unexpectedly", async () => {
+    const rawKey = "rk-ws-unexpected-stream-end";
+    const tokenHash = addVirtualKey(rawKey, ["*"]);
+    const requests: FakeRequest[] = [];
+    let streamResponse: FakeResponse | null = null;
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            streamResponse = new FakeResponse();
+            request.respond(streamResponse);
+            queueMicrotask(() =>
+              streamResponse?.emit("data", connectFrame({ ready: { sessionId: "unexpected-end" } })),
+            );
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    const { server, port } = await listenServer((_req, res) => res.end());
+    installUpgradeHandler(server);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?key=${rawKey}`);
+
+    try {
+      await waitForWebSocketEvent(ws, "open");
+      const ready = waitForWebSocketMessage(ws, (message) => message.type === "ready_to_receive_audio");
+      ws.send(JSON.stringify({ type: "start", model: "models/proactive-observer-v10" }));
+      await ready;
+
+      const error = waitForWebSocketMessage(ws, (message) => message.type === "antigravity_error");
+      const close = waitForWebSocketEvent<CloseEvent>(ws, "close");
+      void close.catch(() => {});
+      (streamResponse as FakeResponse | null)?.emit("end");
+      ws.send(Buffer.alloc(1));
+
+      await error;
+      assert.equal((await close).code, 1011);
+      assert.equal(
+        requests.some((request) => String(request.options.path).endsWith("/SendAudioChunk")),
+        false,
+      );
+      assert.deepEqual(
+        spendLogger.getSpendQueueItemsForTests().map((entry) => ({
+          apiKeyHash: entry.apiKeyHash,
+          status: entry.status,
+        })),
+        [{ apiKeyHash: tokenHash, status: "failure" }],
+      );
+    } finally {
+      ws.close();
+      requestMock.mock.restore();
+      await closeServer(server);
+    }
+  });
+
+  it("does not report a stream error while a client session is ending normally", async () => {
+    const rawKey = "rk-ws-normal-stream-end";
+    addVirtualKey(rawKey, ["*"]);
+    const requests: FakeRequest[] = [];
+    let streamResponse: FakeResponse | null = null;
+    let endRequest: FakeRequest | null = null;
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            streamResponse = new FakeResponse();
+            request.respond(streamResponse);
+            queueMicrotask(() =>
+              streamResponse?.emit("data", connectFrame({ ready: { sessionId: "normal-end" } })),
+            );
+          } else if (String(options.path).endsWith("/EndAudioSession")) {
+            endRequest = request;
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    const { server, port } = await listenServer((_req, res) => res.end());
+    installUpgradeHandler(server);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?key=${rawKey}`);
+    const messages: Array<Record<string, unknown>> = [];
+    ws.onmessage = (event) => messages.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+
+    try {
+      await waitForWebSocketEvent(ws, "open");
+      const ready = waitForWebSocketMessage(ws, (message) => message.type === "ready_to_receive_audio");
+      ws.send(JSON.stringify({ type: "start", model: "models/proactive-observer-v10" }));
+      await ready;
+
+      ws.send(JSON.stringify({ type: "stop" }));
+      await waitForWebSocketMessage(ws, (message) => message.type === "audio_stopped");
+      await waitForCondition(() => endRequest !== null);
+      (streamResponse as FakeResponse | null)?.emit("end");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(messages.some((message) => message.type === "antigravity_error"), false);
+
+      const endResponse = new FakeResponse();
+      (endRequest as FakeRequest | null)?.respond(endResponse);
+      endResponse.emit("end");
+      await waitForCondition(() => spendLogger.getSpendQueueItemsForTests().length === 1);
+      assert.equal(spendLogger.getSpendQueueItemsForTests()[0].status, "success");
+    } finally {
+      ws.close();
+      requestMock.mock.restore();
       await closeServer(server);
     }
   });
