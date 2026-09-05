@@ -88,16 +88,18 @@ class FakeRequest extends EventEmitter {
   }
 }
 
-function connectFrame(message: unknown): Buffer {
+function connectFrame(message: unknown, flag = 0): Buffer {
   const payload = Buffer.from(JSON.stringify(message));
   const frame = Buffer.alloc(5 + payload.length);
-  frame.writeUInt8(0, 0);
+  frame.writeUInt8(flag, 0);
   frame.writeUInt32BE(payload.length, 1);
   payload.copy(frame, 5);
   return frame;
 }
 
-function mockLanguageServer(mode: "success" | "failure" | "pending" | "eof-before-ready" = "success"): {
+function mockLanguageServer(
+  mode: "success" | "failure" | "pending" | "eof-before-ready" | "flag2-error-null" = "success",
+): {
   requests: FakeRequest[];
   restore: () => void;
 } {
@@ -120,6 +122,10 @@ function mockLanguageServer(mode: "success" | "failure" | "pending" | "eof-befor
           const sessionId = `audio-session-${++sessionNumber}`;
           queueMicrotask(() => {
             response.emit("data", connectFrame({ ready: { sessionId } }));
+            if (mode === "flag2-error-null") {
+              response.emit("data", connectFrame({ error: null }, 2));
+              return;
+            }
             response.emit("data", connectFrame({ transcription: { text: "hello", isFinal: true } }));
             response.emit("data", connectFrame({ complete: true }));
           });
@@ -384,6 +390,37 @@ describe("audio virtual-key security boundary", () => {
       });
       assert.equal(response.status, 500);
       assert.match(await response.text(), /ended before .*ready|incomplete/i);
+      assert.deepEqual(
+        spendLogger.getSpendQueueItemsForTests().map((entry) => ({
+          apiKeyHash: entry.apiKeyHash,
+          status: entry.status,
+        })),
+        [{ apiKeyHash: tokenHash, status: "failure" }],
+      );
+    } finally {
+      languageServer.restore();
+      await closeServer(server);
+    }
+  });
+
+  it("returns failure and logs one failed spend for a present null Connect error", async () => {
+    const rawKey = "rk-audio-null-connect-error";
+    const tokenHash = addVirtualKey(rawKey, ["*"]);
+    const languageServer = mockLanguageServer("flag2-error-null");
+    const { server, url } = await listenServer((req, res) => {
+      void audio.handleOpenAIAudioTranscriptions(req, res);
+    });
+    const formData = new FormData();
+    formData.append("file", new File([Buffer.alloc(44)], "sample.wav", { type: "audio/wav" }));
+
+    try {
+      const response = await fetch(`${url}/v1/audio/transcriptions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${rawKey}` },
+        body: formData,
+      });
+      assert.equal(response.status, 500);
+      assert.match(await response.text(), /StreamAudioTranscription error/);
       assert.deepEqual(
         spendLogger.getSpendQueueItemsForTests().map((entry) => ({
           apiKeyHash: entry.apiKeyHash,

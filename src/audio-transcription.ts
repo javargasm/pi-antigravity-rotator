@@ -189,10 +189,14 @@ export async function transcribeAudioWithAntigravity(
                 if (!endStream || typeof endStream !== "object" || Array.isArray(endStream)) {
                   throw new Error("expected a JSON object");
                 }
-                if (endStream.error) {
-                  const message = String(
-                    endStream.error.message || endStream.error.code || "unknown upstream error",
-                  );
+                if (Object.hasOwn(endStream, "error")) {
+                  const upstreamError = endStream.error;
+                  const message =
+                    upstreamError && typeof upstreamError === "object"
+                      ? String(upstreamError.message || upstreamError.code || "invalid error envelope")
+                      : typeof upstreamError === "string" && upstreamError
+                        ? upstreamError
+                        : "invalid error envelope";
                   fail(new Error(`Antigravity StreamAudioTranscription error: ${message}`));
                 } else {
                   completeProtocol();

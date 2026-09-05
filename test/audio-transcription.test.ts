@@ -447,6 +447,25 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     }
   });
 
+  for (const error of [null, false]) {
+    it(`rejects a Connect end-stream envelope with error: ${String(error)}`, async () => {
+      const languageServer = mockOneShotProtocol({
+        streamFrames: [
+          connectFrame({ ready: { sessionId: `session-error-${String(error)}` } }),
+          connectFrame({ error }, 2),
+        ],
+      });
+      try {
+        await assert.rejects(
+          transcribeAudioWithAntigravity(Buffer.alloc(0)),
+          /StreamAudioTranscription error/,
+        );
+      } finally {
+        languageServer.restore();
+      }
+    });
+  }
+
   it("accepts a successful Connect end-stream envelope after ready", async () => {
     const languageServer = mockOneShotProtocol({
       streamFrames: [
