@@ -502,6 +502,55 @@ describe("models/proactive-observer-v10 audio transcription support", () => {
     }
   });
 
+  it("stops later chunks and finalization when a chunk request times out", async () => {
+    const requests: FakeRequest[] = [];
+    let firstChunk: FakeRequest | null = null;
+    const requestMock = mock.method(
+      https,
+      "request",
+      ((options: Record<string, unknown>, callback?: (response: FakeResponse) => void) => {
+        const request = new FakeRequest(options, callback, () => {
+          if (String(options.path).endsWith("/StreamAudioTranscription")) {
+            const response = new FakeResponse();
+            callback?.(response);
+            queueMicrotask(() => response.emit("data", connectFrame({ ready: { sessionId: "chunk-deadline" } })));
+          } else if (String(options.path).endsWith("/SendAudioChunk") && firstChunk === null) {
+            firstChunk = request;
+          }
+        });
+        requests.push(request);
+        return request;
+      }) as unknown as typeof https.request,
+    );
+    mock.timers.enable({ apis: ["setTimeout"] });
+    let transcription: Promise<string> | null = null;
+
+    try {
+      transcription = transcribeAudioWithAntigravity(Buffer.alloc(3201));
+      void transcription.catch(() => {});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.ok(firstChunk);
+      assert.ok((firstChunk as FakeRequest | null)?.timeoutCallback);
+
+      (firstChunk as FakeRequest | null)?.timeoutCallback?.();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(
+        requests.filter((request) => String(request.options.path).endsWith("/SendAudioChunk")).length,
+        1,
+      );
+      assert.equal(
+        requests.some((request) => String(request.options.path).endsWith("/EndAudioSession")),
+        false,
+      );
+      await assert.rejects(transcription, /SendAudioChunk timed out/);
+    } finally {
+      mock.timers.tick(30_000);
+      await transcription?.catch(() => {});
+      mock.timers.reset();
+      requestMock.mock.restore();
+    }
+  });
+
   it("cancels a hanging EndAudioSession request on transcription timeout", async () => {
     const requests: FakeRequest[] = [];
     let endRequest: FakeRequest | null = null;

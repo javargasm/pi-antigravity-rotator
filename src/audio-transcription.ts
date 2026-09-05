@@ -253,13 +253,14 @@ export async function transcribeAudioWithAntigravity(
           sequenceNumber: String(seq++),
         });
 
-        await new Promise<void>((resolveChunk) => {
+        await new Promise<void>((resolveChunk, rejectChunk) => {
           let settled = false;
-          function finish(): void {
+          function finish(error?: Error): void {
             if (settled) return;
             settled = true;
             pendingUnaryRequests.delete(req);
-            resolveChunk();
+            if (error) rejectChunk(error);
+            else resolveChunk();
           }
           const req = https.request(
             {
@@ -277,20 +278,21 @@ export async function transcribeAudioWithAntigravity(
             (resp) => {
               resp.resume();
               resp.on("end", finish);
-              resp.on("error", finish);
+              resp.on("error", () => finish());
             },
           );
           pendingUnaryRequests.set(req, finish);
           req.setTimeout(AUDIO_UNARY_REQUEST_TIMEOUT_MS, () => {
-            audioLogger.warn("SendAudioChunk timed out");
+            const error = new Error("SendAudioChunk timed out");
+            audioLogger.warn(error.message);
             try {
               req.destroy();
             } catch {
               // ignore cleanup error
             }
-            finish();
+            finish(error);
           });
-          req.on("error", finish);
+          req.on("error", () => finish());
           req.write(data);
           req.end();
         });
